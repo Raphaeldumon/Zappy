@@ -118,5 +118,9 @@ jobs:
           chmod 700 ~/.ssh
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan github.com >> ~/.ssh/known_hosts
+          echo "=== Key fingerprint in CI ==="
+          ssh-keygen -l -f ~/.ssh/id_ed25519
+          echo "=== Auth test ==="
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -T git@github.com || true
           git remote add mirror $MIRROR_URL
           GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" git push mirror main --force
