@@ -121,6 +121,6 @@ jobs:
           echo "=== Key fingerprint in CI ==="
           ssh-keygen -l -f ~/.ssh/id_ed25519
           echo "=== Auth test ==="
-          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -T git@github.com || true
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o IdentitiesOnly=yes -T git@github.com || true
           git remote add mirror $MIRROR_URL
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no" git push mirror main --force
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=no -o IdentitiesOnly=yes" git push mirror main --force
