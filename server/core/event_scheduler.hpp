@@ -2,18 +2,21 @@
 
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <queue>
 #include <vector>
 
-namespace zappy::core {
+namespace zappy::core
+{
 
 // Deterministic time-ordered event queue driving the game loop.
 //
 // Time is measured in abstract "ticks" (derived from the server frequency f).
 // Events scheduled for the same tick fire in insertion order (FIFO) so replays
 // are reproducible. P1 owns the semantics; this is the working skeleton.
-class EventScheduler {
-public:
+class EventScheduler
+{
+  public:
     using Callback = std::function<void()>;
     using Tick = std::uint64_t;
 
@@ -27,26 +30,37 @@ public:
     // Run every event whose tick is <= `now`, in (tick, insertion) order.
     void advance_to(Tick now);
 
-    [[nodiscard]] Tick current_tick() const noexcept {
+    [[nodiscard]] Tick current_tick() const noexcept
+    {
         return now_;
     }
-    [[nodiscard]] bool empty() const noexcept {
+    [[nodiscard]] bool empty() const noexcept
+    {
         return queue_.empty();
     }
-    [[nodiscard]] std::size_t pending() const noexcept {
+    [[nodiscard]] std::size_t pending() const noexcept
+    {
         return queue_.size();
     }
+    [[nodiscard]] Tick next_event_tick() const noexcept
+    {
+        return queue_.empty() ? std::numeric_limits<Tick>::max() : queue_.top().tick;
+    }
 
-private:
-    struct Event {
+  private:
+    struct Event
+    {
         Tick tick;
         std::uint64_t seq; // insertion order, breaks tick ties
         std::uint64_t id;  // stable id for cancellation
         Callback cb;
     };
-    struct Later {
-        bool operator()(const Event& a, const Event& b) const noexcept {
-            if (a.tick != b.tick) {
+    struct Later
+    {
+        bool operator()(const Event &a, const Event &b) const noexcept
+        {
+            if (a.tick != b.tick)
+            {
                 return a.tick > b.tick;
             }
             return a.seq > b.seq;

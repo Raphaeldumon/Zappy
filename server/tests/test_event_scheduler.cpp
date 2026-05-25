@@ -7,7 +7,8 @@
 
 using namespace zappy::core;
 
-static void test_fifo_within_same_tick() {
+static void test_fifo_within_same_tick()
+{
     EventScheduler s;
     std::vector<int> order;
     s.schedule(5, [&] { order.push_back(1); });
@@ -17,7 +18,8 @@ static void test_fifo_within_same_tick() {
     assert((order == std::vector<int>{1, 2, 3}));
 }
 
-static void test_tick_ordering() {
+static void test_tick_ordering()
+{
     EventScheduler s;
     std::vector<int> order;
     s.schedule(10, [&] { order.push_back(10); });
@@ -29,7 +31,8 @@ static void test_tick_ordering() {
     assert((order == std::vector<int>{1, 5, 10}));
 }
 
-static void test_cancel() {
+static void test_cancel()
+{
     EventScheduler s;
     bool fired = false;
     std::uint64_t id = s.schedule(3, [&] { fired = true; });
@@ -38,7 +41,8 @@ static void test_cancel() {
     assert(!fired);
 }
 
-int main() {
+int main()
+{
     test_fifo_within_same_tick();
     test_tick_ordering();
     test_cancel();
