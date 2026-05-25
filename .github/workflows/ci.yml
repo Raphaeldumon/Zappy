@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+env:
+  MIRROR_URL: git@github.com:EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3.git
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y make g++
+
+      - name: Build
+        run: make re
+
+      # --- UML generation (disabled until headers exist) ---
+
+      - name: Install UML dependencies
+        if: false
+        run: |
+          sudo apt-get install -y default-jre graphviz
+          pip install hpp2plantuml
+
+      - name: Generate UML diagrams from headers
+        if: false
+        run: |
+          mkdir -p docs/uml
+
+          cat > /tmp/uml-header.puml <<'EOF'
+          @startuml
+          skinparam dpi 120
+          skinparam classAttributeIconSize 0
+          skinparam nodesep 50
+          skinparam ranksep 70
+          skinparam linetype ortho
+          hide empty members
+          left to right direction
+          EOF
+
+          generate_diagram() {
+            local name="$1"
+            shift
+            local files=()
+            for pattern in "$@"; do
+              while IFS= read -r f; do files+=("-i" "$f"); done < <(find $pattern -name "*.hpp" 2>/dev/null | sort)
+            done
+
+            if [ ${#files[@]} -eq 0 ]; then
+              echo "No headers found for $name, skipping"
+              return
+            fi
+
+            hpp2plantuml "${files[@]}" -o "docs/uml/${name}.puml"
+            sed -i '/^\s*+[0-9]/d' "docs/uml/${name}.puml"
+            sed -i '/^@startuml/d; /^@enduml/d' "docs/uml/${name}.puml"
+            cat /tmp/uml-header.puml "docs/uml/${name}.puml" > /tmp/full.puml
+            echo "@enduml" >> /tmp/full.puml
+            mv /tmp/full.puml "docs/uml/${name}.puml"
+          }
+
+          generate_diagram "interfaces"   include/interfaces
+          generate_diagram "math"         include/math
+          generate_diagram "raytracer"    include/raytracer
+          generate_diagram "primitives"   include/primitives include/interfaces/IPrimitive.hpp
+          generate_diagram "lighting"     include/light include/materials include/interfaces/ILight.hpp include/interfaces/IMaterial.hpp
+          generate_diagram "scene"        include/scene
+          generate_diagram "core"         include/core include/Parser.hpp include/Help.hpp
+
+      - name: Generate UML images
+        if: false
+        run: |
+          curl -L -o plantuml.jar https://github.com/plantuml/plantuml/releases/latest/download/plantuml.jar
+          shopt -s nullglob
+          puml_files=(docs/uml/*.puml)
+          if [ ${#puml_files[@]} -eq 0 ]; then
+            echo "No .puml files found, skipping image generation"
+          else
+            java -DPLANTUML_LIMIT_SIZE=16384 -jar plantuml.jar -tsvg "${puml_files[@]}"
+          fi
+
+      - name: Commit UML if changed
+        if: false
+        run: |
+          git config --global user.name "CI Bot"
+          git config --global user.email "ci@bot.com"
+          git add docs/uml/*.puml docs/uml/*.svg
+          git diff --cached --quiet || git commit -m "update UML diagram"
+          git push
+
+  push-to-mirror:
+    runs-on: ubuntu-latest
+    needs: build
+    if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to mirror repo
+        env:
+          SSH_PRIVATE_KEY_B64: ${{ secrets.SSH_PRIVATE_KEY_B64 }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY_B64" | base64 -d > ~/.ssh/id_ed25519
+          chmod 700 ~/.ssh
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          git remote add mirror $MIRROR_URL
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/id_ed25519" git push mirror main --force
