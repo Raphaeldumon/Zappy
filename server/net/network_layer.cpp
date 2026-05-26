@@ -6,6 +6,7 @@
 #include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <utility>
 
 #include <cerrno>
 #include <cstring>
@@ -62,7 +63,9 @@ void NetworkLayer::accept_new_connection()
     if (cfd < 0)
         return; // EAGAIN or error
     set_nonblocking(cfd);
-    clients_.emplace(cfd, Client{.fd = cfd});
+    Client client;
+    client.fd = cfd;
+    clients_.emplace(cfd, std::move(client));
     pollfds_dirty_ = true;
     if (on_connect_)
         on_connect_(cfd);
