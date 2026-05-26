@@ -109,10 +109,18 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Push to mirror repo
-        env:
-          MIRROR_PAT: ${{ secrets.MIRROR_PAT }}
+      - name: Setup SSH for mirror push
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.MIRROR_SSH_KEY }}
+
+      - name: Add github.com to known_hosts
         run: |
-          MIRROR_HTTPS="https://x-access-token:${MIRROR_PAT}@github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3.git"
-          git remote add mirror "$MIRROR_HTTPS"
+          mkdir -p ~/.ssh
+          ssh-keyscan -t rsa,ecdsa,ed25519 github.com >> ~/.ssh/known_hosts
+
+      - name: Push to mirror repo (SSH)
+        run: |
+          git remote remove mirror || true
+          git remote add mirror "${MIRROR_URL}"
           git push mirror main --force
