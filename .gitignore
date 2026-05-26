@@ -67,3 +67,6 @@ vcpkg_installed/
 Testing/
 .cache/
 .vscode
+zappy_server
+zappy_gui
+zappy_ai
