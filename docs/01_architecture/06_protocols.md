@@ -17,20 +17,20 @@ Cas spécial `TEAM_NAME == "GRAPHIC"` → le serveur switche sur le protocole GU
 
 ### Commandes AI (toutes terminées par `\n`)
 
-| Commande | Réponse | Coût | Description |
-|----------|---------|------|-------------|
-| `Forward` | `ok\n` | 7/f | Avance d'une tile |
-| `Right` | `ok\n` | 7/f | Pivote à droite |
-| `Left` | `ok\n` | 7/f | Pivote à gauche |
-| `Look` | `[tile1, tile2, ...]\n` | 7/f | Cône de vision |
-| `Inventory` | `[food n, sibur n, ...]\n` | 1/f | Inventaire courant |
-| `Broadcast text` | `ok\n` | 7/f | Diffuse texte à tous |
-| `Connect_nbr` | `value\n` | - | Slots libres team |
-| `Fork` | `ok\n` | 42/f | Pond un egg |
-| `Eject` | `ok\n` ou `ko\n` | 7/f | Éjecte les autres de la tile |
-| `Take object` | `ok\n` ou `ko\n` | 7/f | Prend objet |
-| `Set object` | `ok\n` ou `ko\n` | 7/f | Dépose objet |
-| `Incantation` | `Elevation underway\nCurrent level: k\n` puis `ok\n` ou `ko\n` | 300/f | Démarre rituel |
+| Commande         | Réponse | Coût | Description |
+|------------------|---------|------|-------------|
+| `Forward`        | `ok\n`                     | 7/f | Avance d'une tile |
+| `Right`          | `ok\n`                     | 7/f | Pivote à droite |
+| `Left`           | `ok\n`                     | 7/f | Pivote à gauche |
+| `Look`           | `[tile1, tile2, ...]\n`    | 7/f | Cône de vision |
+| `Inventory`      | `[food n, sibur n, ...]\n` | 1/f | Inventaire courant |
+| `Broadcast text` | `ok\n`                     | 7/f | Diffuse texte à tous |
+| `Connect_nbr`    | `value\n`                  | -   | Slots libres team |
+| `Fork`           | `ok\n`                     | 42/f | Pond un egg |
+| `Eject`          | `ok\n` ou `ko\n`           | 7/f | Éjecte les autres de la tile |
+| `Take object`    | `ok\n` ou `ko\n`           | 7/f | Prend objet |
+| `Set object`     | `ok\n` ou `ko\n`           | 7/f | Dépose objet |
+| `Incantation`    | `Elevation underway\nCurrent level: k\n` puis `ok\n` ou `ko\n` | 300/f | Démarre rituel |
 
 Réponses asynchrones du serveur (non-sollicitées) :
 - `message K, text\n` : broadcast reçu, K = direction (0..8)
@@ -107,7 +107,55 @@ Pendant le jeu :
 - Sur respawn ressource → émet `bct` SEULEMENT pour les tiles modifiées
 - Sur `sst T` du GUI → ack `sst T\n`
 
-## 3. Protocole admin (bonus)
+## 3. Index des ressources
+
+| Index | Nom | Densité cible |
+|-------|-----|---------------|
+| 0 | `food` | 0.5 |
+| 1 | `linemate` | 0.3 |
+| 2 | `deraumere` | 0.15 |
+| 3 | `sibur` | 0.1 |
+| 4 | `mendiane` | 0.1 |
+| 5 | `phiras` | 0.08 |
+| 6 | `thystame` | 0.05 |
+
+Utilisé dans : `q0..q6` (GUI protocol), `Take/Set object` (AI protocol), `pdr/pgt n i` (GUI events).
+
+## 4. Gestion d'erreurs
+
+### Côté AI
+
+| Situation | Comportement serveur |
+|-----------|----------------------|
+| Commande inconnue | `ko\n` immédiat (sans coût) |
+| Argument manquant ou invalide (`Take`, `Set`) | `ko\n` immédiat |
+| Action impossible (Take sur tile vide, Set sans ressource) | `ko\n` après délai normal |
+| Queue pleine (> 10 commandes) | commande silencieusement ignorée |
+| Client déconnecté brutalement | joueur marqué mort, slot team libéré, GUIs notifiés `pdi n\n` |
+| `Incantation` sans conditions remplies | `ko\n` immédiat (pas `Elevation underway`) |
+| Participant mort pendant incantation | incantation continue sans lui ; si plus assez → `ko\n` à l'initiateur |
+
+### Côté GUI
+
+| Situation | Comportement serveur |
+|-----------|----------------------|
+| Tag inconnu | `suc\n` |
+| Paramètre invalide ou manquant | `sbp\n` |
+| `bct X Y` avec X ou Y hors map | `sbp\n` |
+| `ppo/plv/pin n` avec n inexistant | `sbp\n` |
+| `sst T` avec T ≤ 0 | `sbp\n` |
+| GUI déconnecté brutalement | silencieusement retiré, aucune notification |
+
+### Connexion / handshake
+
+| Situation | Comportement serveur |
+|-----------|----------------------|
+| Team inconnue | connexion fermée immédiatement (pas de `WELCOME` ou après `WELCOME` selon implémentation) |
+| Plus de slots disponibles | connexion fermée après handshake |
+| Ligne trop longue (> 4096 octets sans `\n`) | connexion fermée |
+| Données illisibles / binaire | connexion fermée |
+
+## 5. Protocole admin (bonus)
 
 Socket séparé, port `-p + 1000`. Auth via `--admin-token`.
 
@@ -126,7 +174,7 @@ quit
 
 Réponse : `ok\n` ou `ko: reason\n`.
 
-## 4. Broadcast codé team (bonus IA)
+## 6. Broadcast codé team (bonus IA)
 
 Format du `text` dans `Broadcast text` :
 
@@ -147,7 +195,7 @@ Format du `text` dans `Broadcast text` :
 
 Si le `magic_byte` ne match pas le team local → on ignore (paquet pour autre team).
 
-## 5. Format `.zrec` (replay)
+## 7. Format `.zrec` (replay)
 
 ```
 +---------------------------+
@@ -178,7 +226,7 @@ zrec_inspect file.zrec --dump          # dump toutes les frames texte
 zrec_inspect file.zrec --stats         # nb frames, durée, taille moyenne
 ```
 
-## 6. Configuration JSON serveur (bonus hot-reload)
+## 8. Configuration JSON serveur (bonus hot-reload)
 
 `config/server.json` :
 ```json
