@@ -27,7 +27,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def _smoke_loop(args: argparse.Namespace) -> int:
     """Dependency-free rollout used by --debug and tests."""
     env = ZappyParallelEnv(n_agents=args.n_agents, max_steps=args.max_steps, seed=args.seed)
-    obs = env.reset(seed=args.seed)
+    env.reset(seed=args.seed)
     steps = 0
     rng_actions = {a: int(env.num_actions) - 1 for a in env.agents}  # NOOP
     while steps < args.max_steps:

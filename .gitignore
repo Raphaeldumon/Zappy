@@ -67,3 +67,7 @@ vcpkg_installed/
 Testing/
 .cache/
 .vscode/
+
+# MkDocs build output
+site/
+doxygen_output/

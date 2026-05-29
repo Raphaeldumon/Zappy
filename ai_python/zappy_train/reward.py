@@ -11,11 +11,11 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RewardWeights:
-    elevation: float = 10.0   # reaching the next level
-    survival: float = 0.01    # per tick alive
-    death: float = -5.0       # dying
-    food_gain: float = 0.5    # picking up food
-    win: float = 100.0        # team reaches the win condition (6 players at lvl 8)
+    elevation: float = 10.0  # reaching the next level
+    survival: float = 0.01  # per tick alive
+    death: float = -5.0  # dying
+    food_gain: float = 0.5  # picking up food
+    win: float = 100.0  # team reaches the win condition (6 players at lvl 8)
 
 
 def shaped_reward(
@@ -25,8 +25,10 @@ def shaped_reward(
     died: bool,
     food_delta: int,
     won: bool,
-    weights: RewardWeights = RewardWeights(),
+    weights: RewardWeights | None = None,
 ) -> float:
+    if weights is None:
+        weights = RewardWeights()
     r = 0.0
     if leveled_up:
         r += weights.elevation

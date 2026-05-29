@@ -1,0 +1,33 @@
+# Minimal Doxygen config for Zappy C++ API reference.
+# CI (deploy_docs.yml) runs `doxygen Doxyfile` then copies doxygen_output/html
+# into docs/api_reference/ so MkDocs ships it as static HTML.
+
+PROJECT_NAME           = "Zappy"
+PROJECT_BRIEF          = "Server, GUI (Vulkan), AI (RL)"
+OUTPUT_DIRECTORY       = doxygen_output
+HTML_OUTPUT            = html
+
+INPUT                  = protocol/include \
+                         server \
+                         ai_cpp/include \
+                         gui/include
+RECURSIVE              = YES
+FILE_PATTERNS          = *.hpp *.h *.cpp
+EXCLUDE_PATTERNS       = */build/* */tests/* */reference/*
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+
+HAVE_DOT               = YES
+DOT_IMAGE_FORMAT       = svg
+CALL_GRAPH             = NO
+CALLER_GRAPH           = NO
+CLASS_GRAPH            = YES
+
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = NO
