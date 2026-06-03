@@ -1,0 +1,97 @@
+site_name: Zappy
+site_description: G-YEP-400 Zappy — server, GUI, AI (RL)
+repo_url: https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3
+edit_uri: ""
+
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - scheme: slate
+      primary: indigo
+      toggle: { icon: material/weather-sunny, name: Light mode }
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+
+plugins:
+  - search
+  - mermaid2
+  - git-revision-date-localized:
+      enable_creation_date: true
+      fallback_to_build_date: true
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:mermaid2.fence_mermaid
+
+nav:
+  - Home: 00_executive_summary.md
+  - Architecture:
+      - Overview: 01_architecture/01_overview.md
+      - Server: 01_architecture/02_server.md
+      - GUI (raylib): 01_architecture/03_gui_raylib.md
+      - GUI (Vulkan): 01_architecture/03_gui_vulkan.md
+      - AI (RL): 01_architecture/04_ai_rl.md
+      - Simulator: 01_architecture/05_simulator.md
+      - Protocols: 01_architecture/06_protocols.md
+      - Monorepo structure: 01_architecture/07_monorepo_structure.md
+  - Team:
+      - Roles: 02_team/01_roles.md
+      - RACI: 02_team/02_raci.md
+      - Responsibilities: 02_team/03_responsibilities.md
+  - Process:
+      - Gitflow: 03_process/01_gitflow.md
+      - CI/CD: 03_process/02_ci_cd.md
+      - PR rules: 03_process/03_pr_rules.md
+      - ADRs: 03_process/04_adrs.md
+      - Sprint cadence: 03_process/05_sprint_cadence.md
+      - Pre-commit: 03_process/06_precommit.md
+  - Quality:
+      - Definition of Done: 04_quality/01_definition_of_done.md
+      - Testing strategy: 04_quality/02_testing_strategy.md
+      - Code standards: 04_quality/03_code_standards.md
+      - Performance targets: 04_quality/04_performance_targets.md
+  - Risks:
+      - Top 10 risks: 05_risks/01_top_10_risks.md
+      - Mitigation plan: 05_risks/02_mitigation_plan.md
+  - Calendar:
+      - Overview: 06_calendar/00_overview.md
+      - Sprint 1 — Foundations: 06_calendar/sprints/sprint_1_w1_foundations.md
+      - Sprint 2 — Core: 06_calendar/sprints/sprint_2_w2_core.md
+      - Sprint 3 — Features: 06_calendar/sprints/sprint_3_w3_features.md
+      - Sprint 4 — Polish: 06_calendar/sprints/sprint_4_w4_polish.md
+  - Calendar per person:
+      - P1 — Server lead: 07_calendar_per_person/P1_server_lead.md
+      - P2 — Server dev: 07_calendar_per_person/P2_server_dev.md
+      - P3 — GUI lead (Vulkan): 07_calendar_per_person/P3_gui_lead_vulkan.md
+      - P4 — GUI dev (UX): 07_calendar_per_person/P4_gui_dev_ux.md
+      - P5 — AI lead (RL): 07_calendar_per_person/P5_ai_lead_rl.md
+      - P6 — AI dev (sim/devops): 07_calendar_per_person/P6_ai_dev_sim_devops.md
+  - Deliverables:
+      - Final deliverables: 08_deliverables/01_final_deliverables.md
+      - Demo script: 08_deliverables/02_demo_script.md
+      - Soutenance slides plan: 08_deliverables/03_soutenance_slides_plan.md
+      - Video demo plan: 08_deliverables/04_video_demo_plan.md
+  - Appendix:
+      - Useful commands: 09_appendix/01_useful_commands.md
+      - Dependencies: 09_appendix/02_dependencies.md
+      - References: 09_appendix/03_references.md
+  - Decisions (ADR):
+      - Template: adrs/000-template.md
+      - 001 — Server language C++: adrs/001-server-language-cpp.md
+      - 006 — Test framework Catch2: adrs/006-test-framework-catch2.md
