@@ -98,8 +98,8 @@ void draw_tile_resources(float fx, float fy, float cell, const int resources[zap
         float dy = fy + pad + (static_cast<float>(row) + 0.5f) * (gh / ROWS);
         DrawCircle(static_cast<int>(dx), static_cast<int>(dy), dot, resource_color(i));
         if (resources[i] > 1 && cell > 30.0f)
-            DrawText(TextFormat("%d", resources[i]), static_cast<int>(dx + dot + 1.0f),
-                     static_cast<int>(dy - dot), 9, Color{210, 210, 210, 255});
+            DrawText(TextFormat("%d", resources[i]), static_cast<int>(dx + dot + 1.0f), static_cast<int>(dy - dot), 9,
+                     Color{210, 210, 210, 255});
     }
 }
 
@@ -266,8 +266,7 @@ int main(int argc, char **argv)
         line_out(TextFormat("players: %zu", world.players.size()), LIGHTGRAY);
         line_out(TextFormat("eggs: %zu", world.eggs.size()), LIGHTGRAY);
         line_out(TextFormat("teams: %zu", world.teams.size()), LIGHTGRAY);
-        line_out(TextFormat("unknown lines: %d", unknown_lines),
-                 unknown_lines ? Color{220, 180, 120, 255} : LIGHTGRAY);
+        line_out(TextFormat("unknown lines: %d", unknown_lines), unknown_lines ? Color{220, 180, 120, 255} : LIGHTGRAY);
         hy += 8;
         for (const auto &team : world.teams)
             line_out(TextFormat("- %s", team.c_str()), Color{150, 170, 220, 255});
@@ -282,8 +281,7 @@ int main(int argc, char **argv)
         for (int i = 0; i < zappy::gui2d::RESOURCE_COUNT; ++i)
         {
             DrawCircle(hx + 6, hy + 8, 5, resource_color(i));
-            DrawText(TextFormat("%s  (%d)", zappy::gui2d::resource_name(i), res_totals[i]), hx + 18, hy, 16,
-                     LIGHTGRAY);
+            DrawText(TextFormat("%s  (%d)", zappy::gui2d::resource_name(i), res_totals[i]), hx + 18, hy, 16, LIGHTGRAY);
             hy += 22;
         }
 

@@ -24,7 +24,10 @@ class NetClient
     // Send a raw request line (we append '\n').
     void send_line(const std::string &line);
 
-    bool connected() const { return fd_ >= 0; }
+    bool connected() const
+    {
+        return fd_ >= 0;
+    }
 
   private:
     int fd_{-1};

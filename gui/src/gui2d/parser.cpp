@@ -171,8 +171,8 @@ bool apply_line(World &world, std::string_view line)
     }
 
     // Tags we knowingly ignore in this debug GUI: pbc pic pie pfk pdr pgt suc sbp.
-    if (tag == "pbc" || tag == "pic" || tag == "pie" || tag == "pfk" || tag == "pdr" || tag == "pgt" ||
-        tag == "suc" || tag == "sbp")
+    if (tag == "pbc" || tag == "pic" || tag == "pie" || tag == "pfk" || tag == "pdr" || tag == "pgt" || tag == "suc" ||
+        tag == "sbp")
         return true;
 
     return false; // genuinely unknown tag
