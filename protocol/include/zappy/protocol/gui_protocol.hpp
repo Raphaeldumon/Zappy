@@ -7,7 +7,8 @@
 
 #include <string_view>
 
-namespace zappy::protocol::gui {
+namespace zappy::protocol::gui
+{
 
 // 3-letter message tags. Server->GUI unless noted; several are also GUI->Server requests.
 inline constexpr std::string_view MAP_SIZE = "msz";         // msz X Y
@@ -37,6 +38,12 @@ inline constexpr std::string_view UNKNOWN_CMD = "suc";      // suc
 inline constexpr std::string_view BAD_PARAM = "sbp";        // sbp
 
 // Player orientation as used on the wire.
-enum class Orientation { North = 1, East = 2, South = 3, West = 4 };
+enum class Orientation
+{
+    North = 1,
+    East = 2,
+    South = 3,
+    West = 4
+};
 
 } // namespace zappy::protocol::gui

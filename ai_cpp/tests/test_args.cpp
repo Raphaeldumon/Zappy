@@ -7,11 +7,13 @@
 
 using namespace zappy::ai;
 
-static std::optional<AiArgs> run(std::vector<const char*> argv) {
-    return parse_args(static_cast<int>(argv.size()), const_cast<char**>(argv.data()));
+static std::optional<AiArgs> run(std::vector<const char *> argv)
+{
+    return parse_args(static_cast<int>(argv.size()), const_cast<char **>(argv.data()));
 }
 
-static void test_valid() {
+static void test_valid()
+{
     auto a = run({"zappy_ai", "-p", "4242", "-n", "red", "-h", "example.com"});
     assert(a.has_value());
     assert(a->port == 4242);
@@ -19,28 +21,35 @@ static void test_valid() {
     assert(a->host == "example.com");
 }
 
-static void test_default_host() {
+static void test_default_host()
+{
     auto a = run({"zappy_ai", "-p", "4242", "-n", "blue"});
     assert(a.has_value());
     assert(a->host == "localhost");
 }
 
-static void test_help_returns_nullopt() {
+static void test_help_returns_nullopt()
+{
     auto a = run({"zappy_ai", "--help"});
     assert(!a.has_value());
 }
 
-static void test_missing_required_throws() {
+static void test_missing_required_throws()
+{
     bool threw = false;
-    try {
+    try
+    {
         run({"zappy_ai", "-p", "4242"}); // no -n
-    } catch (const std::invalid_argument&) {
+    }
+    catch (const std::invalid_argument &)
+    {
         threw = true;
     }
     assert(threw);
 }
 
-int main() {
+int main()
+{
     test_valid();
     test_default_host();
     test_help_returns_nullopt();

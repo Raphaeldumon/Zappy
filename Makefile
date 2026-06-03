@@ -8,8 +8,19 @@ CMAKE        ?= cmake
 
 BINARIES     := zappy_server zappy_gui zappy_ai
 
+# ---- demo (2D debug GUI) knobs — override on the command line ---------------
+#   make demo PORT=4242 MAP_W=20 MAP_H=20 BOTS=5 FREQ=100
+PORT         ?= 4242
+MAP_W        ?= 10
+MAP_H        ?= 10
+TEAMS        ?= red blue
+CLIENTS      ?= 5
+FREQ         ?= 100
+BOTS         ?= 3
+DELAY        ?= 0.3
+
 # Mandatory Epitech rules: all, clean, fclean, re
-.PHONY: all build clean fclean re tests_run config gui_on coverage format help
+.PHONY: all build clean fclean re tests_run config gui_on coverage format help demo
 
 all: build
 
@@ -41,6 +52,28 @@ coverage:
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
 	@command -v gcovr >/dev/null && gcovr -r . $(BUILD_DIR) || echo "install gcovr for a report"
 
+## Launch server + fake AI + 2D debug GUI together (visual smoke test).
+## Server and bots run in the background; closing the GUI window tears them down.
+##   make demo                       # defaults
+##   make demo MAP_W=20 MAP_H=20 BOTS=6 FREQ=200
+demo: config
+	$(CMAKE) --build $(BUILD_DIR) -j $(JOBS) --target zappy_server zappy_gui2d
+	@if [ ! -x "$(BUILD_DIR)/bin/zappy_gui2d" ]; then \
+		echo "zappy_gui2d not built (raylib missing?) — install raylib and re-run."; \
+		exit 1; \
+	fi
+	@echo "demo: server :$(PORT) | map $(MAP_W)x$(MAP_H) | teams '$(TEAMS)' | $(BOTS) bot(s) | freq $(FREQ)"
+	@set -e; \
+	"$(BUILD_DIR)/bin/zappy_server" -p $(PORT) -x $(MAP_W) -y $(MAP_H) -n $(TEAMS) -c $(CLIENTS) -f $(FREQ) & \
+	SRV=$$!; \
+	trap 'kill $$SRV $$FAI 2>/dev/null' EXIT INT TERM; \
+	sleep 0.5; \
+	python3 tools/fake_ai.py -p $(PORT) -n $(firstword $(TEAMS)) --bots $(BOTS) --delay $(DELAY) & \
+	FAI=$$!; \
+	sleep 0.3; \
+	"$(BUILD_DIR)/bin/zappy_gui2d" -p $(PORT) -h localhost; \
+	echo "demo: GUI closed, shutting down server + bots"
+
 format:
 	@bash tools/format_all.sh
 
@@ -54,5 +87,6 @@ fclean:
 re: fclean all
 
 help:
-	@echo "Targets: all build gui_on tests_run coverage format clean fclean re"
+	@echo "Targets: all build gui_on demo tests_run coverage format clean fclean re"
 	@echo "Vars   : BUILD_TYPE=$(BUILD_TYPE) JOBS=$(JOBS) BUILD_DIR=$(BUILD_DIR)"
+	@echo "demo   : PORT=$(PORT) MAP_W=$(MAP_W) MAP_H=$(MAP_H) TEAMS='$(TEAMS)' CLIENTS=$(CLIENTS) FREQ=$(FREQ) BOTS=$(BOTS) DELAY=$(DELAY)"

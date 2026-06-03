@@ -10,15 +10,18 @@
 #include <string>
 
 #if defined(ZAPPY_GUI_HAS_VULKAN)
-namespace zappy::gui {
+namespace zappy::gui
+{
 int run_vulkan_app(); // defined in renderer/vulkan_app.cpp
 }
 #endif
 
-namespace {
+namespace
+{
 constexpr int EXIT_ERR = 84;
 
-void print_usage(const char* prog) {
+void print_usage(const char *prog)
+{
     std::cout << "USAGE: " << prog << " -p port -h machine\n"
               << "  -p port      port number\n"
               << "  -h machine   server machine; localhost by default\n"
@@ -26,26 +29,35 @@ void print_usage(const char* prog) {
 }
 } // namespace
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv)
+{
     int port = 4242;
     std::string host = "localhost";
 
-    for (int i = 1; i < argc; ++i) {
+    for (int i = 1; i < argc; ++i)
+    {
         std::string flag = argv[i];
-        if (flag == "--help") {
+        if (flag == "--help")
+        {
             print_usage(argv[0]);
             return EXIT_SUCCESS;
         }
-        if (i + 1 >= argc) {
+        if (i + 1 >= argc)
+        {
             std::cerr << "zappy_gui: option " << flag << " expects a value\n";
             return EXIT_ERR;
         }
-        const char* val = argv[++i];
-        if (flag == "-p") {
+        const char *val = argv[++i];
+        if (flag == "-p")
+        {
             port = std::atoi(val);
-        } else if (flag == "-h") {
+        }
+        else if (flag == "-h")
+        {
             host = val;
-        } else {
+        }
+        else
+        {
             std::cerr << "zappy_gui: unknown option " << flag << "\n";
             return EXIT_ERR;
         }

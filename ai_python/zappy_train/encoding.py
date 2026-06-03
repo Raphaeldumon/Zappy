@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from enum import IntEnum
 
+
 # Discrete action space exposed to the policy. Order is stable (it indexes the
 # policy output head); do not reorder without an ADR.
 class Action(IntEnum):

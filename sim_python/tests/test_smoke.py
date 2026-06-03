@@ -9,8 +9,10 @@ import importlib.util
 import pytest
 
 if importlib.util.find_spec("zappy_sim") is None:
-    pytest.skip("zappy_sim not built (configure with -DZAPPY_BUILD_SIM=ON)",
-                allow_module_level=True)
+    pytest.skip(
+        "zappy_sim not built (configure with -DZAPPY_BUILD_SIM=ON)",
+        allow_module_level=True,
+    )
 
 import zappy_sim  # noqa: E402
 

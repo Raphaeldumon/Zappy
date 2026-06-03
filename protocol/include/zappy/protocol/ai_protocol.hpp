@@ -8,7 +8,8 @@
 #include <array>
 #include <string_view>
 
-namespace zappy::protocol::ai {
+namespace zappy::protocol::ai
+{
 
 // Handshake lines (server side, each terminated by '\n' on the wire).
 inline constexpr std::string_view WELCOME = "WELCOME";
@@ -21,7 +22,8 @@ inline constexpr std::string_view DEAD = "dead";
 
 // The 12 client commands. Underlying values are stable identifiers; do not reorder
 // without an ADR.
-enum class Command {
+enum class Command
+{
     Forward = 0,
     Right,
     Left,
@@ -39,8 +41,10 @@ enum class Command {
 
 // Time cost of each command, expressed in 1/f time units (the `t` in `cost/f`).
 // Connect_nbr has no time cost.
-inline constexpr int time_cost(Command c) noexcept {
-    switch (c) {
+inline constexpr int time_cost(Command c) noexcept
+{
+    switch (c)
+    {
     case Command::Inventory:
         return 1;
     case Command::Fork:
@@ -58,7 +62,8 @@ inline constexpr int time_cost(Command c) noexcept {
 inline constexpr int MAX_COMMAND_QUEUE = 10;
 
 // The 7 resources, ordered as they appear on the wire (q0..q6).
-enum class Resource {
+enum class Resource
+{
     Food = 0,
     Linemate,
     Deraumere,

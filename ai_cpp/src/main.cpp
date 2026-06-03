@@ -10,25 +10,31 @@
 #include <exception>
 #include <iostream>
 
-namespace {
+namespace
+{
 constexpr int EXIT_ERR = 84;
 }
 
-int main(int argc, char** argv) {
+int main(int argc, char **argv)
+{
     std::optional<zappy::ai::AiArgs> parsed;
-    try {
+    try
+    {
         parsed = zappy::ai::parse_args(argc, argv);
-    } catch (const std::exception& e) {
+    }
+    catch (const std::exception &e)
+    {
         std::cerr << "zappy_ai: " << e.what() << "\n\n" << zappy::ai::usage(argv[0]);
         return EXIT_ERR;
     }
 
-    if (!parsed) {
+    if (!parsed)
+    {
         std::cout << zappy::ai::usage(argv[0]);
         return EXIT_SUCCESS;
     }
 
-    const auto& a = *parsed;
+    const auto &a = *parsed;
     std::cout << "zappy_ai v0.0.1\n"
               << "  host : " << a.host << '\n'
               << "  port : " << a.port << '\n'

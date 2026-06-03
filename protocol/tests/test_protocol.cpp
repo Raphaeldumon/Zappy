@@ -6,7 +6,8 @@
 
 namespace ai = zappy::protocol::ai;
 
-int main() {
+int main()
+{
     // Resource ordering is part of the wire contract (q0..q6).
     static_assert(ai::RESOURCE_COUNT == 7, "there are 7 resources");
     static_assert(ai::RESOURCE_NAMES[0] == "food", "q0 is food");

@@ -4,20 +4,24 @@
 #if defined(ZAPPY_GUI_HAS_VULKAN)
 
 #define GLFW_INCLUDE_VULKAN
-#include <cstdlib>
 #include <GLFW/glfw3.h>
+#include <cstdlib>
 #include <iostream>
 
-namespace zappy::gui {
+namespace zappy::gui
+{
 
-int run_vulkan_app() {
-    if (glfwInit() != GLFW_TRUE) {
+int run_vulkan_app()
+{
+    if (glfwInit() != GLFW_TRUE)
+    {
         std::cerr << "zappy_gui: glfwInit failed\n";
         return 84;
     }
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    GLFWwindow* window = glfwCreateWindow(800, 600, "Zappy", nullptr, nullptr);
-    if (window == nullptr) {
+    GLFWwindow *window = glfwCreateWindow(800, 600, "Zappy", nullptr, nullptr);
+    if (window == nullptr)
+    {
         std::cerr << "zappy_gui: window creation failed\n";
         glfwTerminate();
         return 84;
@@ -26,9 +30,11 @@ int run_vulkan_app() {
     // TODO(P3): vk-bootstrap instance/device/queue, swapchain, dynamic rendering,
     //           then the triangle sample (Sascha Willems 01_triangle).
     std::cout << "zappy_gui: window open (ESC to quit)\n";
-    while (glfwWindowShouldClose(window) == 0) {
+    while (glfwWindowShouldClose(window) == 0)
+    {
         glfwPollEvents();
-        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+        if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
+        {
             glfwSetWindowShouldClose(window, GLFW_TRUE);
         }
     }

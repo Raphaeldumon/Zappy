@@ -44,6 +44,42 @@ else()
     message(STATUS "  gui: Vulkan/glfw3 not found -> building STUB zappy_gui")
 endif()
 
+# ---- zappy_gui2d : throwaway raylib 2D debug viewer -------------------------
+# Standalone from the Vulkan renderer above. Built only when raylib is found so
+# the repo still configures on machines without it. Connects as a GRAPHIC client
+# and draws whatever the server emits — meant for eyeballing server state, not
+# the final GUI.
+find_package(raylib QUIET)
+if(NOT raylib_FOUND)
+    # raylib installed via `make install` (no CMake config): probe the static lib.
+    find_library(RAYLIB_LIB raylib)
+    find_path(RAYLIB_INCLUDE raylib.h)
+endif()
+
+if(raylib_FOUND OR (RAYLIB_LIB AND RAYLIB_INCLUDE))
+    message(STATUS "  gui: building zappy_gui2d (raylib debug viewer)")
+    add_executable(zappy_gui2d
+        src/gui2d/main.cpp
+        src/gui2d/parser.cpp
+        src/gui2d/net.cpp)
+    target_include_directories(zappy_gui2d PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/gui2d")
+    target_link_libraries(zappy_gui2d PRIVATE zappy_compile_options)
+    if(raylib_FOUND)
+        target_link_libraries(zappy_gui2d PRIVATE raylib)
+    else()
+        target_include_directories(zappy_gui2d PRIVATE "${RAYLIB_INCLUDE}")
+        target_link_libraries(zappy_gui2d PRIVATE "${RAYLIB_LIB}")
+    endif()
+    # raylib's static build needs the system GL/X11/threading deps.
+    find_package(OpenGL QUIET)
+    if(OpenGL_FOUND)
+        target_link_libraries(zappy_gui2d PRIVATE OpenGL::GL)
+    endif()
+    target_link_libraries(zappy_gui2d PRIVATE m pthread dl rt X11)
+else()
+    message(STATUS "  gui: raylib not found -> skipping zappy_gui2d")
+endif()
+
 if(ZAPPY_BUILD_TESTS)
     add_executable(zappy_gui_tests tests/test_gui_protocol.cpp)
     target_include_directories(zappy_gui_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")

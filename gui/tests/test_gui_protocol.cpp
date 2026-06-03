@@ -7,7 +7,8 @@
 
 namespace gui = zappy::protocol::gui;
 
-int main() {
+int main()
+{
     // Tags are exactly 3 chars and stable on the wire.
     assert(gui::MAP_SIZE == "msz");
     assert(gui::TILE_CONTENT == "bct");

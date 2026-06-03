@@ -3,17 +3,20 @@
 #include <cstdint>
 #include <vector>
 
-namespace zappy::gui::scene {
+namespace zappy::gui::scene
+{
 
 // Renderer-facing snapshot of the world, fed by net::GuiClient and drawn by the
 // renderer. Kept deliberately POD-ish so it's cheap to update per event. P4 owns it.
-struct TileView {
+struct TileView
+{
     int x{};
     int y{};
     int resources[7]{};
 };
 
-struct PlayerView {
+struct PlayerView
+{
     std::uint32_t id{};
     int x{};
     int y{};
@@ -22,7 +25,8 @@ struct PlayerView {
     std::uint16_t team{};
 };
 
-struct Scene {
+struct Scene
+{
     int width{};
     int height{};
     std::vector<TileView> tiles;

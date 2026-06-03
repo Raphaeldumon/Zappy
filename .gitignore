@@ -71,3 +71,7 @@ Testing/
 # MkDocs build output
 site/
 doxygen_output/
+
+zappy_ai
+zappy_gui
+zappy_server
