@@ -93,7 +93,7 @@ Le projet Zappy est composé de **4 composants déployables** :
 
 ## Décisions architecturales structurantes
 
-Voir [`docs/03_process/04_adrs.md`](../03_process/04_adrs.md) pour le workflow ADR.
+Workflow ADR : voir l'historique git des ADRs (docs purgées lors de la restructuration).
 
 ADRs prévues dès S1 :
 - ADR-001 : Choix C++17/20 pour le serveur (vs C, vs Rust)

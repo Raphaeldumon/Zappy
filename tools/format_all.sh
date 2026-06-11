@@ -16,7 +16,9 @@ fi
 status=0
 
 cpp_files() {
-    git ls-files '*.cpp' '*.hpp' '*.c' '*.h' 2>/dev/null | grep -Ev '^(build|reference)/' || true
+    # ls-files also lists deleted-but-uncommitted paths; keep only real files.
+    git ls-files '*.cpp' '*.hpp' '*.c' '*.h' 2>/dev/null | grep -Ev '^(build|reference)/' |
+        while IFS= read -r f; do [[ -f "$f" ]] && printf '%s\n' "$f"; done || true
 }
 
 if [[ $CHECK -eq 1 ]]; then
@@ -32,8 +34,8 @@ if [[ $CHECK -eq 1 ]]; then
 
     echo "==> ruff --check (Python)"
     if command -v ruff >/dev/null 2>&1; then
-        ruff format --check ai_python sim_python || status=1
-        ruff check ai_python sim_python || status=1
+        ruff format --check ai tools || status=1
+        ruff check ai tools || status=1
     else
         echo "   ruff not found, skipping (pip install ruff)"
     fi
@@ -51,8 +53,8 @@ fi
 
 echo "==> ruff (Python)"
 if command -v ruff >/dev/null 2>&1; then
-    ruff format ai_python sim_python 2>/dev/null || true
-    ruff check --fix ai_python sim_python 2>/dev/null || true
+    ruff format ai tools 2>/dev/null || true
+    ruff check --fix ai tools 2>/dev/null || true
 else
     echo "   ruff not found, skipping (pip install ruff)"
 fi

@@ -38,19 +38,19 @@ jobs:
         with:
           python-version: '3.11'
           cache: pip
-          cache-dependency-path: ai_python/pyproject.toml
+          cache-dependency-path: ai/pyproject.toml
 
       - name: Install Python package (dev extras)
-        run: pip install -e "ai_python[dev]"
+        run: pip install -e "ai[dev]"
 
       - name: Ruff lint
-        run: ruff check ai_python sim_python
+        run: ruff check ai tools
 
       - name: Pytest
-        run: pytest ai_python/tests -q
+        run: pytest ai/tests -q
 
       - name: Mypy (non-blocking until typed)
-        run: mypy --strict ai_python/zappy_train
+        run: mypy --strict ai/zappy_train
         continue-on-error: true
 
   push-to-mirror:

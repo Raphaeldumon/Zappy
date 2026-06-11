@@ -27,7 +27,9 @@ MOVES = ["Forward"] * 5 + ["Right", "Left", "Look", "Inventory"]
 RESOURCES = ["food", "linemate", "deraumere", "sibur", "mendiane", "phiras", "thystame"]
 
 
-def run_bot(host: str, port: int, team: str, delay: float, stop: threading.Event, idx: int) -> None:
+def run_bot(
+    host: str, port: int, team: str, delay: float, stop: threading.Event, idx: int
+) -> None:
     try:
         sock = socket.create_connection((host, port), timeout=3)
     except OSError as exc:
@@ -67,24 +69,34 @@ def run_bot(host: str, port: int, team: str, delay: float, stop: threading.Event
 
 def main() -> int:
     # add_help=False so we can use -h for host (matches zappy_server / zappy_gui2d).
-    ap = argparse.ArgumentParser(description="Fake AI driver for the Zappy debug GUI.", add_help=False)
+    ap = argparse.ArgumentParser(
+        description="Fake AI driver for the Zappy debug GUI.", add_help=False
+    )
     ap.add_argument("--help", action="help", help="show this help and exit")
     ap.add_argument("-p", "--port", type=int, default=4242)
     ap.add_argument("-h", "--host", default="localhost")
     ap.add_argument("-n", "--name", default="red", help="team name to join")
     ap.add_argument("--bots", type=int, default=1, help="number of drones to spawn")
-    ap.add_argument("--delay", type=float, default=0.4, help="seconds between commands per bot")
+    ap.add_argument(
+        "--delay", type=float, default=0.4, help="seconds between commands per bot"
+    )
     args = ap.parse_args()
 
     stop = threading.Event()
     threads = [
-        threading.Thread(target=run_bot, args=(args.host, args.port, args.name, args.delay, stop, i), daemon=True)
+        threading.Thread(
+            target=run_bot,
+            args=(args.host, args.port, args.name, args.delay, stop, i),
+            daemon=True,
+        )
         for i in range(args.bots)
     ]
     for t in threads:
         t.start()
 
-    print(f"running {args.bots} bot(s) on {args.host}:{args.port} team={args.name!r} — Ctrl-C to stop")
+    print(
+        f"running {args.bots} bot(s) on {args.host}:{args.port} team={args.name!r} — Ctrl-C to stop"
+    )
     try:
         while any(t.is_alive() for t in threads):
             time.sleep(0.3)

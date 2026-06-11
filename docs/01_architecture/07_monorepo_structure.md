@@ -188,4 +188,4 @@ gui/assets/**/*.wav   filter=lfs diff=lfs merge=lfs -text
 Stratégie : **vcpkg manifest mode** (vcpkg.json) pour C++, **pip + pyproject.toml** pour Python.
 Pas de submodule git. Tout est résolu par les package managers.
 
-Détail des deps : voir [`docs/09_appendix/02_dependencies.md`](../09_appendix/02_dependencies.md).
+Détail des deps : voir `vcpkg.json` et `ai/pyproject.toml`.

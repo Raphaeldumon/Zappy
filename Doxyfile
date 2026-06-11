@@ -3,14 +3,12 @@
 # into docs/api_reference/ so MkDocs ships it as static HTML.
 
 PROJECT_NAME           = "Zappy"
-PROJECT_BRIEF          = "Server, GUI (Vulkan), AI (RL)"
+PROJECT_BRIEF          = "Server (C++20) + shared protocol"
 OUTPUT_DIRECTORY       = doxygen_output
 HTML_OUTPUT            = html
 
 INPUT                  = protocol/include \
-                         server \
-                         ai_cpp/include \
-                         gui/include
+                         server
 RECURSIVE              = YES
 FILE_PATTERNS          = *.hpp *.h *.cpp
 EXCLUDE_PATTERNS       = */build/* */tests/* */reference/*

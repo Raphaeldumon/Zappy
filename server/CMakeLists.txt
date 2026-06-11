@@ -1,6 +1,6 @@
 # Server: pure logic lib (libzappy_core) + the real runtime executable (zappy_server).
-# The core/ split keeps game logic free of networking so the pybind11 simulator can
-# reuse it (see sim_python/).
+# The core/ split keeps game logic free of networking so it stays unit-testable
+# (and reusable by a future simulator binding).
 
 # ---- libzappy_core : pure game logic, no I/O --------------------------------
 add_library(zappy_core STATIC
