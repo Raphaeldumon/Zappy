@@ -10,19 +10,21 @@ namespace zappy::runtime
 std::string usage(const char *prog)
 {
     std::ostringstream os;
-    os << "USAGE: " << prog << " -p port -x width -y height -n name1 name2 ... -c clientsNb -f freq\n"
-       << "  -p port        port number\n"
-       << "  -x width       world width\n"
-       << "  -y height      world height\n"
-       << "  -n name...     team name(s)\n"
-       << "  -c clientsNb   number of authorized clients per team\n"
-       << "  -f freq        reciprocal of time unit for execution of actions\n"
-       << "  --help         show this help\n";
+    os << "USAGE: " << prog << " -p port -x width -y height -n name1 name2 ... -c clientsNb -f freq\n";
+    os << "  -p port        port number\n";
+    os << "  -x width       world width\n";
+    os << "  -y height      world height\n";
+    os << "  -n name...     team name(s)\n";
+    os << "  -c clientsNb   number of authorized clients per team\n";
+    os << "  -f freq        reciprocal of time unit for execution of actions\n";
+    os << "  --help         show this help\n";
     return os.str();
 }
 
 namespace
 {
+
+inline constexpr int MAX_CLIENTS_PER_TEAM = 100;
 
 struct RequiredOptions
 {
@@ -135,6 +137,11 @@ void validate_positive_values(const ServerArgs &args)
     if (args.width <= 0 || args.height <= 0 || args.clients_per_team <= 0 || args.frequency <= 0 || args.port <= 0)
     {
         throw std::invalid_argument("-p -x -y -c -f must all be positive");
+    }
+    if (args.clients_per_team > MAX_CLIENTS_PER_TEAM)
+    {
+        throw std::invalid_argument("too many clients per team: -c must not exceed " +
+                                    std::to_string(MAX_CLIENTS_PER_TEAM));
     }
 }
 
