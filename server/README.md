@@ -22,7 +22,7 @@ protocol/      Zappy wire parsing and formatting
   handshake.*          initial AI/GUI handshake parsing
 
 runtime/       executable orchestration
-  args.*              CLI parser (-p -x -y -n -c -f, --help)
+  parse_args.*        CLI parser (-p -x -y -n -c -f, --help)
   server.*            wires core, net, protocol and scheduler together
   main.cpp            entry point
 

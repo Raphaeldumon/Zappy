@@ -4,7 +4,7 @@
 #include "core/world_state.hpp"
 #include "net/network_layer.hpp"
 #include "protocol/ai_handler.hpp"
-#include "runtime/args.hpp"
+#include "runtime/parse_args.hpp"
 
 #include <atomic>
 #include <chrono>

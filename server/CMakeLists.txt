@@ -38,7 +38,7 @@ target_link_libraries(zappy_server_protocol
 # ---- zappy_server : runtime executable --------------------------------------
 add_executable(zappy_server
     runtime/server.cpp
-    runtime/args.cpp
+    runtime/parse_args.cpp
     runtime/main.cpp)
 
 target_include_directories(zappy_server PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
