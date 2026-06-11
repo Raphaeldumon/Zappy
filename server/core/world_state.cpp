@@ -256,11 +256,12 @@ bool WorldState::take_object(PlayerId id, int resource_index)
         return false;
     if (resource_index < 0 || resource_index >= RESOURCE_COUNT)
         return false;
+    const auto resource = static_cast<std::size_t>(resource_index);
     auto &tile = at(p->x, p->y);
-    if (tile.resources[resource_index] <= 0)
+    if (tile.resources[resource] <= 0)
         return false;
-    --tile.resources[resource_index];
-    ++p->inventory[resource_index];
+    --tile.resources[resource];
+    ++p->inventory[resource];
     return true;
 }
 
@@ -271,10 +272,11 @@ bool WorldState::set_object(PlayerId id, int resource_index)
         return false;
     if (resource_index < 0 || resource_index >= RESOURCE_COUNT)
         return false;
-    if (p->inventory[resource_index] <= 0)
+    const auto resource = static_cast<std::size_t>(resource_index);
+    if (p->inventory[resource] <= 0)
         return false;
-    --p->inventory[resource_index];
-    ++at(p->x, p->y).resources[resource_index];
+    --p->inventory[resource];
+    ++at(p->x, p->y).resources[resource];
     return true;
 }
 
@@ -441,7 +443,7 @@ void WorldState::respawn_resources()
     int total_tiles = width_ * height_;
     std::uniform_int_distribution<int> tile_dist(0, total_tiles - 1);
 
-    for (int r = 0; r < RESOURCE_COUNT; ++r)
+    for (std::size_t r = 0; r < static_cast<std::size_t>(RESOURCE_COUNT); ++r)
     {
         int target = std::max(1, static_cast<int>(width_ * height_ * RESOURCE_DENSITIES[r]));
         int current = 0;

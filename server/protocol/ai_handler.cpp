@@ -26,9 +26,9 @@ static const std::unordered_map<std::string, Cmd> CMD_MAP = {
 
 static int resource_index_of(std::string_view name)
 {
-    for (int i = 0; i < ai::RESOURCE_COUNT; ++i)
-        if (ai::RESOURCE_NAMES[static_cast<std::size_t>(i)] == name)
-            return i;
+    for (std::size_t i = 0; i < ai::RESOURCE_NAMES.size(); ++i)
+        if (ai::RESOURCE_NAMES[i] == name)
+            return static_cast<int>(i);
     return -1;
 }
 
@@ -80,13 +80,13 @@ std::string fmt_look(const std::vector<core::WorldState::LookTile> &tiles)
                 tile_str += ' ';
             tile_str += "player";
         }
-        for (int r = 0; r < ai::RESOURCE_COUNT; ++r)
+        for (std::size_t r = 0; r < t.resources.size(); ++r)
         {
             for (int q = 0; q < t.resources[r]; ++q)
             {
                 if (!tile_str.empty())
                     tile_str += ' ';
-                tile_str += ai::RESOURCE_NAMES[static_cast<std::size_t>(r)];
+                tile_str += ai::RESOURCE_NAMES[r];
             }
         }
         result += tile_str;
@@ -98,11 +98,11 @@ std::string fmt_look(const std::vector<core::WorldState::LookTile> &tiles)
 std::string fmt_inventory(const core::ResourceSet &inv)
 {
     std::string result = "[";
-    for (int r = 0; r < ai::RESOURCE_COUNT; ++r)
+    for (std::size_t r = 0; r < inv.size(); ++r)
     {
         if (r > 0)
             result += ", ";
-        result += std::string(ai::RESOURCE_NAMES[static_cast<std::size_t>(r)]);
+        result += std::string(ai::RESOURCE_NAMES[r]);
         result += ' ';
         result += std::to_string(inv[r]);
     }

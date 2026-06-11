@@ -61,8 +61,8 @@ inline constexpr std::array<ElevationRequirement, 7> ELEVATION_TABLE = {{
 
     // Check stones (tile.resources[1..6] = linemate..thystame)
     const auto &tile = w.at(x, y);
-    for (int s = 0; s < 6; ++s)
-        if (tile.resources[s + 1] < req.stones[static_cast<std::size_t>(s)])
+    for (std::size_t s = 0; s < req.stones.size(); ++s)
+        if (tile.resources[s + 1] < req.stones[s])
             return false;
 
     return true;
@@ -75,8 +75,8 @@ inline void consume_elevation_stones(WorldState &w, int x, int y, int current_le
         return;
     const auto &req = ELEVATION_TABLE[static_cast<std::size_t>(current_level - 1)];
     auto &tile = w.at(x, y);
-    for (int s = 0; s < 6; ++s)
-        tile.resources[s + 1] -= req.stones[static_cast<std::size_t>(s)];
+    for (std::size_t s = 0; s < req.stones.size(); ++s)
+        tile.resources[s + 1] -= req.stones[s];
 }
 
 // Orientation helpers (also used by broadcast_direction; defined here to avoid duplication).

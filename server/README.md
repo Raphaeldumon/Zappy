@@ -22,7 +22,7 @@ protocol/      Zappy wire parsing and formatting
   handshake.*          initial AI/GUI handshake parsing
 
 runtime/       executable orchestration
-  args.*              CLI parser (-p -x -y -n -c -f, --help)
+  parse_args.*        CLI parser (-p -x -y -n -c -f, --help)
   server.*            wires core, net, protocol and scheduler together
   main.cpp            entry point
 
@@ -44,5 +44,6 @@ ctest --test-dir build -L server   # run server tests
 - `net/` should not know Zappy game rules; it only moves lines in and out.
 - `protocol/` owns parsing and formatting of the wire contract.
 - `runtime/` is the glue layer. It is allowed to know about all other server modules.
+- `-c` limits initial AI slots per team and is capped at 100.
 
 The wire contract lives in `protocol/` and is **frozen** — change it only via an ADR.
