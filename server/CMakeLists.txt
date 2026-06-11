@@ -38,6 +38,7 @@ target_link_libraries(zappy_server_protocol
 # ---- zappy_server : runtime executable --------------------------------------
 add_executable(zappy_server
     runtime/server.cpp
+    runtime/server_commands.cpp
     runtime/parse_args.cpp
     runtime/main.cpp)
 
