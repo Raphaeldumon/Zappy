@@ -25,7 +25,7 @@ static int orient_wire(core::Orientation o) noexcept
 static std::string resources_str(const core::ResourceSet &r)
 {
     std::string s;
-    for (int i = 0; i < core::RESOURCE_COUNT; ++i)
+    for (std::size_t i = 0; i < r.size(); ++i)
     {
         if (i > 0)
             s += ' ';
