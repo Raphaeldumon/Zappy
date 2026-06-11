@@ -2,7 +2,7 @@
 
 #include "core/game_rules.hpp"
 #include "protocol/gui_emitter.hpp"
-#include "protocol/gui_request_handler.hpp"
+#include "protocol/gui_handler.hpp"
 #include "protocol/handshake.hpp"
 #include "zappy/protocol/ai_protocol.hpp"
 

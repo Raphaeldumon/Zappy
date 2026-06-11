@@ -1,4 +1,4 @@
-#include "protocol/gui_request_handler.hpp"
+#include "protocol/gui_handler.hpp"
 
 #include <charconv>
 

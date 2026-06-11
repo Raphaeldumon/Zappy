@@ -28,7 +28,7 @@ add_library(zappy_server_protocol STATIC
     protocol/handshake.cpp
     protocol/ai_handler.cpp
     protocol/gui_emitter.cpp
-    protocol/gui_request_handler.cpp)
+    protocol/gui_handler.cpp)
 
 target_include_directories(zappy_server_protocol PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(zappy_server_protocol
