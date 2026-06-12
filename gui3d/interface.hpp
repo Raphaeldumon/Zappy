@@ -18,7 +18,7 @@ public:
     Interface(int mapWidth, int mapHeight,
               int windowWidth  = DEFAULT_WINDOW_WIDTH,
               int windowHeight = DEFAULT_WINDOW_HEIGHT);
-    ~Interface() = default;
+    ~Interface();
 
     // Main entry point: runs the game loop until the window is closed.
     void run();
@@ -35,6 +35,13 @@ private:
     // --- Camera ---
     Camera3D _camera;
 
+    // --- Assets ---
+    // Food model, loaded once and drawn at every food tile. When the .glb is
+    // missing or fails to load we fall back to the old red cube.
+    Model _foodModel{};
+    bool  _foodModelOk{false};
+    float _foodScale{1.0f};
+
     // --- Internal loop steps ---
     void handleInput();
     void update();
@@ -42,4 +49,5 @@ private:
 
     // --- Helpers ---
     void initCamera();
+    void loadFoodModel();
 };

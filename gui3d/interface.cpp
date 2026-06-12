@@ -1,5 +1,7 @@
 #include "interface.hpp"
 
+#include <algorithm>
+
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
@@ -8,6 +10,15 @@ Interface::Interface(int mapWidth, int mapHeight, int windowWidth, int windowHei
     , _map(mapWidth, mapHeight)
 {
     initCamera();
+    loadFoodModel(); // needs the GL context, so after the engine init
+}
+
+Interface::~Interface()
+{
+    // Member destruction runs after this body, so the GL context (owned by
+    // _engine) is still alive here — safe to free GPU resources.
+    if (_foodModelOk)
+        UnloadModel(_foodModel);
 }
 
 // ---------------------------------------------------------------------------
@@ -31,6 +42,33 @@ const GameMap& Interface::getMap() const { return _map; }
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
+void Interface::loadFoodModel()
+{
+    // Path depends on where the binary is launched from: try both.
+    const char* candidates[] = { "assets/monster.glb", "gui3d/assets/monster.glb" };
+    for (const char* path : candidates) {
+        if (!FileExists(path))
+            continue;
+        _foodModel = LoadModel(path);
+        if (_foodModel.meshCount > 0) {
+            _foodModelOk = true;
+            break;
+        }
+        UnloadModel(_foodModel);
+    }
+    if (!_foodModelOk)
+        return; // render() falls back to the red cube
+
+    // Normalize: scale the model so its largest dimension spans ~45% of a tile,
+    // whatever size it was authored at.
+    BoundingBox box = GetModelBoundingBox(_foodModel);
+    float ext = box.max.x - box.min.x;
+    ext = std::max(ext, box.max.y - box.min.y);
+    ext = std::max(ext, box.max.z - box.min.z);
+    if (ext > 0.0001f)
+        _foodScale = (TILE_SIZE * 0.45f) / ext;
+}
+
 void Interface::initCamera()
 {
     // Isometric-ish top-down view centered on the map.
@@ -105,7 +143,15 @@ void Interface::render()
                 DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, YELLOW);
             }
             if (tile.resources[0]) {
-                DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, RED);
+                if (_foodModelOk) {
+                    // Sit the model on the tile; per-tile rotation breaks up the
+                    // grid repetition.
+                    float angle = static_cast<float>((x * 53 + y * 97) % 360);
+                    DrawModelEx(_foodModel, { worldX, 1.5f, worldZ }, { 0.0f, 1.0f, 0.0f }, angle,
+                                { _foodScale, _foodScale, _foodScale }, WHITE);
+                } else {
+                    DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, RED);
+                }
             }
             if (tile.resources[1]) {
                 DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, BLUE);
