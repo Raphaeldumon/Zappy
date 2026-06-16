@@ -93,4 +93,12 @@ if(ZAPPY_BUILD_TESTS)
                 zappy_compile_options zappy_test_options)
     add_test(NAME server_network COMMAND zappy_network_tests)
     set_tests_properties(server_network PROPERTIES LABELS "server;net;unit")
+
+    # parse_args has no deps beyond the stdlib, so compile it straight in.
+    add_executable(zappy_parse_args_tests tests/test_parse_args.cpp runtime/parse_args.cpp)
+    target_include_directories(zappy_parse_args_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(zappy_parse_args_tests
+        PRIVATE zappy_compile_options zappy_test_options)
+    add_test(NAME server_parse_args COMMAND zappy_parse_args_tests)
+    set_tests_properties(server_parse_args PROPERTIES LABELS "server;runtime;unit")
 endif()

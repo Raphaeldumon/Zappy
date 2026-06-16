@@ -73,6 +73,13 @@ class Server
     // Player lifecycle
     void kill_player(core::PlayerId id);
 
+    // Small helpers shared by the command handlers.
+    [[nodiscard]] core::Player *player_for(int fd) noexcept; // live player behind a fd, or null
+    void send_ok(int fd);                                    // reply "ok"
+    void send_ko(int fd);                                    // reply "ko"
+    void broadcast_player_pos(core::PlayerId pid);           // emit ppo to GUIs
+    bool announce_win_if_over();                             // emit seg + stop if a team won
+
     // Timing helpers
     [[nodiscard]] core::EventScheduler::Tick now_ticks() const noexcept;
     [[nodiscard]] int ms_until_next_event() const noexcept;

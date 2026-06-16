@@ -43,7 +43,7 @@ void Server::execute_next_command(int fd)
     if (!player || !player->alive)
         return;
     if (player->incanting)
-        return; // frozen until incantation completes
+        return;
 
     std::string cmd_str = client->command_queue.front();
     client->command_queue.pop_front();
@@ -51,7 +51,7 @@ void Server::execute_next_command(int fd)
     auto parsed = protocol::parse_ai_command(cmd_str);
     if (!parsed)
     {
-        net_.send_to(fd, std::string(protocol::ai::KO));
+        send_ko(fd);
         execute_next_command(fd); // bad commands have no time cost
         return;
     }
@@ -144,162 +144,145 @@ void Server::dispatch_command(int fd, const protocol::ParsedCommand &cmd)
 
 void Server::cmd_forward(int fd)
 {
-    auto pid = fd_to_player_[fd];
-    world_.move_forward(pid);
-    auto *p = world_.find_player(pid);
-    net_.send_to(fd, std::string(protocol::ai::OK));
-    if (p)
-        net_.broadcast_gui(protocol::GuiEmitter::ppo(pid, p->x, p->y, p->orientation));
+    auto *p = player_for(fd);
+    if (!p)
+        return;
+    world_.move_forward(p->id);
+    send_ok(fd);
+    broadcast_player_pos(p->id);
 }
 
 void Server::cmd_right(int fd)
 {
-    auto pid = fd_to_player_[fd];
-    world_.turn_right(pid);
-    auto *p = world_.find_player(pid);
-    net_.send_to(fd, std::string(protocol::ai::OK));
-    if (p)
-        net_.broadcast_gui(protocol::GuiEmitter::ppo(pid, p->x, p->y, p->orientation));
+    auto *p = player_for(fd);
+    if (!p)
+        return;
+    world_.turn_right(p->id);
+    send_ok(fd);
+    broadcast_player_pos(p->id);
 }
 
 void Server::cmd_left(int fd)
 {
-    auto pid = fd_to_player_[fd];
-    world_.turn_left(pid);
-    auto *p = world_.find_player(pid);
-    net_.send_to(fd, std::string(protocol::ai::OK));
-    if (p)
-        net_.broadcast_gui(protocol::GuiEmitter::ppo(pid, p->x, p->y, p->orientation));
+    auto *p = player_for(fd);
+    if (!p)
+        return;
+    world_.turn_left(p->id);
+    send_ok(fd);
+    broadcast_player_pos(p->id);
 }
 
 void Server::cmd_look(int fd)
 {
-    auto pid = fd_to_player_[fd];
-    auto tiles = world_.look(pid);
-    net_.send_to(fd, protocol::fmt_look(tiles));
+    auto *p = player_for(fd);
+    if (!p)
+        return;
+    net_.send_to(fd, protocol::fmt_look(world_.look(p->id)));
 }
 
 void Server::cmd_inventory(int fd)
 {
-    auto pid = fd_to_player_[fd];
-    auto *p = world_.find_player(pid);
+    auto *p = player_for(fd);
     if (!p)
         return;
     net_.send_to(fd, protocol::fmt_inventory(p->inventory));
-    net_.broadcast_gui(protocol::GuiEmitter::pin(pid, p->x, p->y, p->inventory));
+    net_.broadcast_gui(protocol::GuiEmitter::pin(p->id, p->x, p->y, p->inventory));
 }
 
 void Server::cmd_broadcast(int fd, std::string text)
 {
-    auto pid = fd_to_player_[fd];
-    net_.send_to(fd, std::string(protocol::ai::OK));
-    broadcast_message_to_ai(pid, text);
+    auto *p = player_for(fd);
+    if (!p)
+        return;
+    send_ok(fd);
+    broadcast_message_to_ai(p->id, text);
 }
 
 void Server::cmd_connect_nbr(int fd)
 {
-    auto pid = fd_to_player_[fd];
-    auto *p = world_.find_player(pid);
+    auto *p = player_for(fd);
     if (!p)
         return;
-    int slots = world_.team_slots(p->team);
-    net_.send_to(fd, protocol::fmt_connect_nbr(slots));
+    net_.send_to(fd, protocol::fmt_connect_nbr(world_.team_slots(p->team)));
 }
 
 void Server::cmd_fork(int fd)
 {
-    auto pid = fd_to_player_[fd];
-    auto *p = world_.find_player(pid);
+    auto *p = player_for(fd);
     if (!p)
         return;
 
     core::EggId egg_id = world_.add_egg(p->id, p->team, p->x, p->y);
     world_.restore_team_slot(p->team); // egg adds one pending slot
 
-    net_.send_to(fd, std::string(protocol::ai::OK));
-    net_.broadcast_gui(protocol::GuiEmitter::pfk(pid));
-    net_.broadcast_gui(protocol::GuiEmitter::enw(egg_id, pid, p->x, p->y));
+    send_ok(fd);
+    net_.broadcast_gui(protocol::GuiEmitter::pfk(p->id));
+    net_.broadcast_gui(protocol::GuiEmitter::enw(egg_id, p->id, p->x, p->y));
 }
 
 void Server::cmd_eject(int fd)
 {
-    auto pid = fd_to_player_[fd];
-    auto results = world_.eject(pid);
+    auto *p = player_for(fd);
+    if (!p)
+        return;
+    core::PlayerId pid = p->id;
 
-    for (auto &r : results)
+    for (auto &r : world_.eject(pid))
     {
         if (r.victim != 0)
         {
-            // Notify victim
+            // Notify the victim, then update GUIs on its new position.
             if (auto vfd_it = player_to_fd_.find(r.victim); vfd_it != player_to_fd_.end())
-            {
                 net_.send_to(vfd_it->second, "eject: " + std::to_string(r.k));
-            }
-            // Update GUIs on victim's new position
-            auto *v = world_.find_player(r.victim);
-            if (v)
-                net_.broadcast_gui(protocol::GuiEmitter::ppo(r.victim, v->x, v->y, v->orientation));
+            broadcast_player_pos(r.victim);
         }
         if (r.egg_destroyed != 0)
             net_.broadcast_gui(protocol::GuiEmitter::edi(r.egg_destroyed));
     }
 
     net_.broadcast_gui(protocol::GuiEmitter::pex(pid));
-    net_.send_to(fd, std::string(protocol::ai::OK));
+    send_ok(fd);
 }
 
 void Server::cmd_take(int fd, int resource_index)
 {
-    auto pid = fd_to_player_[fd];
-    auto *p = world_.find_player(pid);
+    auto *p = player_for(fd);
     if (!p)
         return;
 
-    if (world_.take_object(pid, resource_index))
-    {
-        net_.send_to(fd, std::string(protocol::ai::OK));
-        net_.broadcast_gui(protocol::GuiEmitter::pgt(pid, resource_index));
-        net_.broadcast_gui(protocol::GuiEmitter::bct(p->x, p->y, world_.at(p->x, p->y).resources));
-    }
-    else
-    {
-        net_.send_to(fd, std::string(protocol::ai::KO));
-    }
+    if (!world_.take_object(p->id, resource_index))
+        return send_ko(fd);
+
+    send_ok(fd);
+    net_.broadcast_gui(protocol::GuiEmitter::pgt(p->id, resource_index));
+    net_.broadcast_gui(protocol::GuiEmitter::bct(p->x, p->y, world_.at(p->x, p->y).resources));
 }
 
 void Server::cmd_set(int fd, int resource_index)
 {
-    auto pid = fd_to_player_[fd];
-    auto *p = world_.find_player(pid);
+    auto *p = player_for(fd);
     if (!p)
         return;
 
-    if (world_.set_object(pid, resource_index))
-    {
-        net_.send_to(fd, std::string(protocol::ai::OK));
-        net_.broadcast_gui(protocol::GuiEmitter::pdr(pid, resource_index));
-        net_.broadcast_gui(protocol::GuiEmitter::bct(p->x, p->y, world_.at(p->x, p->y).resources));
-    }
-    else
-    {
-        net_.send_to(fd, std::string(protocol::ai::KO));
-    }
+    if (!world_.set_object(p->id, resource_index))
+        return send_ko(fd);
+
+    send_ok(fd);
+    net_.broadcast_gui(protocol::GuiEmitter::pdr(p->id, resource_index));
+    net_.broadcast_gui(protocol::GuiEmitter::bct(p->x, p->y, world_.at(p->x, p->y).resources));
 }
 
 void Server::cmd_incantation(int fd)
 {
-    auto pid = fd_to_player_[fd];
-    auto *p = world_.find_player(pid);
+    auto *p = player_for(fd);
     if (!p)
         return;
+    core::PlayerId pid = p->id;
 
     int x = p->x, y = p->y, level = p->level;
 
     if (!core::can_elevate(world_, x, y, level))
-    {
-        net_.send_to(fd, std::string(protocol::ai::KO));
-        return;
-    }
+        return send_ko(fd);
 
     // Gather all same-level players on this tile
     auto pids_on_tile = world_.players_at(x, y);
@@ -319,10 +302,7 @@ void Server::cmd_incantation(int fd)
     }
 
     net_.send_to(fd, "Elevation underway");
-
-    // Notify GUIs
-    std::vector<core::PlayerId> part_ids(participants);
-    net_.broadcast_gui(protocol::GuiEmitter::pic(x, y, level, part_ids));
+    net_.broadcast_gui(protocol::GuiEmitter::pic(x, y, level, participants));
 
     // Schedule completion after 300 ticks
     auto ev_id = scheduler_.schedule(
@@ -350,8 +330,10 @@ void Server::cmd_incantation_complete(core::PlayerId initiator_id, std::vector<c
                 continue;
             pp->incanting = false;
             if (auto fd_it = player_to_fd_.find(part_id); fd_it != player_to_fd_.end())
-                net_.send_to(fd_it->second, std::string(protocol::ai::KO));
-            execute_next_command(player_to_fd_.count(part_id) ? player_to_fd_.at(part_id) : -1);
+            {
+                send_ko(fd_it->second);
+                execute_next_command(fd_it->second);
+            }
         }
         return;
     }
@@ -387,11 +369,7 @@ void Server::cmd_incantation_complete(core::PlayerId initiator_id, std::vector<c
     }
 
     // Check win condition immediately after elevation
-    if (auto winner = world_.check_win())
-    {
-        net_.broadcast_gui(protocol::GuiEmitter::seg(world_.team_name(*winner)));
-        running_ = false;
-    }
+    announce_win_if_over();
 }
 
 // ---------------------------------------------------------------------------

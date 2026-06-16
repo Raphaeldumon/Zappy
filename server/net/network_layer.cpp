@@ -101,7 +101,6 @@ void NetworkLayer::poll_once(int timeout_ms)
     if (n == 0)
         return;
 
-    // Accept new connections
     if (pollfds_[0].revents & POLLIN)
         accept_new_connection();
 
