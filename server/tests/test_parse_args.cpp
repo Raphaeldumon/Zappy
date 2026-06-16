@@ -75,8 +75,8 @@ void test_graphic_team_rejected()
 {
     // GRAPHIC is reserved for the GUI handshake — never a real team.
     assert(rejects({"zappy_server", "-p", "4242", "-x", "10", "-y", "10", "-n", "GRAPHIC", "-c", "5", "-f", "100"}));
-    assert(rejects({"zappy_server", "-p", "4242", "-x", "10", "-y", "10", "-n", "red", "GRAPHIC", "-c", "5", "-f",
-                    "100"}));
+    assert(rejects(
+        {"zappy_server", "-p", "4242", "-x", "10", "-y", "10", "-n", "red", "GRAPHIC", "-c", "5", "-f", "100"}));
 }
 
 void test_duplicate_team_rejected()
@@ -92,8 +92,8 @@ void test_empty_team_rejected()
 void test_too_many_teams_rejected()
 {
     // MAX_TEAMS is 8; nine distinct names must be rejected.
-    assert(rejects({"zappy_server", "-p", "4242", "-x", "10", "-y", "10", "-n", "t1", "t2", "t3", "t4", "t5", "t6",
-                    "t7", "t8", "t9", "-c", "5", "-f", "100"}));
+    assert(rejects({"zappy_server", "-p", "4242", "-x", "10", "-y", "10", "-n", "t1", "t2", "t3",
+                    "t4",           "t5", "t6",   "t7", "t8", "t9", "-c", "5",  "-f", "100"}));
 }
 
 void test_missing_and_invalid()
