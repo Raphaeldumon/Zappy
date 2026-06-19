@@ -2,9 +2,11 @@
 
 import argparse
 import enum
+import os
 import random
 import select
 import socket
+import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
@@ -106,6 +108,8 @@ class State(enum.Enum):
     PREPARE_INCANTATION = "PREPARE_INCANTATION"
     CALL_TEAMMATES = "CALL_TEAMMATES"
     INCANT = "INCANT"
+    REPRODUCE = "REPRODUCE"
+    EJECT = "EJECT"
     DEAD = "DEAD"
 
 
@@ -142,6 +146,17 @@ class WorldMemory:
 
     force_look: bool = False
 
+    # --- Reproduction (Fork) ---
+    free_slots: int = 0          # slots libres connus (via Connect_nbr)
+    last_connect_at: float = 0.0 # dernière mesure de Connect_nbr
+    forks_done: int = 0          # nb de Fork réussis par CE bot
+    last_fork_at: float = 0.0
+    want_spawn_child: bool = False  # demande au process de lancer un client
+
+    # --- Ejection / rassemblement ---
+    last_eject_at: float = 0.0
+    last_gather_at: float = 0.0  # dernier GATHER reçu (on n'éjecte pas alors)
+
 
 class NetworkClient:
     def __init__(self, host: str, port: int, team_name: str):
@@ -150,6 +165,10 @@ class NetworkClient:
         self.team_name = team_name
         self.sock: Optional[socket.socket] = None
         self.recv_buffer = ""
+        # Lignes déjà extraites du socket mais pas encore consommées par
+        # read_blocking_line (évite de les perdre si plusieurs lignes
+        # arrivent dans le même segment TCP, ex: pendant le handshake).
+        self._blocking_buffer: List[str] = []
 
     def connect(self) -> None:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -202,15 +221,29 @@ class NetworkClient:
         return lines
 
     def read_blocking_line(self, timeout: float = 5.0) -> str:
+        # On sert d'abord les lignes déjà bufferisées.
+        if self._blocking_buffer:
+            return self._blocking_buffer.pop(0)
+
         start = time.time()
 
         while time.time() - start < timeout:
             lines = self.read_available_lines()
             if lines:
-                return lines[0]
+                # On bufferise TOUTES les lignes reçues et on en rend une.
+                # Avant, lines[1:] était silencieusement perdu.
+                self._blocking_buffer.extend(lines)
+                return self._blocking_buffer.pop(0)
             time.sleep(0.005)
 
         raise TimeoutError("Timeout while waiting for server line")
+
+    def drain_blocking_buffer(self) -> List[str]:
+        """Récupère les lignes bufferisées non consommées (à ré-injecter
+        dans le traitement normal avant de démarrer la boucle principale)."""
+        leftover = self._blocking_buffer
+        self._blocking_buffer = []
+        return leftover
 
 
 class CommandQueue:
@@ -414,9 +447,28 @@ class Brain:
         else:
             self.max_plan_length = 2
 
+        # --- Politique de reproduction (Fork) ---
+        # On reproduit uniquement quand on est bien nourri et de bas niveau :
+        # les bots de haut niveau se concentrent sur l'élévation. Cela borne
+        # naturellement la croissance (les bots qui montent arrêtent de forker).
+        self.max_forks = 3            # plafond de Fork par bot (anti fork-bomb)
+        self.fork_food_threshold = 25 # food mini pour se permettre un Fork
+        self.fork_max_level = 3       # au-delà, on ne reproduit plus
+
+        # --- Politique d'éjection ---
+        # L'éjection est offensive : comme les joueurs sont anonymes, on évite
+        # d'éjecter pendant/juste après un rassemblement d'équipe.
+        self.eject_food_threshold = 20
+
     def tick(self) -> None:
         if self.state == State.DEAD:
             return
+
+        # Garde anti-blocage : si on attend un résultat d'incantation mais
+        # que plus aucune commande n'est en vol (ex: timeout de la file),
+        # on débloque pour ne pas geler le bot indéfiniment.
+        if self.waiting_incantation_result and not self.queue.has_pending():
+            self.waiting_incantation_result = False
 
         if self.waiting_incantation_result:
             return
@@ -509,8 +561,16 @@ class Brain:
                 self.state = State.CALL_TEAMMATES
             return
 
+        if self.should_reproduce():
+            self.state = State.REPRODUCE
+            return
+
         if self.visible_useful_resource_exists():
             self.state = State.COLLECT
+            return
+
+        if self.should_eject():
+            self.state = State.EJECT
             return
 
         self.state = State.EXPLORE
@@ -537,6 +597,10 @@ class Brain:
             self.call_teammates()
         elif self.state == State.INCANT:
             self.incant()
+        elif self.state == State.REPRODUCE:
+            self.reproduce()
+        elif self.state == State.EJECT:
+            self.do_eject()
         elif self.state == State.EXPLORE:
             self.explore()
         else:
@@ -629,6 +693,76 @@ class Brain:
 
         if self.queue.send("Incantation"):
             self.waiting_incantation_result = True
+
+    # ------------------------------------------------------------------
+    # Reproduction (Fork)
+    # ------------------------------------------------------------------
+    def should_reproduce(self) -> bool:
+        if self.preparing_incantation or self.waiting_incantation_result:
+            return False
+
+        if self.memory.level > self.fork_max_level:
+            return False
+
+        if self.memory.forks_done >= self.max_forks:
+            return False
+
+        if self.memory.inventory.get("food", 0) < self.fork_food_threshold:
+            return False
+
+        # Cooldown dépendant de la fréquence (Fork coûte 42/f).
+        cooldown = max(3.0, 150.0 / self.frequency)
+        if time.time() - self.memory.last_fork_at < cooldown:
+            return False
+
+        return True
+
+    def reproduce(self) -> None:
+        now = time.time()
+
+        # 1) On rafraîchit d'abord le nombre de slots libres (Connect_nbr,
+        #    instantané) si l'info est trop ancienne.
+        if now - self.memory.last_connect_at > max(2.0, 100.0 / self.frequency):
+            self.queue.send("Connect_nbr")
+            return
+
+        # 2) Si un slot est déjà libre, inutile de forker : on le remplit
+        #    directement en lançant un nouveau client (le process s'en charge).
+        if self.memory.free_slots > 0:
+            self.memory.want_spawn_child = True
+            self.memory.last_fork_at = now
+            return
+
+        # 3) Sinon, on pond un œuf pour créer un slot (le spawn suivra le "ok").
+        self.queue.send("Fork")
+
+    # ------------------------------------------------------------------
+    # Ejection
+    # ------------------------------------------------------------------
+    def should_eject(self) -> bool:
+        # Offensif et risqué (joueurs anonymes) : on reste très prudent.
+        if self.preparing_incantation or self.waiting_incantation_result:
+            return False
+
+        if self.memory.inventory.get("food", 0) < self.eject_food_threshold:
+            return False
+
+        # Jamais juste après un rassemblement d'équipe : on ne disperse pas
+        # nos propres coéquipiers.
+        if time.time() - self.memory.last_gather_at < max(5.0, 200.0 / self.frequency):
+            return False
+
+        # Cooldown d'éjection.
+        if time.time() - self.memory.last_eject_at < max(3.0, 100.0 / self.frequency):
+            return False
+
+        # Seulement si d'autres joueurs partagent notre tuile.
+        return self.count_players_on_current_tile() > 1
+
+    def do_eject(self) -> None:
+        if self.queue.send("Eject"):
+            self.memory.last_eject_at = time.time()
+            self.memory.force_look = True
 
     def explore(self) -> None:
         if self.memory.was_ejected:
@@ -793,24 +927,19 @@ class Brain:
             plan = ["Forward"] * distance
             return plan[: self.max_plan_length]
 
+        # Les axes sont indépendants : on se décale de |offset| sur le côté,
+        # PUIS on avance de `distance` tuiles (et non distance - |offset|).
         if offset < 0:
             plan.append("Left")
             plan.extend(["Forward"] * abs(offset))
             plan.append("Right")
-
-            remaining_forward = distance - abs(offset)
-            if remaining_forward > 0:
-                plan.extend(["Forward"] * remaining_forward)
-
+            plan.extend(["Forward"] * distance)
             return plan[: self.max_plan_length]
 
         plan.append("Right")
         plan.extend(["Forward"] * abs(offset))
         plan.append("Left")
-
-        remaining_forward = distance - abs(offset)
-        if remaining_forward > 0:
-            plan.extend(["Forward"] * remaining_forward)
+        plan.extend(["Forward"] * distance)
 
         return plan[: self.max_plan_length]
 
@@ -839,6 +968,7 @@ class Brain:
         self.memory.team_messages.append((direction, text))
 
         if ":GATHER:" in text:
+            self.memory.last_gather_at = time.time()
             self.follow_broadcast_direction(direction)
 
     def follow_broadcast_direction(self, direction: int) -> None:
@@ -870,44 +1000,130 @@ class Brain:
         self.movement_plan = plan
 
     def broadcast_direction_to_plan(self, direction: int) -> List[str]:
+        # Numérotation du son autour du joueur (face en haut) :
+        #   2 1 8
+        #   3 . 7
+        #   4 5 6
+        # On se tourne vers la moitié d'où vient le son, puis on avance.
         if direction == 0:
             return ["Look"]
 
         if direction == 1:
             return ["Forward"]
 
-        if direction == 2:
-            return ["Forward", "Left"]
-
-        if direction == 3:
+        if direction in (2, 3):          # gauche / avant-gauche
             return ["Left", "Forward"]
 
-        if direction == 4:
-            return ["Left", "Forward"]
+        if direction in (4, 5):          # arrière(-gauche) : demi-tour
+            return ["Left", "Left", "Forward"]
 
-        if direction == 5:
+        if direction == 6:               # arrière-droite : demi-tour
+            return ["Right", "Right", "Forward"]
+
+        if direction in (7, 8):          # droite / avant-droite
             return ["Right", "Forward"]
-
-        if direction == 6:
-            return ["Right", "Forward"]
-
-        if direction == 7:
-            return ["Right", "Forward"]
-
-        if direction == 8:
-            return ["Forward", "Right"]
 
         return []
 
 
+class FrequencyEstimator:
+    """Mesure la fréquence RÉELLE du serveur pour s'y synchroniser.
+
+    Principe (cf. sujet: temps_réel = coût_action / f) :
+      - Une commande de coût NUL (Connect_nbr, temps "-") sert de référence
+        pour la latence réseau (RTT) : T_connect ~= RTT + bruit.
+      - Une commande de coût CONNU (Forward = 7) : T_forward ~= 7/f + RTT + bruit.
+      - En soustrayant, le RTT s'annule :  f = 7 / (T_forward - T_connect).
+
+    On prend le MINIMUM sur plusieurs échantillons : le bruit (réseau, GC,
+    ordonnancement du serveur) est toujours POSITIF (il ajoute du temps,
+    jamais n'en retire), donc min(T) tend vers la vraie valeur.
+    f étant un entier (sujet), on arrondit : on retombe exactement sur f.
+    """
+
+    FORWARD_COST = 7  # unités de temps d'un Forward (sujet)
+
+    def __init__(self, network: "NetworkClient"):
+        self.network = network
+        # Lignes asynchrones reçues pendant la mesure (broadcast, eject, dead)
+        # à ré-injecter ensuite dans le traitement normal.
+        self.deferred_lines: List[str] = []
+        # Valeur renvoyée par Connect_nbr (slots libres) : bonus utile.
+        self.last_connect_value: Optional[int] = None
+
+    def _round_trip(self, command: str, is_response, guard: float = 60.0):
+        """Envoie une commande et mesure le temps jusqu'à SA réponse.
+        Renvoie le temps (float) ou None si le joueur meurt / timeout."""
+        start = time.perf_counter()
+        self.network.send_line(command)
+
+        while time.perf_counter() - start < guard:
+            for line in self.network.read_available_lines():
+                if line == "dead":
+                    self.deferred_lines.append(line)
+                    return None
+                if is_response(line):
+                    return time.perf_counter() - start
+                # Ligne asynchrone (message K,..., eject:...) : on la diffère.
+                self.deferred_lines.append(line)
+            time.sleep(0.0005)
+
+        return None
+
+    def estimate(self, samples: int = 6, default: int = 100) -> int:
+        def is_int(line: str) -> bool:
+            if line.lstrip("-").isdigit():
+                self.last_connect_value = int(line)
+                return True
+            return False
+
+        def is_ok(line: str) -> bool:
+            return line == "ok"
+
+        connect_times: List[float] = []
+        for _ in range(samples):
+            dt = self._round_trip("Connect_nbr", is_int)
+            if dt is None:
+                return default
+            connect_times.append(dt)
+
+        forward_times: List[float] = []
+        for _ in range(samples):
+            dt = self._round_trip("Forward", is_ok)
+            if dt is None:
+                return default
+            forward_times.append(dt)
+
+        # Soustraction du RTT (annulé) + minimum (filtre le bruit positif).
+        delta = min(forward_times) - min(connect_times)
+        if delta <= 0:
+            # Jitter pathologique : repli sans soustraction du RTT.
+            delta = min(forward_times)
+
+        freq = round(self.FORWARD_COST / delta)
+        return max(1, freq)
+
+
 class ZappyAI:
-    def __init__(self, host: str, port: int, team_name: str, frequency: int):
-        self.frequency = max(1, frequency)
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        team_name: str,
+        frequency_override: Optional[int] = None,
+    ):
+        # Si -f est fourni, on le croit ; sinon on mesurera f au handshake.
+        self.frequency_override = frequency_override
+        self.frequency = max(1, frequency_override or 100)  # placeholder
         self.network = NetworkClient(host, port, team_name)
         self.memory = WorldMemory()
         self.queue = CommandQueue(self.network, self.frequency)
         self.brain = Brain(team_name, self.memory, self.queue, self.frequency)
         self.running = True
+
+        # Clients enfants lancés après un Fork (pour faire éclore les œufs).
+        self.children: List[subprocess.Popen] = []
+        self.max_children = 4  # plafond par process (anti fork-bomb)
 
     def run(self) -> None:
         self.network.connect()
@@ -916,9 +1132,55 @@ class ZappyAI:
         while self.running:
             self.read_server_messages()
             self.brain.tick()
+
+            if self.memory.want_spawn_child:
+                self.memory.want_spawn_child = False
+                self.spawn_child()
+
             time.sleep(0.002)
 
         self.network.close()
+
+    def spawn_child(self) -> None:
+        """Lance un nouveau client zappy_ai pour occuper un slot libre
+        (un œuf de l'équipe éclot alors). Plafonné pour éviter un fork-bomb."""
+        self.children = [c for c in self.children if c.poll() is None]
+        if len(self.children) >= self.max_children:
+            return
+
+        cmd = [
+            sys.executable,
+            os.path.abspath(sys.argv[0]),
+            "-p", str(self.network.port),
+            "-n", self.network.team_name,
+            "-h", self.network.host,
+        ]
+
+        try:
+            child = subprocess.Popen(
+                cmd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            self.children.append(child)
+            # On consomme le slot qu'on vient d'occuper : force un nouveau
+            # Connect_nbr avant tout nouveau Fork.
+            self.memory.free_slots = max(0, self.memory.free_slots - 1)
+            self.memory.last_connect_at = 0.0
+            print(f"[AI] spawned child client (pid={child.pid})", file=sys.stderr)
+        except Exception as error:
+            print(f"[AI] failed to spawn child: {error}", file=sys.stderr)
+
+    def apply_frequency(self, freq: int) -> None:
+        """Propage la fréquence (mesurée ou override) à tous les composants
+        qui en dépendent pour leurs calculs de temps."""
+        freq = max(1, int(freq))
+        self.frequency = freq
+        self.queue.frequency = freq
+        self.brain.frequency = freq
+        # Plan de déplacement plus court à haute fréquence (actions rapides),
+        # plus long à basse fréquence (chaque Look coûte cher).
+        self.brain.max_plan_length = 1 if freq >= 100 else 2
 
     def handshake(self) -> None:
         welcome = self.network.read_blocking_line()
@@ -942,6 +1204,31 @@ class ZappyAI:
         except ValueError:
             raise RuntimeError(f"Invalid map dimensions: {dimensions}")
 
+        # Lignes éventuellement bufferisées pendant le handshake : on les
+        # traite avant toute autre chose pour préserver l'ordre serveur.
+        for line in self.network.drain_blocking_buffer():
+            self.handle_line(line)
+
+        # --- Synchronisation de la fréquence sur le serveur ---
+        if self.frequency_override is not None:
+            measured = self.frequency_override
+            print(
+                f"[AI] frequency override (-f) f={measured} (no measurement)",
+                file=sys.stderr,
+            )
+        elif self.running:
+            estimator = FrequencyEstimator(self.network)
+            measured = estimator.estimate(samples=6, default=100)
+            print(f"[AI] measured server frequency f={measured}", file=sys.stderr)
+            if estimator.last_connect_value is not None:
+                self.memory.client_num = estimator.last_connect_value
+            for line in estimator.deferred_lines:
+                self.handle_line(line)
+        else:
+            measured = self.frequency
+
+        self.apply_frequency(measured)
+
         print(
             f"[AI] Connected as team={self.network.team_name}, "
             f"bot_id={self.brain.bot_id}, "
@@ -951,7 +1238,8 @@ class ZappyAI:
             file=sys.stderr,
         )
 
-        self.queue.send("Inventory")
+        if self.running:
+            self.queue.send("Inventory")
 
     def read_server_messages(self) -> None:
         lines = self.network.read_available_lines()
@@ -1050,6 +1338,21 @@ class ZappyAI:
         if line == "Elevation underway":
             return
 
+        # Réponse de Connect_nbr : un entier nu = nombre de slots libres.
+        # Sans ça, le pending Connect_nbr ne serait jamais dépilé (file bloquée).
+        if line.lstrip("-").isdigit() and self.queue.current_pending() == "Connect_nbr":
+            try:
+                self.memory.free_slots = int(line)
+            except ValueError:
+                self.memory.free_slots = 0
+            self.memory.last_connect_at = time.time()
+            self.queue.pop_expected_response()
+            print(
+                f"[AI] connect_nbr -> free_slots={self.memory.free_slots}",
+                file=sys.stderr,
+            )
+            return
+
         if line in ("ok", "ko"):
             pending = self.queue.pop_expected_response()
             command = pending.command if pending else ""
@@ -1066,6 +1369,17 @@ class ZappyAI:
                 self.brain.movement_plan.clear()
                 self.memory.inventory_dirty = True
                 self.memory.force_look = True
+
+            if line == "ok" and command == "Fork":
+                self.memory.forks_done += 1
+                self.memory.last_fork_at = time.time()
+                # L'œuf est pondu -> un slot s'est libéré : on le remplit.
+                self.memory.want_spawn_child = True
+                print(
+                    f"[AI] fork ok -> egg laid "
+                    f"(forks_done={self.memory.forks_done})",
+                    file=sys.stderr,
+                )
 
             if line == "ko":
                 self.brain.stones_to_drop.clear()
@@ -1130,7 +1444,7 @@ def print_usage(program_name: str) -> None:
         "-p port      port number\n"
         "-n name      name of the team\n"
         "-h machine   name of the machine; localhost by default\n"
-        "-f freq      server frequency; default 100\n",
+        "-f freq      optional: force server frequency (measured if omitted)\n",
         file=sys.stderr,
     )
 
@@ -1141,7 +1455,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-p", dest="port", type=int)
     parser.add_argument("-n", dest="name")
     parser.add_argument("-h", dest="host", default="localhost")
-    parser.add_argument("-f", dest="frequency", type=int, default=100)
+    parser.add_argument("-f", dest="frequency", type=int, default=None)
     parser.add_argument("--help", action="store_true", dest="help")
 
     try:
@@ -1166,7 +1480,7 @@ def parse_args() -> argparse.Namespace:
         print_usage(sys.argv[0])
         raise SystemExit(84)
 
-    if args.frequency <= 0:
+    if args.frequency is not None and args.frequency <= 0:
         print_usage(sys.argv[0])
         raise SystemExit(84)
 
@@ -1183,7 +1497,7 @@ def main() -> int:
         host=args.host,
         port=args.port,
         team_name=args.name,
-        frequency=args.frequency,
+        frequency_override=args.frequency,
     )
 
     try:
