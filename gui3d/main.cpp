@@ -1,4 +1,6 @@
 #include "interface.hpp"
+#include <cstdlib>
+#include <ctime>
 #include <iostream>
 
 int main()
@@ -11,15 +13,22 @@ int main()
 
     std::cout << "Starting Zappy 3D GUI..." << std::endl;
 
-    Interface app(mapWidth, mapHeight, windowWidth, windowHeight);
-    for (int i = 0; i < 50; ++i) {
-        int x = rand() % mapWidth;
-        int y = rand() % mapHeight;
-        int resourceType = rand() % MAP_RESOURCE_COUNT;
-        int amount = (rand() % 5) + 1;
-        app.getMap().addResource(x, y, resourceType, amount);
+    try {
+        std::srand(static_cast<unsigned int>(std::time(nullptr)));
+
+        Interface app(mapWidth, mapHeight, windowWidth, windowHeight);
+        for (int i = 0; i < 50; ++i) {
+            int x = std::rand() % mapWidth;
+            int y = std::rand() % mapHeight;
+            int resourceType = std::rand() % MAP_RESOURCE_COUNT;
+            int amount = (std::rand() % 5) + 1;
+            app.getMap().addResource(x, y, resourceType, amount);
+        }
+        app.run();
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return 84;
     }
-    app.run();
 
     return 0;
 }

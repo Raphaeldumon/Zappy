@@ -8,8 +8,9 @@ SRC         =   main.cpp \
                 gameMap.cpp
 
 OBJ         =   $(SRC:.cpp=.o)
+DEP         =   $(OBJ:.o=.d)
 
-CXXFLAGS    =   -Wall -Wextra -std=c++17 -I.
+CXXFLAGS    =   -Wall -Wextra -std=c++17 -g -MMD -MP -I.
 
 LDFLAGS     =   -lraylib -lGL -lm -lpthread -ldl -lrt -lX11
 
@@ -18,8 +19,10 @@ all: $(NAME)
 $(NAME): $(OBJ)
 	$(CXX) $(OBJ) -o $(NAME) $(LDFLAGS)
 
+-include $(DEP)
+
 clean:
-	rm -f $(OBJ)
+	rm -f $(OBJ) $(DEP)
 
 fclean: clean
 	rm -f $(NAME)

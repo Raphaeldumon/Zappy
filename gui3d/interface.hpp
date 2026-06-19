@@ -2,15 +2,17 @@
 
 #include "raylibWrapper.hpp"
 #include "gameMap.hpp"
-#include <memory>
+#include <array>
 #include <string>
+#include <string_view>
+#include <vector>
 
 // Window defaults
 inline constexpr int DEFAULT_WINDOW_WIDTH  = 1280;
 inline constexpr int DEFAULT_WINDOW_HEIGHT = 720;
 inline constexpr std::string_view WINDOW_TITLE = "Zappy - Graphical Client";
 
-// Tile rendering size in pixels
+// Edge length of a tile, expressed in 3D world units.
 inline constexpr float TILE_SIZE = 64.0f;
 
 class Interface {
@@ -19,6 +21,12 @@ public:
               int windowWidth  = DEFAULT_WINDOW_WIDTH,
               int windowHeight = DEFAULT_WINDOW_HEIGHT);
     ~Interface();
+
+    // Owns the window and GPU models — duplicating it would double-free them.
+    Interface(const Interface&)            = delete;
+    Interface& operator=(const Interface&) = delete;
+    Interface(Interface&&)                 = delete;
+    Interface& operator=(Interface&&)      = delete;
 
     // Main entry point: runs the game loop until the window is closed.
     void run();
@@ -36,11 +44,18 @@ private:
     Camera3D _camera;
 
     // --- Assets ---
-    // Food model, loaded once and drawn at every food tile. When the .glb is
-    // missing or fails to load we fall back to the old red cube.
-    std::vector<Model> _resourceModels{};
-    std::vector<float> _resourceScales{};
-    bool _resourceModelsOk{false};
+    // One mesh per resource type, loaded once and drawn at every tile holding
+    // that resource. The bounding box is cached so each instance can be scaled
+    // to fit its grid cell and placed with its base sitting on the tile surface
+    // (otherwise the mesh origin ends up buried below the map). When a .glb is
+    // missing or fails to load we fall back to a small cube.
+    struct ResourceModel {
+        Model   model{};
+        Vector3 scale{1.0f, 1.0f, 1.0f}; // per-axis scale baked at load so every model
+                                         // ends up the same display size (see loadResourceModels)
+        bool    loaded{false};
+    };
+    std::vector<ResourceModel> _resourceModels{};
 
     // --- Internal loop steps ---
     void handleInput();
