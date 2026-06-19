@@ -4,6 +4,7 @@
 
 #include "core/game_rules.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 
@@ -192,6 +193,30 @@ static void test_look_sees_resources_ahead()
     assert(v[2].resources[3] == 2);
 }
 
+static void test_respawn_reports_changed_tiles_only()
+{
+    WorldState w(10, 10);
+
+    // First respawn fills an empty map toward density targets: it changes some
+    // tiles but never the whole map, and each reported coord is in range + unique.
+    auto changed = w.respawn_resources();
+    assert(!changed.empty());
+    assert(changed.size() < static_cast<std::size_t>(10 * 10)); // not the whole map
+
+    std::vector<int> seen;
+    for (auto [x, y] : changed)
+    {
+        assert(x >= 0 && x < 10 && y >= 0 && y < 10);
+        int idx = y * 10 + x;
+        assert(std::find(seen.begin(), seen.end(), idx) == seen.end()); // no dupes
+        seen.push_back(idx);
+    }
+
+    // At/over density, a second respawn has little or nothing to add.
+    auto again = w.respawn_resources();
+    assert(again.size() <= changed.size());
+}
+
 static void test_check_win()
 {
     WorldState w(10, 10);
@@ -234,6 +259,7 @@ int main()
     test_eject_pushes_and_destroys_eggs();
     test_look_tile_count_scales_with_level();
     test_look_sees_resources_ahead();
+    test_respawn_reports_changed_tiles_only();
     test_check_win();
     test_check_win_needs_six();
     std::cout << "world_state tests OK\n";

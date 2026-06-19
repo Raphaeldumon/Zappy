@@ -29,4 +29,5 @@ expectations:
   - all_actions_acknowledged_in_time # every AI command got ok/ko
   - players_spawned                  # pnw seen for the connected drones
   - protocol_clean                   # GUI never received suc/sbp, parser saw no unknown tags
+  - respawn_diffs_only               # respawn pushes only changed tiles, not the whole map
   - any_team_wins                    # SKIP with fake AI (no incantation strategy)

@@ -378,6 +378,17 @@ def run_scenario(path: str, server_bin: str, base_port: int) -> bool:
                 results.append(
                     (assertion, "PASS" if admin_ok else "FAIL", admin_detail)
                 )
+        elif assertion == "respawn_diffs_only":
+            # Respawn must push bct only for changed tiles, never the whole map.
+            # Full-map spam would be ~W*H per 20-tick cycle (tens of thousands at
+            # f=1000 over the run); the diff-only path stays in the low hundreds.
+            # Cap generously at one full map's worth (snapshot) + 5x slack.
+            bct = gui.tag_counts.get("bct", 0)
+            cap = srv["width"] * srv["height"] * 5
+            ok = bct <= cap
+            results.append(
+                (assertion, "PASS" if ok else "FAIL", f"bct={bct} cap={cap}")
+            )
         elif assertion == "any_team_wins":
             won = gui.tag_counts.get("seg", 0) >= 1
             # Fake AI can't elevate to win; treat absence as SKIP, presence as PASS.

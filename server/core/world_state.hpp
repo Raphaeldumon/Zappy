@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace zappy::core
@@ -111,7 +112,9 @@ class WorldState
 
     // --- Resources --------------------------------------------------------------
     // Respawn: add resources to meet density targets (called every 20 ticks).
-    void respawn_resources();
+    // Returns the coordinates of the tiles actually modified, so the caller can
+    // emit `bct` only for those (the subject forbids re-pushing the whole map).
+    std::vector<std::pair<int, int>> respawn_resources();
 
     // --- Win condition ----------------------------------------------------------
     [[nodiscard]] std::optional<TeamId> check_win() const;

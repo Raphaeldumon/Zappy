@@ -68,10 +68,10 @@ void Server::init_world()
 void Server::schedule_resource_respawn()
 {
     scheduler_.schedule(now_ticks() + 20, [this]() {
-        world_.respawn_resources();
-        for (int y = 0; y < world_.height(); ++y)
-            for (int x = 0; x < world_.width(); ++x)
-                net_.broadcast_gui(protocol::GuiEmitter::bct(x, y, world_.at(x, y).resources));
+        // Push bct only for the tiles respawn actually changed (subject: avoid
+        // re-broadcasting the whole map every cycle).
+        for (auto [x, y] : world_.respawn_resources())
+            net_.broadcast_gui(protocol::GuiEmitter::bct(x, y, world_.at(x, y).resources));
         schedule_resource_respawn();
     });
 }
