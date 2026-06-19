@@ -12,7 +12,6 @@ int main()
     std::cout << "Starting Zappy 3D GUI..." << std::endl;
 
     Interface app(mapWidth, mapHeight, windowWidth, windowHeight);
-    app.getMap().addResource(0, 0, 0, 10); // Example: add some food to the map
     for (int i = 0; i < 50; ++i) {
         int x = rand() % mapWidth;
         int y = rand() % mapHeight;

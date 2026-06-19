@@ -38,9 +38,9 @@ private:
     // --- Assets ---
     // Food model, loaded once and drawn at every food tile. When the .glb is
     // missing or fails to load we fall back to the old red cube.
-    Model _foodModel{};
-    bool  _foodModelOk{false};
-    float _foodScale{1.0f};
+    std::vector<Model> _resourceModels{};
+    std::vector<float> _resourceScales{};
+    bool _resourceModelsOk{false};
 
     // --- Internal loop steps ---
     void handleInput();
@@ -49,5 +49,6 @@ private:
 
     // --- Helpers ---
     void initCamera();
-    void loadFoodModel();
+    void loadResourceModels();
+    void unloadResourceModels();
 };

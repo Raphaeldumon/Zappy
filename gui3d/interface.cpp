@@ -10,16 +10,50 @@ Interface::Interface(int mapWidth, int mapHeight, int windowWidth, int windowHei
     , _map(mapWidth, mapHeight)
 {
     initCamera();
-    loadFoodModel(); // needs the GL context, so after the engine init
+    loadResourceModels(); // needs the GL context, so after the engine init
 }
 
 Interface::~Interface()
 {
     // Member destruction runs after this body, so the GL context (owned by
     // _engine) is still alive here — safe to free GPU resources.
-    if (_foodModelOk)
-        UnloadModel(_foodModel);
+    for (auto& model : _resourceModels) {
+        if (model.meshCount > 0)
+            UnloadModel(model);
+    }
 }
+
+
+namespace {
+    // Index-aligned with MapTile::resources / MAP_RESOURCE_COUNT.
+    // std::array's size is checked at compile time against MAP_RESOURCE_COUNT below,
+    // so a mismatch between the resource enum and this list fails to build instead
+    // of corrupting memory at runtime.
+    // NOTE: only index 0 (food) has a dedicated model right now — indices 1-6
+    // are placeholder monster meshes standing in for ore types. Swap these out
+    // once the real mineral models exist.
+    constexpr std::array<const char*, MAP_RESOURCE_COUNT> kResourceModelPaths = {
+        "assets/roast_chiken_HIGHRES.glb",
+        "assets/monster_black.glb",
+        "assets/monster_blue.glb",
+        "assets/monster_golden.glb",
+        "assets/monster_green.glb",
+        "assets/monster_lightPink.glb",
+        "assets/monster_pink.glb"
+    };
+
+    float computeNormalizedScale(const Model& model, float targetSize)
+    {
+        BoundingBox box = GetModelBoundingBox(model);
+        float ext = std::max({
+            box.max.x - box.min.x,
+            box.max.y - box.min.y,
+            box.max.z - box.min.z
+        });
+        return (ext > 0.0001f) ? (targetSize / ext) : 1.0f;
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Public
@@ -42,31 +76,30 @@ const GameMap& Interface::getMap() const { return _map; }
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
-void Interface::loadFoodModel()
+void Interface::loadResourceModels()
 {
-    // Path depends on where the binary is launched from: try both.
-    const char* candidates[] = { "assets/monster.glb", "gui3d/assets/monster.glb" };
-    for (const char* path : candidates) {
-        if (!FileExists(path))
-            continue;
-        _foodModel = LoadModel(path);
-        if (_foodModel.meshCount > 0) {
-            _foodModelOk = true;
-            break;
-        }
-        UnloadModel(_foodModel);
-    }
-    if (!_foodModelOk)
-        return; // render() falls back to the red cube
+    _resourceModels.reserve(kResourceModelPaths.size());
+    _resourceScales.reserve(kResourceModelPaths.size());
 
-    // Normalize: scale the model so its largest dimension spans ~45% of a tile,
-    // whatever size it was authored at.
-    BoundingBox box = GetModelBoundingBox(_foodModel);
-    float ext = box.max.x - box.min.x;
-    ext = std::max(ext, box.max.y - box.min.y);
-    ext = std::max(ext, box.max.z - box.min.z);
-    if (ext > 0.0001f)
-        _foodScale = (TILE_SIZE * 0.45f) / ext;
+    for (const char* path : kResourceModelPaths) {
+        Model model = { 0 };
+        float scale = 1.0f;
+
+        if (!FileExists(path)) {
+            TraceLog(LOG_WARNING, "loadResourceModels: missing asset '%s' (falling back to cube)", path);
+        } else {
+            model = LoadModel(path);
+            if (model.meshCount <= 0) {
+                TraceLog(LOG_WARNING, "loadResourceModels: failed to load '%s' (falling back to cube)", path);
+            } else {
+                scale = computeNormalizedScale(model, TILE_SIZE * 0.45f);
+                _resourceModelsOk = true;
+            }
+        }
+
+        _resourceModels.push_back(model);
+        _resourceScales.push_back(scale);
+    }
 }
 
 void Interface::initCamera()
@@ -121,63 +154,91 @@ void Interface::update()
     // Game logic / network tick goes here.
 }
 
+
+namespace {
+    constexpr float kTileHeight      = 2.0f;
+    constexpr float kTileMargin      = 2.0f;
+    constexpr float kPlayerBaseSize  = TILE_SIZE * 0.4f;
+    constexpr float kPlayerY         = 4.0f;
+    constexpr float kPlayerHeight    = 6.0f;
+    constexpr float kResourceBaseY   = 1.5f;
+    constexpr float kResourceYStep   = 0.2f;
+    constexpr int   kMaxStackPerType = 3; // models drawn before we switch to a "xN" label
+    constexpr float kJitterX[kMaxStackPerType] = { 0.0f,  0.22f, -0.22f };
+    constexpr float kJitterZ[kMaxStackPerType] = { 0.0f, -0.22f,  0.22f };
+
+    struct CountLabel { Vector3 worldPos; int count; Color color; };
+}
+
+
 void Interface::render()
 {
-    // Draw every tile as a flat cube.
-    BeginMode3D(_camera);
+    std::vector<CountLabel> labels;
 
+    BeginMode3D(_camera);
     for (int y = 0; y < _map.getHeight(); ++y) {
         for (int x = 0; x < _map.getWidth(); ++x) {
             const MapTile& tile = _map.getTile(x, y);
-
             float worldX = x * TILE_SIZE + TILE_SIZE / 2.0f;
             float worldZ = y * TILE_SIZE + TILE_SIZE / 2.0f;
 
-            // Alternate tile colours for a checkerboard grid.
             Color tileColor = ((x + y) % 2 == 0) ? DARKGREEN : GREEN;
-            DrawCube({ worldX, 0.0f, worldZ }, TILE_SIZE - 2.0f, 2.0f, TILE_SIZE - 2.0f, tileColor);
-            DrawCubeWires({ worldX, 0.0f, worldZ }, TILE_SIZE - 2.0f, 2.0f, TILE_SIZE - 2.0f, BLACK);
+            DrawCube({ worldX, 0.0f, worldZ }, TILE_SIZE - kTileMargin, kTileHeight, TILE_SIZE - kTileMargin, tileColor);
+            DrawCubeWires({ worldX, 0.0f, worldZ }, TILE_SIZE - kTileMargin, kTileHeight, TILE_SIZE - kTileMargin, BLACK);
 
-            // Highlight tiles that have at least one player.
-            if (!tile.player_ids.empty()) {
-                DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, YELLOW);
+            // Players: marker grows with headcount instead of being fixed-size.
+            const int playerCount = static_cast<int>(tile.player_ids.size());
+            if (playerCount > 0) {
+                float bump = 1.0f + 0.15f * static_cast<float>(std::min(playerCount - 1, 5));
+                DrawCube({ worldX, kPlayerY, worldZ },
+                          kPlayerBaseSize * bump, kPlayerHeight, kPlayerBaseSize * bump, YELLOW);
+                if (playerCount > 1)
+                    labels.push_back({ { worldX, kPlayerY + kPlayerHeight, worldZ }, playerCount, YELLOW });
             }
-            if (tile.resources[0]) {
-                if (_foodModelOk) {
-                    // Sit the model on the tile; per-tile rotation breaks up the
-                    // grid repetition.
-                    float angle = static_cast<float>((x * 53 + y * 97) % 360);
-                    DrawModelEx(_foodModel, { worldX, 1.5f, worldZ }, { 0.0f, 1.0f, 0.0f }, angle,
-                                { _foodScale, _foodScale, _foodScale }, WHITE);
-                } else {
-                    DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, RED);
+
+            // Resources: draw up to kMaxStackPerType offset instances so a
+            // stack actually reads as "more than one"; beyond that, a count label.
+            for (int i = 0; i < MAP_RESOURCE_COUNT; ++i) {
+                int count = tile.resources[i];
+                if (count <= 0) continue;
+
+                int shown = std::min(count, kMaxStackPerType);
+                bool hasModel = static_cast<size_t>(i) < _resourceModels.size()
+                              && _resourceModels[i].meshCount > 0;
+
+                for (int s = 0; s < shown; ++s) {
+                    float angle = static_cast<float>((x * 53 + y * 97 + i * 17 + s * 31) % 360);
+                    Vector3 pos = {
+                        worldX + kJitterX[s] * TILE_SIZE,
+                        kResourceBaseY + i * kResourceYStep,
+                        worldZ + kJitterZ[s] * TILE_SIZE
+                    };
+
+                    if (hasModel) {
+                        float scale = _resourceScales[i];
+                        DrawModelEx(_resourceModels[i], pos, { 0.0f, 1.0f, 0.0f }, angle,
+                                    { scale, scale, scale }, WHITE);
+                    } else {
+                        DrawCube({ pos.x, kPlayerY, pos.z }, TILE_SIZE * 0.25f, kPlayerHeight, TILE_SIZE * 0.25f, RED);
+                    }
                 }
-            }
-            if (tile.resources[1]) {
-                DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, BLUE);
-            }
-            if (tile.resources[2]) {
-                DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, ORANGE);
-            }
-            if (tile.resources[3]) {
-                DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, PURPLE);
-            }
-            if (tile.resources[4]) {
-                DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, PINK);
-            }
-            if (tile.resources[5]) {
-                DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, LIME);
-            }
-            if (tile.resources[6]) {
-                DrawCube({ worldX, 4.0f, worldZ }, TILE_SIZE * 0.4f, 6.0f, TILE_SIZE * 0.4f, SKYBLUE);
+
+                if (count > kMaxStackPerType)
+                    labels.push_back({ { worldX, kResourceBaseY + i * kResourceYStep + 2.0f, worldZ }, count, WHITE });
             }
         }
     }
-
     EndMode3D();
 
-    // HUD
+    // Count labels for stacks that got capped, projected to screen space now
+    // that we're out of 3D mode.
+    for (const auto& label : labels) {
+        Vector2 screenPos = GetWorldToScreen(label.worldPos, _camera);
+        DrawText(TextFormat("x%d", label.count),
+                 static_cast<int>(screenPos.x), static_cast<int>(screenPos.y), 14, label.color);
+    }
+
     DrawText(TextFormat("Map: %dx%d", _map.getWidth(), _map.getHeight()), 10, 10, 20, RAYWHITE);
     DrawText("WASD / Arrows: pan   |   Scroll: zoom", 10, 35, 16, LIGHTGRAY);
-    DrawFPS(DEFAULT_WINDOW_WIDTH - 80, 10);
+    DrawFPS(GetScreenWidth() - 90, 10); // was hardcoded to DEFAULT_WINDOW_WIDTH
 }
