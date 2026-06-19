@@ -77,3 +77,10 @@ zappy_gui
 zappy_server
 test
 .ruff_cache/
+
+# Coverage reports + instrumentation (make coverage)
+coverage*.html
+coverage*.css
+*.gcda
+*.gcno
+build_cov/

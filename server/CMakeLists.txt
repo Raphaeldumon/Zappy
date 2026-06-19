@@ -86,6 +86,14 @@ if(ZAPPY_BUILD_TESTS)
     add_test(NAME server_protocol_gui COMMAND zappy_protocol_gui_tests)
     set_tests_properties(server_protocol_gui PROPERTIES LABELS "server;protocol;unit")
 
+    add_executable(zappy_handshake_tests tests/test_handshake.cpp)
+    target_include_directories(zappy_handshake_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(zappy_handshake_tests
+        PRIVATE zappy_server_protocol zappy_core zappy_protocol
+                zappy_compile_options zappy_test_options)
+    add_test(NAME server_handshake COMMAND zappy_handshake_tests)
+    set_tests_properties(server_handshake PROPERTIES LABELS "server;protocol;unit")
+
     add_executable(zappy_network_tests tests/test_network.cpp)
     target_include_directories(zappy_network_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_link_libraries(zappy_network_tests

@@ -1,5 +1,8 @@
-// Skeleton unit tests for WorldState. Migrate to Catch2 once vcpkg is wired (ADR-006).
+// Unit tests for WorldState — the core game logic. Migrate to Catch2 once vcpkg
+// is wired (ADR-006).
 #include "core/world_state.hpp"
+
+#include "core/game_rules.hpp"
 
 #include <cassert>
 #include <iostream>
@@ -39,11 +42,200 @@ static void test_add_player()
     assert(w.find_player(9999) == nullptr);
 }
 
+// North = -Y, East = +X, South = +Y, West = -X.
+static void test_move_forward_each_orientation()
+{
+    WorldState w(10, 10);
+    Player &n = w.add_player(0, 5, 5, Orientation::North);
+    w.move_forward(n.id);
+    assert(n.x == 5 && n.y == 4);
+
+    Player &e = w.add_player(0, 5, 5, Orientation::East);
+    w.move_forward(e.id);
+    assert(e.x == 6 && e.y == 5);
+
+    Player &s = w.add_player(0, 5, 5, Orientation::South);
+    w.move_forward(s.id);
+    assert(s.x == 5 && s.y == 6);
+
+    Player &west = w.add_player(0, 5, 5, Orientation::West);
+    w.move_forward(west.id);
+    assert(west.x == 4 && west.y == 5);
+}
+
+static void test_move_forward_wraps()
+{
+    WorldState w(4, 4);
+    Player &p = w.add_player(0, 0, 0, Orientation::West); // -X off the left edge
+    w.move_forward(p.id);
+    assert(p.x == 3 && p.y == 0); // wrapped to far right
+
+    Player &q = w.add_player(0, 0, 0, Orientation::North); // -Y off the top
+    w.move_forward(q.id);
+    assert(q.x == 0 && q.y == 3); // wrapped to bottom
+}
+
+static void test_turns_cycle()
+{
+    WorldState w(5, 5);
+    Player &p = w.add_player(0, 2, 2, Orientation::North);
+
+    w.turn_right(p.id);
+    assert(p.orientation == Orientation::East);
+    w.turn_right(p.id);
+    assert(p.orientation == Orientation::South);
+    w.turn_right(p.id);
+    assert(p.orientation == Orientation::West);
+    w.turn_right(p.id);
+    assert(p.orientation == Orientation::North); // full circle
+
+    w.turn_left(p.id);
+    assert(p.orientation == Orientation::West); // left is the inverse
+}
+
+static void test_take_and_set_object()
+{
+    WorldState w(5, 5);
+    Player &p = w.add_player(0, 2, 2, Orientation::North);
+    w.at(2, 2).resources[0] = 1; // one food on the tile
+
+    assert(w.take_object(p.id, 0));       // succeeds
+    assert(p.inventory[0] == 1);          // moved into inventory
+    assert(w.at(2, 2).resources[0] == 0); // gone from the tile
+
+    assert(!w.take_object(p.id, 0)); // tile empty now -> ko
+
+    assert(w.set_object(p.id, 0)); // drop it back
+    assert(p.inventory[0] == 0);
+    assert(w.at(2, 2).resources[0] == 1);
+
+    assert(!w.set_object(p.id, 0)); // nothing left to drop -> ko
+}
+
+static void test_take_set_bad_index()
+{
+    WorldState w(5, 5);
+    Player &p = w.add_player(0, 0, 0, Orientation::North);
+    assert(!w.take_object(p.id, -1));
+    assert(!w.take_object(p.id, RESOURCE_COUNT));
+    assert(!w.set_object(p.id, 99));
+}
+
+static void test_team_slots()
+{
+    WorldState w(5, 5);
+    w.register_team(0, "red", 2);
+    assert(w.team_slots(0) == 2);
+    w.consume_team_slot(0);
+    assert(w.team_slots(0) == 1);
+    w.consume_team_slot(0);
+    assert(w.team_slots(0) == 0);
+    w.restore_team_slot(0); // Fork / disconnect gives one back
+    assert(w.team_slots(0) == 1);
+    assert(w.find_team_by_name("red") == 0);
+}
+
+static void test_eject_pushes_and_destroys_eggs()
+{
+    WorldState w(10, 10);
+    // Ejector faces East; victim shares the tile.
+    Player &ejector = w.add_player(0, 5, 5, Orientation::East);
+    Player &victim = w.add_player(1, 5, 5, Orientation::North);
+    EggId egg = w.add_egg(ejector.id, 0, 5, 5);
+
+    auto results = w.eject(ejector.id);
+
+    // Victim pushed one tile East (ejector's facing).
+    assert(victim.x == 6 && victim.y == 5);
+
+    bool victim_reported = false;
+    bool egg_reported = false;
+    for (const auto &r : results)
+    {
+        if (r.victim == victim.id)
+            victim_reported = true;
+        if (r.egg_destroyed == egg)
+            egg_reported = true;
+    }
+    assert(victim_reported);
+    assert(egg_reported);
+    assert(w.find_egg(egg)->hatched); // destroyed = marked hatched
+}
+
+static void test_look_tile_count_scales_with_level()
+{
+    WorldState w(20, 20);
+    Player &p = w.add_player(0, 10, 10, Orientation::North);
+
+    // Level 1: tiles = 1 (self) + 3 (front row) = 4 = (level+1)^2.
+    auto v1 = w.look(p.id);
+    assert(v1.size() == 4);
+
+    p.level = 2; // (2+1)^2 = 9
+    auto v2 = w.look(p.id);
+    assert(v2.size() == 9);
+
+    // Tile 0 is the player's own tile and must report the player.
+    assert(v1[0].player_count >= 1);
+}
+
+static void test_look_sees_resources_ahead()
+{
+    WorldState w(20, 20);
+    Player &p = w.add_player(0, 10, 10, Orientation::North); // North = -Y
+    w.at(10, 9).resources[3] = 2;                            // one tile in front
+
+    auto v = w.look(p.id);
+    // Row 1 spans indices 1..3 (left, center, right); the tile directly ahead
+    // is the centre of that row = index 2.
+    assert(v.size() >= 4);
+    assert(v[2].resources[3] == 2);
+}
+
+static void test_check_win()
+{
+    WorldState w(10, 10);
+    w.register_team(0, "red", 10);
+    assert(!w.check_win().has_value());
+
+    // Six max-level players on the same team triggers the win.
+    for (int i = 0; i < 6; ++i)
+    {
+        Player &p = w.add_player(0, i, 0, Orientation::North);
+        p.level = MAX_LEVEL;
+    }
+    auto winner = w.check_win();
+    assert(winner.has_value() && *winner == 0);
+}
+
+static void test_check_win_needs_six()
+{
+    WorldState w(10, 10);
+    w.register_team(0, "red", 10);
+    for (int i = 0; i < 5; ++i) // only five
+    {
+        Player &p = w.add_player(0, i, 0, Orientation::North);
+        p.level = MAX_LEVEL;
+    }
+    assert(!w.check_win().has_value());
+}
+
 int main()
 {
     test_toroidal_wrap();
     test_tile_identity_across_wrap();
     test_add_player();
+    test_move_forward_each_orientation();
+    test_move_forward_wraps();
+    test_turns_cycle();
+    test_take_and_set_object();
+    test_take_set_bad_index();
+    test_team_slots();
+    test_eject_pushes_and_destroys_eggs();
+    test_look_tile_count_scales_with_level();
+    test_look_sees_resources_ahead();
+    test_check_win();
+    test_check_win_needs_six();
     std::cout << "world_state tests OK\n";
     return 0;
 }

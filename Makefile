@@ -41,11 +41,16 @@ tests_run: config
 	$(CMAKE) --build $(BUILD_DIR) -j $(JOBS)
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
 
+## Coverage: prints a clean line/branch summary (no per-line spam).
+## Tests are excluded so the % reflects production code, not the test files.
+## (HTML report skipped: gcovr 5.0's HTML writer is broken against jinja2 >= 3.1.)
 coverage:
 	$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=Debug -DZAPPY_ENABLE_COVERAGE=ON
 	$(CMAKE) --build $(BUILD_DIR) -j $(JOBS)
 	ctest --test-dir $(BUILD_DIR) --output-on-failure
-	@command -v gcovr >/dev/null && gcovr -r . $(BUILD_DIR) || echo "install gcovr for a report"
+	@command -v gcovr >/dev/null && gcovr -r . $(BUILD_DIR) \
+		--exclude '.*/tests/.*' --exclude '.*/external/.*' -s \
+		|| echo "install gcovr for a report"
 
 ## Launch the server + fake AI bots for a quick smoke run (Ctrl+C stops both).
 ##   make demo
