@@ -12,6 +12,7 @@ Interface::Interface(int mapWidth, int mapHeight, int windowWidth, int windowHei
     , _map(mapWidth, mapHeight)
 {
     initCamera();
+    loadLighting();       // before models: they bind this shader to their materials
     loadResourceModels(); // needs the GL context, so after the engine init
 }
 
@@ -20,6 +21,7 @@ Interface::~Interface()
     // Member destruction runs after this body, so the GL context (owned by
     // _engine) is still alive here — safe to free GPU resources.
     unloadResourceModels();
+    unloadLighting();
 }
 
 
@@ -125,8 +127,7 @@ void Interface::loadResourceModels()
                 }
 
                 // Re-centre the mesh: different assets have their origin in
-                // arbitrary places (off to the side, above the mesh, etc.), which
-                // is why some used to spawn off-tile or float/sink. Bake a
+                // arbitrary places (off to the side, above the mesh, etc.) Bake a
                 // transform so the footprint is centred on the origin and the base
                 // rests at y=0 — then every instance can just be dropped at a tile
                 // cell + surface height and rotated in place.
@@ -153,6 +154,16 @@ void Interface::loadResourceModels()
                     // footprint so it fills the tile instead of looking tiny.
                     const float s = kFlatWidth / foot;
                     rm.scale = { s, s, s };
+                }
+
+                // Light the model: swap each material's shader for ours. The
+                // default tint/texture maps stay; our shader just adds the
+                // diffuse + ambient lighting on top.
+                if (_lightingReady) {
+                    if (_defaultShader.id == 0 && rm.model.materialCount > 0)
+                        _defaultShader = rm.model.materials[0].shader; // stock shader, for the toggle
+                    for (int m = 0; m < rm.model.materialCount; ++m)
+                        rm.model.materials[m].shader = _lightShader;
                 }
 
                 TraceLog(LOG_INFO, "RESMODEL %zu '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=(%.1f,%.1f,%.1f)",
@@ -187,6 +198,55 @@ void Interface::initCamera()
     _camera.projection = CAMERA_PERSPECTIVE;
 }
 
+void Interface::loadLighting()
+{
+    const char* vs = "assets/shaders/lighting.vs";
+    const char* fs = "assets/shaders/lighting.fs";
+    if (!FileExists(vs) || !FileExists(fs)) {
+        TraceLog(LOG_WARNING, "loadLighting: shader files missing — rendering unlit");
+        return;
+    }
+
+    _lightShader = LoadShader(vs, fs);
+    if (_lightShader.id == 0) {
+        TraceLog(LOG_WARNING, "loadLighting: shader failed to compile — rendering unlit");
+        return;
+    }
+
+    _viewPosLoc = GetShaderLocation(_lightShader, "viewPos");
+
+    // Static light setup: warm sun from above, cool ambient fill.
+    Vector3 toLight    = Vector3Normalize({ 0.6f, 1.0f, 0.5f }); // direction TO the light
+    Vector4 lightColor = { 1.0f, 0.97f, 0.90f, 1.0f };
+    Vector4 ambient    = { 0.35f, 0.37f, 0.42f, 1.0f };
+    SetShaderValue(_lightShader, GetShaderLocation(_lightShader, "lightDir"),   &toLight,    SHADER_UNIFORM_VEC3);
+    SetShaderValue(_lightShader, GetShaderLocation(_lightShader, "lightColor"), &lightColor, SHADER_UNIFORM_VEC4);
+    SetShaderValue(_lightShader, GetShaderLocation(_lightShader, "ambient"),    &ambient,    SHADER_UNIFORM_VEC4);
+
+    _lightingReady = true;
+    TraceLog(LOG_INFO, "loadLighting: lighting shader ready");
+}
+
+void Interface::unloadLighting()
+{
+    if (_lightingReady)
+        UnloadShader(_lightShader);
+    _lightingReady = false;
+}
+
+void Interface::applyLightingToModels(bool on)
+{
+    if (!_lightingReady)
+        return;
+    Shader s = on ? _lightShader : _defaultShader;
+    for (auto& rm : _resourceModels) {
+        if (!rm.loaded)
+            continue;
+        for (int m = 0; m < rm.model.materialCount; ++m)
+            rm.model.materials[m].shader = s;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Loop steps
 // ---------------------------------------------------------------------------
@@ -210,6 +270,12 @@ void Interface::handleInput()
     if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
         _camera.position.z += PAN_SPEED;
         _camera.target.z   += PAN_SPEED;
+    }
+
+    // Toggle lighting on/off (B). No-op until the shader actually loaded.
+    if (IsKeyPressed(KEY_B) && _lightingReady) {
+        _lightingEnabled = !_lightingEnabled;
+        applyLightingToModels(_lightingEnabled);
     }
 
     // Zoom with mouse wheel
@@ -244,7 +310,15 @@ void Interface::render()
 {
     std::vector<CountLabel> labels;
 
+    const bool lit = _lightingReady && _lightingEnabled;
+    if (lit)
+        SetShaderValue(_lightShader, _viewPosLoc, &_camera.position, SHADER_UNIFORM_VEC3);
+
     BeginMode3D(_camera);
+    // BeginShaderMode lights the immediate-mode cubes (tiles/players/fallbacks);
+    // the glb models carry the same shader on their materials already.
+    if (lit)
+        BeginShaderMode(_lightShader);
     for (int y = 0; y < _map.getHeight(); ++y) {
         for (int x = 0; x < _map.getWidth(); ++x) {
             const MapTile& tile = _map.getTile(x, y);
@@ -311,6 +385,8 @@ void Interface::render()
             }
         }
     }
+    if (lit)
+        EndShaderMode();
     EndMode3D();
 
     // Player head-count labels, projected to screen space now that we're out
@@ -322,6 +398,9 @@ void Interface::render()
     }
 
     DrawText(TextFormat("Map: %dx%d", _map.getWidth(), _map.getHeight()), 10, 10, 20, RAYWHITE);
-    DrawText("WASD / Arrows: pan   |   Scroll: zoom", 10, 35, 16, LIGHTGRAY);
-    DrawFPS(GetScreenWidth() - 90, 10); // was hardcoded to DEFAULT_WINDOW_WIDTH
+    DrawText("WASD / Arrows: pan   |   Scroll: zoom   |   B: lighting", 10, 35, 16, LIGHTGRAY);
+    if (_lightingReady)
+        DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,
+                 _lightingEnabled ? GREEN : GRAY);
+    DrawFPS(GetScreenWidth() - 90, 10); 
 }

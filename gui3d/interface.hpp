@@ -43,6 +43,17 @@ private:
     // --- Camera ---
     Camera3D _camera;
 
+    // --- Lighting ---
+    // One directional light + ambient term, applied to both the glb models
+    // (via their material shader) and the immediate-mode cubes (via
+    // BeginShaderMode). Loaded from assets/shaders; if that fails the scene
+    // renders unlit (_lightingReady == false). Toggle live with the B key.
+    Shader _lightShader{};
+    Shader _defaultShader{};       // raylib's stock shader, to restore when toggled off
+    int    _viewPosLoc{-1};
+    bool   _lightingReady{false};  // shader compiled and bound
+    bool   _lightingEnabled{true}; // user toggle (B)
+
     // --- Assets ---
     // One mesh per resource type, loaded once and drawn at every tile holding
     // that resource. The bounding box is cached so each instance can be scaled
@@ -64,6 +75,9 @@ private:
 
     // --- Helpers ---
     void initCamera();
+    void loadLighting();
+    void unloadLighting();
+    void applyLightingToModels(bool on); // swap model material shaders for the B toggle
     void loadResourceModels();
     void unloadResourceModels();
 };
