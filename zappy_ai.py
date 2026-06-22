@@ -443,9 +443,9 @@ class Brain:
         self.movement_plan: List[str] = []
 
         if self.frequency >= 100:
-            self.max_plan_length = 1
-        else:
             self.max_plan_length = 2
+        else:
+            self.max_plan_length = 3
 
         # --- Politique de reproduction (Fork) ---
         # On reproduit uniquement quand on est bien nourri et de bas niveau :
@@ -480,17 +480,18 @@ class Brain:
 
         food = self.memory.inventory.get("food", 0)
 
-        if food <= 5 and not self.preparing_incantation:
-            self.movement_plan.clear()
-
         if self.memory.force_look:
             self.memory.force_look = False
             self.queue.send("Look")
             return
 
-        if self.movement_plan and food > 5:
+        if self.movement_plan :
             command = self.movement_plan.pop(0)
             self.queue.send(command)
+
+            if not self.movement_plan:
+                self.memory.force_look = True
+
             return
 
         if self.should_refresh_inventory():
@@ -610,6 +611,10 @@ class Brain:
         if not self.memory.visible_tiles:
             self.queue.send("Look")
             return
+
+        if self.memory.moves_since_look > 0:
+                self.queue.send("Look")
+                return
 
         food_tile = self.find_tile_containing("food")
 
@@ -1180,7 +1185,7 @@ class ZappyAI:
         self.brain.frequency = freq
         # Plan de déplacement plus court à haute fréquence (actions rapides),
         # plus long à basse fréquence (chaque Look coûte cher).
-        self.brain.max_plan_length = 1 if freq >= 100 else 2
+        self.brain.max_plan_length = 2 if freq >= 100 else 3
 
     def handshake(self) -> None:
         welcome = self.network.read_blocking_line()
