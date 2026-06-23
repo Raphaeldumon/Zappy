@@ -42,7 +42,7 @@ void unmirror(GameMap& map, GuiState& state, std::uint32_t id)
 {
     auto it = state.players.find(id);
     if (it != state.players.end() && inBounds(map, it->second.getX(), it->second.getY()))
-        map.removePlayerFromTile(it->second.getX(), it->second.getY(), id);
+        map.removePlayerFromTile(it->second.getX(), it->second.getY(), it->second);
 }
 
 } // namespace
@@ -95,7 +95,7 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         if (ok)
             it->second.setLevel(l);
         if (inBounds(map, x, y))
-            map.addPlayerToTile(x, y, id);
+            map.addPlayerToTile(x, y, it->second);
         return;
     }
 
@@ -112,7 +112,7 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         it->second.changePosition(x, y);
         it->second.changeOrientation(static_cast<Orientation>(o));
         if (inBounds(map, x, y))
-            map.addPlayerToTile(x, y, id);
+            map.addPlayerToTile(x, y, it->second);
         return;
     }
 
@@ -123,8 +123,13 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         if (!(iss >> idtok >> l) || !parseId(idtok, id))
             return;
         auto it = state.players.find(id);
-        if (it != state.players.end())
+        if (it != state.players.end()) {
             it->second.setLevel(l);
+            if (inBounds(map, it->second.getX(), it->second.getY())) {
+                map.removePlayerFromTile(it->second.getX(), it->second.getY(), it->second);
+                map.addPlayerToTile(it->second.getX(), it->second.getY(), it->second);
+            }
+        }
         return;
     }
 

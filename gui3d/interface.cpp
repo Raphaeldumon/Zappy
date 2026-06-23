@@ -17,6 +17,7 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     loadLighting();       // before models: they bind this shader to their materials
     loadTileTextures();
     loadResourceModels(); // needs the GL context, so after the engine init
+    loadPlayerModel();
     loadBackgroundMusic();
 }
 
@@ -25,6 +26,7 @@ Interface::~Interface()
     // Member destruction runs after this body, so the GL context (owned by
     // _engine) is still alive here — safe to free GPU resources.
     unloadBackgroundMusic();
+    unloadPlayerModel();
     unloadResourceModels();
     unloadTileTextures();
     unloadLighting();
@@ -79,6 +81,9 @@ namespace {
         { 0.90f, 0.20f, 0.90f }, // 6 thystame  — magenta
     }};
     constexpr float kGlowStrength = 0.7f;
+    constexpr const char* kPlayerModelPath = "assets/ai_model3d.glb";
+    constexpr float kPlayerModelHeight = TILE_SIZE * 0.70f;
+    constexpr float kPlayerModelFootprint = TILE_SIZE * 0.46f;
     constexpr const char* kMusicPath = "assets/music_back.mp3";
     constexpr float kMusicVolume = 0.45f;
 
@@ -212,6 +217,56 @@ void Interface::unloadResourceModels()
     _resourceModels.clear();
 }
 
+void Interface::loadPlayerModel()
+{
+    if (!FileExists(kPlayerModelPath)) {
+        TraceLog(LOG_WARNING, "loadPlayerModel: missing asset '%s' (falling back to cube)", kPlayerModelPath);
+        return;
+    }
+
+    _playerModel.model = LoadModel(kPlayerModelPath);
+    if (_playerModel.model.meshCount <= 0) {
+        TraceLog(LOG_WARNING, "loadPlayerModel: failed to load '%s' (falling back to cube)", kPlayerModelPath);
+        return;
+    }
+
+    _playerModel.loaded = true;
+
+    BoundingBox box = GetModelBoundingBox(_playerModel.model);
+    const float dx = box.max.x - box.min.x;
+    const float dy = box.max.y - box.min.y;
+    const float dz = box.max.z - box.min.z;
+    const Vector3 centre = { (box.min.x + box.max.x) * 0.5f,
+                             box.min.y,
+                             (box.min.z + box.max.z) * 0.5f };
+    _playerModel.model.transform = MatrixMultiply(_playerModel.model.transform,
+                                                  MatrixTranslate(-centre.x, -centre.y, -centre.z));
+
+    const float sx = std::max(dx, 0.0001f);
+    const float sy = std::max(dy, 0.0001f);
+    const float sz = std::max(dz, 0.0001f);
+    const float footprint = std::max(sx, sz);
+    const float s = std::min(kPlayerModelHeight / sy, kPlayerModelFootprint / footprint);
+    _playerModel.scale = { s, s, s };
+
+    if (_lightingReady) {
+        if (_defaultShader.id == 0 && _playerModel.model.materialCount > 0)
+            _defaultShader = _playerModel.model.materials[0].shader;
+        for (int m = 0; m < _playerModel.model.materialCount; ++m)
+            _playerModel.model.materials[m].shader = _lightShader;
+    }
+
+    TraceLog(LOG_INFO, "PLAYERMODEL '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=%.1f",
+             kPlayerModelPath, dx, dy, dz, s);
+}
+
+void Interface::unloadPlayerModel()
+{
+    if (_playerModel.loaded)
+        UnloadModel(_playerModel.model);
+    _playerModel = {};
+}
+
 void Interface::loadTileTextures()
 {
     _darkTileTexture = LoadTexture("assets/sol_dark.png");
@@ -308,6 +363,10 @@ void Interface::applyLightingToModels(bool on)
             continue;
         for (int m = 0; m < rm.model.materialCount; ++m)
             rm.model.materials[m].shader = s;
+    }
+    if (_playerModel.loaded) {
+        for (int m = 0; m < _playerModel.model.materialCount; ++m)
+            _playerModel.model.materials[m].shader = s;
     }
 }
 
@@ -441,6 +500,18 @@ void Interface::handleInput()
 
 void Interface::update()
 {
+    static float yearTimer = 0.0f;
+    constexpr float YEAR_DURATION = 10.0f;
+
+    if (_musicLoaded)
+        UpdateMusicStream(_backgroundMusic);
+
+    yearTimer += GetFrameTime();
+    if (yearTimer >= YEAR_DURATION) {
+        _year++;
+        yearTimer -= YEAR_DURATION;
+    }
+
     // Drain whatever the server pushed since last frame and fold it into the
     // world model. Non-blocking; a closed connection just yields no lines (the
     // window stays open so the final state / winner banner remains visible).
@@ -459,6 +530,8 @@ namespace {
     constexpr float kPlayerHeight    = 6.0f;
     constexpr float kTileTopY     = kTileHeight / 2.0f; // surface items stand on
     constexpr float kItemSpacing  = TILE_SIZE * 0.22f;  // grid pitch between stacked items
+    constexpr int kMaxVisiblePlayers = 4;
+    constexpr float kPlayerSpacing = TILE_SIZE * 0.28f;
 
     struct CountLabel { Vector3 worldPos; int count; Color color; };
 
@@ -516,6 +589,17 @@ namespace {
         DrawLine3D({ worldX + half, y, worldZ - half }, { worldX + half, y, worldZ + half }, BLACK);
         DrawLine3D({ worldX + half, y, worldZ + half }, { worldX - half, y, worldZ + half }, BLACK);
         DrawLine3D({ worldX - half, y, worldZ + half }, { worldX - half, y, worldZ - half }, BLACK);
+    }
+
+    float playerOrientationAngle(Orientation orientation)
+    {
+        switch (orientation) {
+            case Orientation::North: return 180.0f;
+            case Orientation::East:  return 90.0f;
+            case Orientation::South: return 0.0f;
+            case Orientation::West:  return 270.0f;
+        }
+        return 0.0f;
     }
 }
 
@@ -577,26 +661,43 @@ void Interface::render()
                           { TILE_SIZE - kTileMargin, TILE_SIZE - kTileMargin }, WHITE);
             drawTileOutline(worldX, worldZ, TILE_SIZE - kTileMargin);
 
-            // Players: marker grows with headcount instead of being fixed-size.
-            const int playerCount = static_cast<int>(tile.player_ids.size());
+            // Players: draw up to four robots side by side, then show a count label.
+            const int playerCount = static_cast<int>(tile.players.size());
             if (playerCount > 0) {
-                float bump = 1.0f + 0.15f * static_cast<float>(std::min(playerCount - 1, 5));
-                DrawCube({ worldX, kPlayerY, worldZ },
-                          kPlayerBaseSize * bump, kPlayerHeight, kPlayerBaseSize * bump, YELLOW);
-                if (playerCount > 1)
+                const int visiblePlayers = std::min(playerCount, kMaxVisiblePlayers);
+                const int cols = visiblePlayers == 1 ? 1 : 2;
+                const int rows = (visiblePlayers + cols - 1) / cols;
+                const float originX = worldX - kPlayerSpacing * static_cast<float>(cols - 1) * 0.5f;
+                const float originZ = worldZ - kPlayerSpacing * static_cast<float>(rows - 1) * 0.5f;
+
+                for (int i = 0; i < visiblePlayers; ++i) {
+                    const aiPlayer& player = tile.players[static_cast<size_t>(i)];
+                    const int col = i % cols;
+                    const int row = i / cols;
+                    const float px = originX + kPlayerSpacing * static_cast<float>(col);
+                    const float pz = originZ + kPlayerSpacing * static_cast<float>(row);
+
+                    if (_playerModel.loaded) {
+                        DrawModelEx(_playerModel.model, { px, kTileTopY, pz },
+                                    { 0.0f, 1.0f, 0.0f }, playerOrientationAngle(player.getOrientation()),
+                                    _playerModel.scale, WHITE);
+                    } else {
+                        DrawCube({ px, kPlayerY, pz },
+                                  kPlayerBaseSize, kPlayerHeight, kPlayerBaseSize, YELLOW);
+                    }
+                }
+                if (playerCount > kMaxVisiblePlayers)
                     labels.push_back({ { worldX, kPlayerY + kPlayerHeight, worldZ }, playerCount, YELLOW });
             }
 
-            // Resources: render the EXACT count of every item. Every model is
-            // drawn at the SAME fixed world size (kItemSize) regardless of how
-            // many share the tile, laid out on a centred square grid that stays
-            // inside the tile. Models are pre-centred (see loadResourceModels),
-            // so each one just drops onto its cell at the tile surface.
+            // Resources render only on empty tiles; occupied tiles show the player model alone.
             int totalItems = 0;
-            for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
-                totalItems += tile.resources[i];
+            if (playerCount == 0) {
+                for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
+                    totalItems += tile.resources[i];
+            }
 
-            if (totalItems > 0) {
+            if (playerCount == 0 && totalItems > 0) {
                 const int cols = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(totalItems))));
                 const int rows = (totalItems + cols - 1) / cols;
                 // Shrink the pitch if the natural grid would spill past the tile,
@@ -690,7 +791,7 @@ void Interface::render()
                  GetScreenWidth() / 2 - 140, GetScreenHeight() / 2 - 20, 40, GOLD);
     
     DrawText(TextFormat("Map: %dx%d", _map.getWidth(), _map.getHeight()), 10, 10, 20, RAYWHITE);
-    DrawText("ZQSD/Arrows: pan  |  A/E: orbit  |  R/F: tilt  |  RMB-drag: look  |  Wheel: zoom  |  LMB: pick  |  B: light  |  M: music",
+    DrawText("ZQSD/Arrows: pan  |  A/E: orbit  |  R/F: tilt  |  RMB-drag: look  |  Wheel: zoom  |  LMB: pick  |  B: light  |  M: music  |  Raph = grossepute",
              10, 35, 16, LIGHTGRAY);
     if (_lightingReady)
         DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,
@@ -781,14 +882,10 @@ void Interface::drawTileInfoPanel()
         lines.push_back({ "(no resources)", GRAY });
 
     // Players standing on the tile, enriched with level/team from the registry.
-    lines.push_back({ TextFormat("Players: %d", static_cast<int>(tile.player_ids.size())), SKYBLUE });
-    for (std::uint32_t pid : tile.player_ids) {
-        auto it = _state.players.find(pid);
-        if (it != _state.players.end())
-            lines.push_back({ TextFormat("  #%u  lvl %d  %s", pid, it->second.getLevel(),
-                                         it->second.getTeam().c_str()), LIGHTGRAY });
-        else
-            lines.push_back({ TextFormat("  #%u", pid), LIGHTGRAY });
+    lines.push_back({ TextFormat("Players: %d", static_cast<int>(tile.players.size())), SKYBLUE });
+    for (const aiPlayer& player : tile.players) {
+        lines.push_back({ TextFormat("  #%u  lvl %d  %s", player.getId(), player.getLevel(),
+                                     player.getTeam().c_str()), LIGHTGRAY });
     }
 
     // Eggs on this tile.

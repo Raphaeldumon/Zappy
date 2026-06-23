@@ -67,14 +67,26 @@ void GameMap::removeResource(int x, int y, int resource_type_index, int amount) 
     tile.resources[resource_type_index] = std::max(0, tile.resources[resource_type_index] - amount);
 }
 
-void GameMap::addPlayerToTile(int x, int y, std::uint32_t player_id) {
+void GameMap::addPlayerToTile(int x, int y, const aiPlayer& player) {
     MapTile& tile = getTile(x, y); // Will throw if invalid coords
-    if (std::find(tile.player_ids.begin(), tile.player_ids.end(), player_id) == tile.player_ids.end()) {
-        tile.player_ids.push_back(player_id);
+    auto playerIt = std::find_if(tile.players.begin(), tile.players.end(),
+        [&player](const aiPlayer& tilePlayer) {
+            return tilePlayer.getId() == player.getId();
+        });
+
+    if (playerIt == tile.players.end()) {
+        tile.players.push_back(player);
     }
 }
 
-void GameMap::removePlayerFromTile(int x, int y, std::uint32_t player_id) {
+void GameMap::removePlayerFromTile(int x, int y, const aiPlayer& player) {
     MapTile& tile = getTile(x, y); // Will throw if invalid coords
-    tile.player_ids.erase(std::remove(tile.player_ids.begin(), tile.player_ids.end(), player_id), tile.player_ids.end());
+    std::vector<aiPlayer> remainingPlayers;
+
+    remainingPlayers.reserve(tile.players.size());
+    for (const aiPlayer& tilePlayer : tile.players) {
+        if (tilePlayer.getId() != player.getId())
+            remainingPlayers.push_back(tilePlayer);
+    }
+    tile.players.swap(remainingPlayers);
 }
