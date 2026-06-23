@@ -7,8 +7,6 @@
 // Non-copyable and non-movable because it manages a unique GL context —
 // duplicating it would call InitWindow / CloseWindow more than once.
 class RaylibEngine {
-    private:
-        Texture2D _background{};
     public:
         RaylibEngine(int width, int height, const std::string& title);
         ~RaylibEngine();

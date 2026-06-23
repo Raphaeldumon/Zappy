@@ -6,6 +6,7 @@
 #include "netClient.hpp"
 #include "protocolParser.hpp"
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -46,26 +47,15 @@ private:
     RaylibEngine _engine;
     GameMap      _map;
 
-    // --- Camera (orbit model) ---
-    // The camera orbits a ground pivot (_camera.target). Its eye position is
-    // derived every frame from yaw/pitch/distance, so all controls just nudge
-    // these three scalars + the pivot — no more position/target drift.
+    // --- Camera (free-fly / spectator model) ---
+    // A noclip free camera: _camera.position is the eye, yaw/pitch define the
+    // look direction (the target is just eye + forward). The mouse looks around
+    // (cursor captured), ZQSD flies along the view, Space/Shift go up/down and
+    // the wheel sets the fly speed. Nothing orbits a pivot anymore.
     Camera3D _camera;
-    float    _camYaw{0.0f};   // radians, rotation around the vertical axis
-    float    _camPitch{0.0f}; // radians above the horizon (clamped)
-    float    _camDist{0.0f};  // eye-to-pivot distance (zoom)
-
-    // --- Lighting ---
-    // One directional light + ambient term, applied to both the glb models
-    // (via their material shader) and the immediate-mode cubes (via
-    // BeginShaderMode). Loaded from assets/shaders; if that fails the scene
-    // renders unlit (_lightingReady == false). Toggle live with the B key.
-    Shader _lightShader{};
-    Shader _defaultShader{};       // raylib's stock shader, to restore when toggled off
-    int    _viewPosLoc{-1};
-    int    _emissiveLoc{-1};       // per-draw self-glow color (resources)
-    bool   _lightingReady{false};  // shader compiled and bound
-    bool   _lightingEnabled{true}; // user toggle (B)
+    float    _camYaw{0.0f};   // radians, heading around the vertical axis
+    float    _camPitch{0.0f}; // radians, look up(+)/down(-), clamped near +-90deg
+    float    _flySpeed{0.0f}; // world units / second, adjusted with the wheel
 
     // --- Audio ---
     Music _backgroundMusic{};
@@ -73,12 +63,19 @@ private:
     bool  _musicLoaded{false};
     bool  _musicEnabled{true};
 
-    // --- YEARS ---
-    int _year{0};
-
     // --- Assets ---
     Texture2D _darkTileTexture{};
     Texture2D _orangeTileTexture{};
+
+    // --- Skybox ---
+    // A 360 equirectangular panorama sampled by view direction in a shader and
+    // drawn on a camera-centred cube at the far plane, so it reads as an
+    // infinitely distant background that pans correctly as you look around —
+    // no pole pinch or seam like a textured sphere would give.
+    Model     _skybox{};
+    Texture2D _skyboxTex{};
+    Shader    _skyShader{};
+    bool      _skyboxLoaded{false};
 
     // One mesh per resource type, loaded once and drawn at every tile holding
     // that resource. The bounding box is cached so each instance can be scaled
@@ -105,27 +102,66 @@ private:
     int _selectedX{-1};
     int _selectedY{-1};
 
+    // --- Spectator state ---
+    bool         _showStats{false};      // Tab: global environment stats panel
+    bool         _showHelp{false};       // H / F1: full controls overlay
+    std::int64_t _followedPlayer{-1};    // F: camera rides along this player id (-1 = none)
+    Vector3      _followAnchor{};        // followed player's world pos last frame
+    double       _lastClickTime{-1.0};   // for double-click (focus) detection
+    int          _desiredFreq{0};        // time unit we last requested via sst
+    bool         _freqInit{false};       // _desiredFreq seeded from the server yet?
+    float        _elapsed{0.0f};         // wall-clock seconds since the GUI opened
+
+    // --- Timeline (record + scrub) ---
+    // Every state-changing protocol line is recorded with its arrival time, so
+    // any past instant is reproducible by replaying the recorded lines onto a
+    // fresh world. Live mode applies incrementally; scrubbing rebuilds.
+    struct RecordedLine { float t; std::string line; };
+    std::vector<RecordedLine> _history;
+    bool        _live{true};       // following the live stream (vs. paused/scrubbing)
+    float       _playT{0.0f};      // displayed timeline position when not live
+    std::size_t _appliedIndex{0};  // history entries already folded into the live world
+
     // --- Internal loop steps ---
     void handleInput();
     void update();
     void render();
 
     // --- Selection ---
-    void pickTile();           // left-click ray -> _selectedX/_selectedY
+    void pickTile();               // left-click ray -> _selectedX/_selectedY
     void drawSelectionHighlight(); // 3D outline on the picked tile (call inside Mode3D)
-    void drawTileInfoPanel();  // 2D info panel, top-right (call outside Mode3D)
+    void drawTileInfoPanel();      // 2D info panel, top-right (call outside Mode3D)
 
-    // --- Helpers ---
+    // --- Camera helpers ---
     void initCamera();
-    void updateCameraPosition(); // recompute eye from yaw/pitch/dist around target
-    void loadLighting();
-    void unloadLighting();
-    void applyLightingToModels(bool on); // swap model material shaders for the B toggle
+    void updateCameraTarget();        // recompute look target from eye + yaw/pitch
+    void lookAt(Vector3 worldTarget); // set yaw/pitch so the eye faces a point
+    void focusOnTile(int tx, int ty); // fly above a tile and look at it (double-click)
+
+    // --- Spectator helpers ---
+    void requestTimeUnit(int freq); // send "sst T" to the server (speed control)
+    void drawHud();                 // permanent compact HUD (top-left)
+    void drawStatsPanel();          // global environment stats (Tab)
+    void drawHelpOverlay();         // full controls list (H / F1)
+
+    // --- Timeline helpers ---
+    void recordIncoming();          // drain socket into _history (+apply if live)
+    void rebuildWorldTo(float t);   // reset world, replay recorded lines up to t
+    void togglePause();             // P: live <-> frozen
+    void scrubBy(float seconds);    // PageUp/PageDown: move the playback cursor
+    void goLive();                  // End: catch up and resume the live stream
+    void drawTimeline();            // bottom timeline bar (pos + mode)
+    float latestTime() const { return _history.empty() ? 0.0f : _history.back().t; }
+
+    // --- Asset lifecycle ---
     void loadBackgroundMusic();
     void unloadBackgroundMusic();
     void toggleMusic();
     void loadTileTextures();
     void unloadTileTextures();
+    void loadSkybox();
+    void unloadSkybox();
+    void drawSkybox(); // call first inside BeginMode3D
     void loadResourceModels();
     void unloadResourceModels();
     void loadPlayerModel();

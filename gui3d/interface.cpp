@@ -14,22 +14,24 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     , _net(std::move(net))
 {
     initCamera();
-    loadLighting();       // before models: they bind this shader to their materials
+    loadSkybox();         // needs the GL context, so after the engine init
     loadTileTextures();
-    loadResourceModels(); // needs the GL context, so after the engine init
+    loadResourceModels();
     loadPlayerModel();
     loadBackgroundMusic();
+    DisableCursor();      // capture the mouse for free-look (Esc releases on close)
 }
 
 Interface::~Interface()
 {
     // Member destruction runs after this body, so the GL context (owned by
     // _engine) is still alive here — safe to free GPU resources.
+    EnableCursor();
     unloadBackgroundMusic();
     unloadPlayerModel();
     unloadResourceModels();
     unloadTileTextures();
-    unloadLighting();
+    unloadSkybox();
 }
 
 
@@ -69,18 +71,6 @@ namespace {
     constexpr float kItemHeight = TILE_SIZE * 0.40f;
     constexpr float kFlatWidth  = TILE_SIZE * 0.40f; // footprint for flat models (roast chicken)
 
-    // Self-glow colour per resource (added emissively when lighting is on). Food
-    // (meat) doesn't glow; each mineral glows roughly its mesh tint.
-    constexpr std::array<Vector3, MAP_RESOURCE_COUNT> kResourceGlow = {{
-        { 0.00f, 0.00f, 0.00f }, // 0 food      — no glow
-        { 0.55f, 0.55f, 0.70f }, // 1 linemate  — pale white
-        { 0.20f, 0.40f, 1.00f }, // 2 deraumere — blue
-        { 1.00f, 0.80f, 0.20f }, // 3 sibur     — gold
-        { 0.20f, 1.00f, 0.30f }, // 4 mendiane  — green
-        { 0.20f, 0.90f, 0.90f }, // 5 phiras    — cyan
-        { 0.90f, 0.20f, 0.90f }, // 6 thystame  — magenta
-    }};
-    constexpr float kGlowStrength = 0.7f;
     constexpr const char* kPlayerModelPath = "assets/ai_model3d.glb";
     constexpr float kPlayerModelHeight = TILE_SIZE * 0.70f;
     constexpr float kPlayerModelFootprint = TILE_SIZE * 0.46f;
@@ -188,16 +178,6 @@ void Interface::loadResourceModels()
                     rm.scale = { s, s, s };
                 }
 
-                // Light the model: swap each material's shader for ours. The
-                // default tint/texture maps stay; our shader just adds the
-                // diffuse + ambient lighting on top.
-                if (_lightingReady) {
-                    if (_defaultShader.id == 0 && rm.model.materialCount > 0)
-                        _defaultShader = rm.model.materials[0].shader; // stock shader, for the toggle
-                    for (int m = 0; m < rm.model.materialCount; ++m)
-                        rm.model.materials[m].shader = _lightShader;
-                }
-
                 TraceLog(LOG_INFO, "RESMODEL %zu '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=(%.1f,%.1f,%.1f)",
                          i, path, dx, dy, dz, rm.scale.x, rm.scale.y, rm.scale.z);
             }
@@ -249,13 +229,6 @@ void Interface::loadPlayerModel()
     const float s = std::min(kPlayerModelHeight / sy, kPlayerModelFootprint / footprint);
     _playerModel.scale = { s, s, s };
 
-    if (_lightingReady) {
-        if (_defaultShader.id == 0 && _playerModel.model.materialCount > 0)
-            _defaultShader = _playerModel.model.materials[0].shader;
-        for (int m = 0; m < _playerModel.model.materialCount; ++m)
-            _playerModel.model.materials[m].shader = _lightShader;
-    }
-
     TraceLog(LOG_INFO, "PLAYERMODEL '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=%.1f",
              kPlayerModelPath, dx, dy, dz, s);
 }
@@ -286,88 +259,110 @@ void Interface::unloadTileTextures()
         UnloadTexture(_orangeTileTexture);
 }
 
+void Interface::loadSkybox()
+{
+    // Equirectangular 360 panorama (2:1). Swap this file to change the sky.
+    const char* path = "assets/Background.png";
+    const char* vs   = "assets/shaders/skybox.vs";
+    const char* fs   = "assets/shaders/skybox.fs";
+    if (!FileExists(path)) {
+        TraceLog(LOG_WARNING, "loadSkybox: missing '%s' — no background", path);
+        return;
+    }
+    if (!FileExists(vs) || !FileExists(fs)) {
+        TraceLog(LOG_WARNING, "loadSkybox: missing shader files — no background");
+        return;
+    }
+    _skyboxTex = LoadTexture(path);
+    if (_skyboxTex.id == 0) {
+        TraceLog(LOG_WARNING, "loadSkybox: failed to load '%s'", path);
+        return;
+    }
+    SetTextureFilter(_skyboxTex, TEXTURE_FILTER_BILINEAR);
+
+    _skyShader = LoadShader(vs, fs);
+    if (_skyShader.id == 0) {
+        TraceLog(LOG_WARNING, "loadSkybox: shader failed to compile — no background");
+        UnloadTexture(_skyboxTex);
+        _skyboxTex = {};
+        return;
+    }
+
+    // A unit cube: the fragment shader turns each cube-local position into a
+    // view ray and samples the panorama equirectangularly. raylib binds the
+    // diffuse map to the shader's texture0 sampler.
+    _skybox = LoadModelFromMesh(GenMeshCube(1.0f, 1.0f, 1.0f));
+    _skybox.materials[0].shader = _skyShader;
+    _skybox.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = _skyboxTex;
+    _skyboxLoaded = true;
+    TraceLog(LOG_INFO, "loadSkybox: '%s' ready", path);
+}
+
+void Interface::unloadSkybox()
+{
+    if (_skyboxLoaded) {
+        UnloadModel(_skybox); // does not free the texture map we assigned
+        UnloadShader(_skyShader);
+    }
+    if (_skyboxTex.id != 0)
+        UnloadTexture(_skyboxTex);
+    _skyboxLoaded = false;
+}
+
+void Interface::drawSkybox()
+{
+    if (!_skyboxLoaded)
+        return;
+    // Draw first, with depth test/write and backface culling off: the box is
+    // centred on the eye (translation dropped in the shader) and fills the view
+    // by direction, so the rest of the scene paints over it.
+    rlDisableBackfaceCulling();
+    rlDisableDepthMask();
+    rlDisableDepthTest();
+    DrawModel(_skybox, Vector3{ 0.0f, 0.0f, 0.0f }, 1.0f, WHITE);
+    rlEnableDepthTest();
+    rlEnableDepthMask();
+    rlEnableBackfaceCulling();
+}
+
 void Interface::initCamera()
 {
-    // Pivot on the map centre; eye derived from yaw/pitch/distance.
-    float centerX = (_map.getWidth()  * TILE_SIZE) / 2.0f;
-    float centerZ = (_map.getHeight() * TILE_SIZE) / 2.0f;
-    float span    = std::max(_map.getWidth(), _map.getHeight()) * TILE_SIZE;
+    // Start as a free camera hovering south of the map centre, looking down
+    // onto the board — a sensible overview the user then flies away from.
+    const float centerX = (_map.getWidth()  * TILE_SIZE) / 2.0f;
+    const float centerZ = (_map.getHeight() * TILE_SIZE) / 2.0f;
+    const float span    = std::max(_map.getWidth(), _map.getHeight()) * TILE_SIZE;
 
-    _camera.target     = { centerX, 0.0f, centerZ };
     _camera.up         = { 0.0f, 1.0f, 0.0f };
-    _camera.fovy       = 45.0f;
+    _camera.fovy       = 60.0f; // a touch wider feels better for a free cam
     _camera.projection = CAMERA_PERSPECTIVE;
 
-    _camYaw   = 0.0f;
-    _camPitch = 60.0f * DEG2RAD; // looking down at a comfortable angle
-    _camDist  = span * 1.1f;     // whole map in view
-    updateCameraPosition();
+    _camera.position = { centerX, span * 0.9f, centerZ + span * 0.9f };
+    _flySpeed        = span * 0.6f; // units/sec; tuned to the map scale
+
+    // Aim at the board centre, then derive yaw/pitch from that direction.
+    lookAt({ centerX, 0.0f, centerZ });
+    updateCameraTarget();
 }
 
-void Interface::updateCameraPosition()
+void Interface::lookAt(Vector3 worldTarget)
 {
-    // Spherical offset around the pivot. pitch is the eye's angle above the
-    // ground; yaw rotates around the vertical axis.
-    float cp = std::cos(_camPitch);
-    _camera.position = {
-        _camera.target.x + _camDist * cp * std::sin(_camYaw),
-        _camera.target.y + _camDist * std::sin(_camPitch),
-        _camera.target.z + _camDist * cp * std::cos(_camYaw),
+    Vector3 dir = Vector3Subtract(worldTarget, _camera.position);
+    float   horiz = std::sqrt(dir.x * dir.x + dir.z * dir.z);
+    _camYaw   = std::atan2(dir.x, dir.z);
+    _camPitch = std::atan2(dir.y, horiz);
+}
+
+void Interface::updateCameraTarget()
+{
+    // Forward from yaw/pitch; the look target is just eye + forward.
+    const float cp = std::cos(_camPitch);
+    const Vector3 forward = {
+        cp * std::sin(_camYaw),
+        std::sin(_camPitch),
+        cp * std::cos(_camYaw),
     };
-}
-
-void Interface::loadLighting()
-{
-    const char* vs = "assets/shaders/lighting.vs";
-    const char* fs = "assets/shaders/lighting.fs";
-    if (!FileExists(vs) || !FileExists(fs)) {
-        TraceLog(LOG_WARNING, "loadLighting: shader files missing — rendering unlit");
-        return;
-    }
-
-    _lightShader = LoadShader(vs, fs);
-    if (_lightShader.id == 0) {
-        TraceLog(LOG_WARNING, "loadLighting: shader failed to compile — rendering unlit");
-        return;
-    }
-
-    _viewPosLoc  = GetShaderLocation(_lightShader, "viewPos");
-    _emissiveLoc = GetShaderLocation(_lightShader, "emissive");
-
-    // Static light setup: warm sun from above, cool ambient fill.
-    Vector3 toLight    = Vector3Normalize({ 0.6f, 1.0f, 0.5f }); // direction TO the light
-    Vector4 lightColor = { 1.0f, 0.97f, 0.90f, 1.0f };
-    Vector4 ambient    = { 0.35f, 0.37f, 0.42f, 1.0f };
-    SetShaderValue(_lightShader, GetShaderLocation(_lightShader, "lightDir"),   &toLight,    SHADER_UNIFORM_VEC3);
-    SetShaderValue(_lightShader, GetShaderLocation(_lightShader, "lightColor"), &lightColor, SHADER_UNIFORM_VEC4);
-    SetShaderValue(_lightShader, GetShaderLocation(_lightShader, "ambient"),    &ambient,    SHADER_UNIFORM_VEC4);
-
-    _lightingReady = true;
-    TraceLog(LOG_INFO, "loadLighting: lighting shader ready");
-}
-
-void Interface::unloadLighting()
-{
-    if (_lightingReady)
-        UnloadShader(_lightShader);
-    _lightingReady = false;
-}
-
-void Interface::applyLightingToModels(bool on)
-{
-    if (!_lightingReady)
-        return;
-    Shader s = on ? _lightShader : _defaultShader;
-    for (auto& rm : _resourceModels) {
-        if (!rm.loaded)
-            continue;
-        for (int m = 0; m < rm.model.materialCount; ++m)
-            rm.model.materials[m].shader = s;
-    }
-    if (_playerModel.loaded) {
-        for (int m = 0; m < _playerModel.model.materialCount; ++m)
-            _playerModel.model.materials[m].shader = s;
-    }
+    _camera.target = Vector3Add(_camera.position, forward);
 }
 
 void Interface::loadBackgroundMusic()
@@ -431,93 +426,217 @@ void Interface::handleInput()
 {
     const float dt = GetFrameTime();
 
-    // Ground-plane basis derived from the current yaw, so panning always moves
-    // relative to where the camera looks (W = into the screen, D = screen-right).
-    const float s = std::sin(_camYaw);
-    const float c = std::cos(_camYaw);
-    const Vector3 forward = { -s, 0.0f, -c }; // eye -> pivot, projected on ground
-    const Vector3 right   = {  c, 0.0f, -s };
+    // ---- Free look: the captured mouse turns the head (yaw/pitch).
+    Vector2 md = GetMouseDelta();
+    _camYaw   += md.x * 0.0030f;
+    _camPitch -= md.y * 0.0030f;
+    // Clamp pitch just shy of straight up/down so the view never flips.
+    const float limit = 1.553f; // ~89deg
+    if (_camPitch >  limit) _camPitch =  limit;
+    if (_camPitch < -limit) _camPitch = -limit;
 
-    // Pan speed scales with zoom so it feels constant on screen.
-    const float panSpeed   = _camDist * 0.8f * dt;
-    const float rotSpeed   = 1.6f * dt;
-    const float pitchSpeed = 1.3f * dt;
+    // ---- Movement basis from the current heading.
+    const float cp = std::cos(_camPitch);
+    const Vector3 forward = { cp * std::sin(_camYaw), std::sin(_camPitch), cp * std::cos(_camYaw) };
+    const Vector3 rightH  = { -std::cos(_camYaw), 0.0f, std::sin(_camYaw) }; // strafe stays level
 
-    auto panBy = [&](Vector3 dir, float amt) {
-        _camera.target.x += dir.x * amt;
-        _camera.target.z += dir.z * amt;
-    };
+    const float boost = (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) ? 3.0f : 1.0f;
+    const float step  = _flySpeed * dt * boost;
+    Vector3 move{ 0.0f, 0.0f, 0.0f };
 
-    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    panBy(forward,  panSpeed);
-    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  panBy(forward, -panSpeed);
-    if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) panBy(right,    panSpeed);
-    if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))  panBy(right,   -panSpeed);
+    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    move = Vector3Add(move, forward);
+    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  move = Vector3Subtract(move, forward);
+    if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) move = Vector3Add(move, rightH);
+    if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))  move = Vector3Subtract(move, rightH);
+    if (IsKeyDown(KEY_SPACE))                     move.y += 1.0f; // ascend
+    if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_C)) move.y -= 1.0f; // descend
 
-    // Yaw (orbit) with Q/E.
-    if (IsKeyDown(KEY_Q)) _camYaw -= rotSpeed;
-    if (IsKeyDown(KEY_E)) _camYaw += rotSpeed;
-
-    // Pitch with R/F, clamped so the eye never flips under/over the map.
-    if (IsKeyDown(KEY_R)) _camPitch += pitchSpeed;
-    if (IsKeyDown(KEY_F)) _camPitch -= pitchSpeed;
-
-    // Right-drag to orbit (yaw + pitch) for fast aiming.
-    if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
-        Vector2 d = GetMouseDelta();
-        _camYaw   += d.x * 0.005f;
-        _camPitch -= d.y * 0.005f;
+    if (move.x != 0.0f || move.y != 0.0f || move.z != 0.0f) {
+        move = Vector3Scale(Vector3Normalize(move), step);
+        _camera.position = Vector3Add(_camera.position, move);
     }
 
-    // Keep pitch within a sane band (~9deg .. ~85deg above the ground).
-    const float minPitch = 0.16f, maxPitch = 1.48f;
-    if (_camPitch < minPitch) _camPitch = minPitch;
-    if (_camPitch > maxPitch) _camPitch = maxPitch;
-
-    // Zoom with the wheel; distance bounded to the map scale.
+    // ---- Wheel sets the fly speed (not zoom — there's no pivot to zoom to).
     float wheel = GetMouseWheelMove();
     if (wheel != 0.0f) {
-        _camDist *= (1.0f - wheel * 0.1f);
-        float span = std::max(_map.getWidth(), _map.getHeight()) * TILE_SIZE;
-        float minD = TILE_SIZE * 1.5f, maxD = span * 3.0f;
-        if (_camDist < minD) _camDist = minD;
-        if (_camDist > maxD) _camDist = maxD;
+        _flySpeed *= (1.0f + wheel * 0.12f);
+        const float span = std::max(_map.getWidth(), _map.getHeight()) * TILE_SIZE;
+        const float minS = span * 0.05f, maxS = span * 4.0f;
+        if (_flySpeed < minS) _flySpeed = minS;
+        if (_flySpeed > maxS) _flySpeed = maxS;
     }
 
-    updateCameraPosition();
-
-    // Toggle lighting on/off (B). No-op until the shader actually loaded.
-    if (IsKeyPressed(KEY_B) && _lightingReady) {
-        _lightingEnabled = !_lightingEnabled;
-        applyLightingToModels(_lightingEnabled);
+    // ---- R: snap back to the overview (also drops follow).
+    if (IsKeyPressed(KEY_R)) {
+        _followedPlayer = -1;
+        initCamera();
     }
-    if (isMusicTogglePressed())
-        toggleMusic();
 
-    // Left-click selects a tile (off-board click clears the selection).
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+    // ---- F: toggle riding along with the selected player.
+    if (IsKeyPressed(KEY_F)) {
+        if (_followedPlayer >= 0) {
+            _followedPlayer = -1;
+        } else if (_selectedX >= 0 && _selectedY >= 0) {
+            const MapTile& tile = _map.getTile(_selectedX, _selectedY);
+            if (!tile.players.empty()) {
+                _followedPlayer = static_cast<std::int64_t>(tile.players.front().getId());
+                _followAnchor   = { _selectedX * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f,
+                                    _selectedY * TILE_SIZE + TILE_SIZE / 2.0f };
+            }
+        }
+    }
+
+    // ---- Simulation speed: +/- request a new time unit from the server (sst).
+    if (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD))
+        requestTimeUnit(_desiredFreq + (_desiredFreq < 10 ? 1 : 10));
+    if (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT))
+        requestTimeUnit(_desiredFreq - (_desiredFreq <= 10 ? 1 : 10));
+
+    // ---- Timeline: pause, scrub back/forward through recorded history, go live.
+    if (IsKeyPressed(KEY_P))         togglePause();
+    if (IsKeyPressed(KEY_PAGE_DOWN)) scrubBy(-1.0f); // back in time
+    if (IsKeyPressed(KEY_PAGE_UP))   scrubBy(+1.0f); // forward in time
+    if (IsKeyPressed(KEY_END))       goLive();
+
+    // ---- Panels / music.
+    if (IsKeyPressed(KEY_TAB))                     _showStats = !_showStats;
+    if (IsKeyPressed(KEY_H) || IsKeyPressed(KEY_F1)) _showHelp = !_showHelp;
+    if (isMusicTogglePressed())                    toggleMusic();
+
+    // ---- Left-click (crosshair): select the aimed tile; double-click focuses.
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         pickTile();
+        const double now = GetTime();
+        if (_lastClickTime >= 0.0 && (now - _lastClickTime) < 0.30 &&
+            _selectedX >= 0 && _selectedY >= 0) {
+            focusOnTile(_selectedX, _selectedY);
+        }
+        _lastClickTime = now;
+    }
+
+    updateCameraTarget();
+}
+
+void Interface::focusOnTile(int tx, int ty)
+{
+    // Fly to a fixed vantage above/south of the tile and aim down at it.
+    _followedPlayer = -1;
+    const Vector3 centre = { tx * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f,
+                             ty * TILE_SIZE + TILE_SIZE / 2.0f };
+    _camera.position = { centre.x, TILE_SIZE * 5.0f, centre.z + TILE_SIZE * 5.0f };
+    lookAt(centre);
+    updateCameraTarget();
+}
+
+void Interface::requestTimeUnit(int freq)
+{
+    if (freq < 1)
+        freq = 1; // the server rejects T <= 0 with sbp
+    _desiredFreq = freq;
+    if (_net && !_net->closed())
+        _net->send("sst " + std::to_string(freq)); // server acks with "sst T"
+}
+
+// ---------------------------------------------------------------------------
+// Timeline (record + scrub)
+// ---------------------------------------------------------------------------
+void Interface::recordIncoming()
+{
+    if (!_net)
+        return;
+    // Always record; the socket must be drained even while paused so it does
+    // not back up. In live mode the line is also applied to the world now.
+    for (auto& line : _net->poll()) {
+        _history.push_back({ _elapsed, line });
+        if (_live) {
+            _parser.apply(line, _map, _state);
+            _appliedIndex = _history.size();
+        }
+    }
+    if (_live)
+        _playT = latestTime();
+}
+
+void Interface::rebuildWorldTo(float t)
+{
+    // Reconstruct the world at time t by replaying every recorded line up to it
+    // onto a fresh map/state. O(history); only called on a user scrub action.
+    const int w = _map.getWidth();
+    const int h = _map.getHeight();
+    _map   = GameMap(w, h);
+    _state = GuiState{};
+    for (const auto& rec : _history) {
+        if (rec.t <= t)
+            _parser.apply(rec.line, _map, _state);
+        else
+            break; // _history is in arrival order, so the rest is in the future
+    }
+    _playT = t;
+}
+
+void Interface::togglePause()
+{
+    if (_live) {
+        _live  = false;       // freeze on the current (latest) instant
+        _playT = latestTime();
+    } else {
+        goLive();             // resume following the stream
+    }
+}
+
+void Interface::scrubBy(float seconds)
+{
+    if (_history.empty())
+        return;
+    if (_live)
+        _live = false; // first scrub drops out of live
+    float t = _playT + seconds;
+    if (t < 0.0f)            t = 0.0f;
+    if (t > latestTime())    t = latestTime();
+    rebuildWorldTo(t);
+}
+
+void Interface::goLive()
+{
+    // Catch the world up to everything recorded, then resume incremental apply.
+    rebuildWorldTo(latestTime());
+    _appliedIndex = _history.size();
+    _playT        = latestTime();
+    _live         = true;
 }
 
 void Interface::update()
 {
-    static float yearTimer = 0.0f;
-    constexpr float YEAR_DURATION = 10.0f;
-
     if (_musicLoaded)
         UpdateMusicStream(_backgroundMusic);
 
-    yearTimer += GetFrameTime();
-    if (yearTimer >= YEAR_DURATION) {
-        _year++;
-        yearTimer -= YEAR_DURATION;
+    _elapsed += GetFrameTime();
+
+    // Record whatever the server pushed since last frame; in live mode it is
+    // also folded into the world right away. Scrubbing replays from _history.
+    recordIncoming();
+
+    // Seed the speed control from the server's first reported time unit (sgt),
+    // so +/- nudge from the real value instead of from zero.
+    if (!_freqInit && _state.frequency > 0) {
+        _desiredFreq = _state.frequency;
+        _freqInit    = true;
     }
 
-    // Drain whatever the server pushed since last frame and fold it into the
-    // world model. Non-blocking; a closed connection just yields no lines (the
-    // window stays open so the final state / winner banner remains visible).
-    if (_net) {
-        for (const auto& line : _net->poll())
-            _parser.apply(line, _map, _state);
+    // Camera ride-along: translate the eye by however far the followed player
+    // moved since last frame, so free-look and free-fly still work while the
+    // camera tracks it. Drop the follow silently if the player died/left.
+    if (_followedPlayer >= 0) {
+        auto it = _state.players.find(static_cast<std::uint32_t>(_followedPlayer));
+        if (it == _state.players.end()) {
+            _followedPlayer = -1;
+        } else {
+            const Vector3 now = { it->second.getX() * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f,
+                                  it->second.getY() * TILE_SIZE + TILE_SIZE / 2.0f };
+            _camera.position = Vector3Add(_camera.position, Vector3Subtract(now, _followAnchor));
+            _followAnchor    = now;
+            updateCameraTarget();
+        }
     }
 }
 
@@ -608,18 +727,10 @@ void Interface::render()
 {
     std::vector<CountLabel> labels;
 
-    const bool lit = _lightingReady && _lightingEnabled;
-    if (lit) {
-        SetShaderValue(_lightShader, _viewPosLoc, &_camera.position, SHADER_UNIFORM_VEC3);
-        Vector3 noGlow{ 0.0f, 0.0f, 0.0f };
-        SetShaderValue(_lightShader, _emissiveLoc, &noGlow, SHADER_UNIFORM_VEC3);
-    }
-
     BeginMode3D(_camera);
-    // BeginShaderMode lights the immediate-mode cubes (tiles/players/fallbacks);
-    // the glb models carry the same shader on their materials already.
-    if (lit)
-        BeginShaderMode(_lightShader);
+
+    // 360 background first, so the rest of the scene draws in front of it.
+    drawSkybox();
 
     // Floor: two batched draws (dark + orange) instead of one per tile.
     const bool floorTextured = _darkTileTexture.id != 0 || _orangeTileTexture.id != 0;
@@ -714,14 +825,6 @@ void Interface::render()
                     const bool hasModel = static_cast<size_t>(i) < _resourceModels.size()
                                         && _resourceModels[i].loaded;
 
-                    // Make this resource's instances glow their colour.
-                    if (lit && count > 0) {
-                        Vector3 glow{ kResourceGlow[i].x * kGlowStrength,
-                                      kResourceGlow[i].y * kGlowStrength,
-                                      kResourceGlow[i].z * kGlowStrength };
-                        SetShaderValue(_lightShader, _emissiveLoc, &glow, SHADER_UNIFORM_VEC3);
-                    }
-
                     for (int n = 0; n < count; ++n, ++slot) {
                         const int col = slot % cols;
                         const int row = slot / cols;
@@ -737,12 +840,6 @@ void Interface::render()
                             const float s = kItemWidth;
                             DrawCube({ cx, kTileTopY + s / 2.0f, cz }, s, s, s, RED);
                         }
-                    }
-
-                    // Reset glow so the next resource / tile / player isn't lit up.
-                    if (lit && count > 0) {
-                        Vector3 noGlow{ 0.0f, 0.0f, 0.0f };
-                        SetShaderValue(_lightShader, _emissiveLoc, &noGlow, SHADER_UNIFORM_VEC3);
                     }
                 }
             }
@@ -761,10 +858,6 @@ void Interface::render()
         DrawSphere({ ex, kTileTopY + TILE_SIZE * 0.08f, ez }, TILE_SIZE * 0.08f, BEIGE);
     }
 
-    if (lit)
-        EndShaderMode();
-
-    // Selection highlight drawn unlit so it stays bright regardless of lighting.
     drawSelectionHighlight();
 
     EndMode3D();
@@ -777,32 +870,17 @@ void Interface::render()
                  static_cast<int>(screenPos.x), static_cast<int>(screenPos.y), 14, label.color);
     }
 
-    DrawText(TextFormat("Map: %dx%d   Teams: %d   Freq: %d   Players: %d",
-                        _map.getWidth(), _map.getHeight(),
-                        static_cast<int>(_state.teams.size()), _state.frequency,
-                        static_cast<int>(_state.players.size())),
-             10, 10, 20, RAYWHITE);
-
-    if (_net && _net->closed())
-        DrawText("disconnected", GetScreenWidth() / 2 - 70, 10, 20, RED);
-
     if (_state.hasWinner)
         DrawText(TextFormat("WINNER: %s", _state.winner.c_str()),
                  GetScreenWidth() / 2 - 140, GetScreenHeight() / 2 - 20, 40, GOLD);
-    
-    DrawText(TextFormat("Map: %dx%d", _map.getWidth(), _map.getHeight()), 10, 10, 20, RAYWHITE);
-    DrawText("ZQSD/Arrows: pan  |  A/E: orbit  |  R/F: tilt  |  RMB-drag: look  |  Wheel: zoom  |  LMB: pick  |  B: light  |  M: music  |  Raph = grossepute",
-             10, 35, 16, LIGHTGRAY);
-    if (_lightingReady)
-        DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,
-                 _lightingEnabled ? GREEN : GRAY);
-    DrawText(TextFormat("YEARS: %d", _year), 10, 75, 16, RAYWHITE);
-    DrawText(TextFormat("Music: %s", _musicEnabled && _musicLoaded ? "ON" : "OFF"), 10, 100, 16,
-             _musicEnabled && _musicLoaded ? GREEN : GRAY);
-    DrawText(TextFormat("Selected: %d,%d", _selectedX, _selectedY), 10, 125, 16,
-             _selectedX >= 0 ? GOLD : GRAY);
 
+    drawHud();
+    drawTimeline();
     drawTileInfoPanel();
+    if (_showStats)
+        drawStatsPanel();
+    if (_showHelp)
+        drawHelpOverlay();
 
     DrawFPS(GetScreenWidth() - 90, 10);
 }
@@ -812,7 +890,10 @@ void Interface::render()
 // ---------------------------------------------------------------------------
 void Interface::pickTile()
 {
-    Ray ray = GetScreenToWorldRay(GetMousePosition(), _camera);
+    // The cursor is captured (centred) in free-cam, so aim from the crosshair
+    // at the middle of the screen rather than the frozen mouse position.
+    Vector2 centre = { GetScreenWidth() / 2.0f, GetScreenHeight() / 2.0f };
+    Ray ray = GetScreenToWorldRay(centre, _camera);
     if (std::fabs(ray.direction.y) < 1e-6f)
         return; // ray parallel to the ground, no hit
 
@@ -914,4 +995,186 @@ void Interface::drawTileInfoPanel()
         DrawText(text.c_str(), px + pad, ty, 14, color);
         ty += lineH;
     }
+}
+
+// ---------------------------------------------------------------------------
+// HUD / stats / help
+// ---------------------------------------------------------------------------
+void Interface::drawHud()
+{
+    // Compact always-on status, top-left.
+    DrawText(TextFormat("Map %dx%d   Teams %d   Players %d   Eggs %d",
+                        _map.getWidth(), _map.getHeight(),
+                        static_cast<int>(_state.teams.size()),
+                        static_cast<int>(_state.players.size()),
+                        static_cast<int>(_state.eggs.size())),
+             10, 10, 18, RAYWHITE);
+
+    const int mm = static_cast<int>(_elapsed) / 60;
+    const int ss = static_cast<int>(_elapsed) % 60;
+    DrawText(TextFormat("Speed (time unit): %d  [+/- to change]   Elapsed %02d:%02d",
+                        _state.frequency, mm, ss),
+             10, 32, 16, SKYBLUE);
+
+    if (_followedPlayer >= 0)
+        DrawText(TextFormat("Following player #%lld  (F to release)",
+                            static_cast<long long>(_followedPlayer)),
+                 10, 52, 16, GOLD);
+
+    // One-line control reminder; the full list is on H / F1.
+    DrawText("ZQSD: fly   Mouse: look   Space/Ctrl: up/down   Wheel: speed   LMB: select   "
+             "R: reset   F: follow   P: pause   Tab: stats   H: help",
+             10, GetScreenHeight() - 24, 15, LIGHTGRAY);
+
+    if (_net && _net->closed())
+        DrawText("DISCONNECTED", GetScreenWidth() / 2 - 70, 10, 20, RED);
+
+    // Crosshair: marks what a left click will select.
+    const int cx = GetScreenWidth() / 2, cy = GetScreenHeight() / 2;
+    DrawLine(cx - 8, cy, cx + 8, cy, Color{ 255, 255, 255, 160 });
+    DrawLine(cx, cy - 8, cx, cy + 8, Color{ 255, 255, 255, 160 });
+}
+
+void Interface::drawStatsPanel()
+{
+    // --- Aggregate the whole environment from the live model. ---
+    std::array<long, MAP_RESOURCE_COUNT> resTotals{};
+    for (int y = 0; y < _map.getHeight(); ++y)
+        for (int x = 0; x < _map.getWidth(); ++x) {
+            const MapTile& t = _map.getTile(x, y);
+            for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
+                resTotals[i] += t.resources[i];
+        }
+
+    std::array<int, 8> levelCounts{}; // levels 1..8
+    for (const auto& [id, p] : _state.players) {
+        (void)id;
+        int lvl = p.getLevel();
+        if (lvl >= 1 && lvl <= 8)
+            levelCounts[static_cast<size_t>(lvl - 1)]++;
+    }
+
+    // Build the lines first so the panel can size itself.
+    std::vector<std::pair<std::string, Color>> lines;
+    lines.push_back({ "GLOBAL STATS  (Tab)", GOLD });
+    lines.push_back({ "Resources on map:", SKYBLUE });
+    long grand = 0;
+    for (int i = 0; i < MAP_RESOURCE_COUNT; ++i) {
+        grand += resTotals[i];
+        lines.push_back({ TextFormat("  %-9s %ld", std::string(MAP_RESOURCE_NAMES[i]).c_str(),
+                                     resTotals[i]), RAYWHITE });
+    }
+    lines.push_back({ TextFormat("  %-9s %ld", "TOTAL", grand), LIGHTGRAY });
+
+    lines.push_back({ "Players per team:", SKYBLUE });
+    for (const auto& team : _state.teams) {
+        int alive = 0, top = 0;
+        for (const auto& [id, p] : _state.players) {
+            (void)id;
+            if (p.getTeam() == team) {
+                ++alive;
+                if (p.getLevel() > top) top = p.getLevel();
+            }
+        }
+        lines.push_back({ TextFormat("  %-10s %d  (max lvl %d)", team.c_str(), alive, top),
+                          RAYWHITE });
+    }
+
+    lines.push_back({ "Players per level:", SKYBLUE });
+    std::string lvlLine = "  ";
+    for (int l = 0; l < 8; ++l)
+        lvlLine += TextFormat("L%d:%d  ", l + 1, levelCounts[static_cast<size_t>(l)]);
+    lines.push_back({ lvlLine, RAYWHITE });
+
+    lines.push_back({ TextFormat("Eggs: %d        Incantations: %d",
+                                 static_cast<int>(_state.eggs.size()),
+                                 static_cast<int>(_state.incanting.size())), BEIGE });
+    lines.push_back({ TextFormat("Time unit: %d   Elapsed: %02d:%02d",
+                                 _state.frequency,
+                                 static_cast<int>(_elapsed) / 60,
+                                 static_cast<int>(_elapsed) % 60), LIGHTGRAY });
+
+    // Panel geometry: left side, under the HUD.
+    const int pad    = 12;
+    const int lineH  = 18;
+    const int width  = 280;
+    const int height = pad * 2 + static_cast<int>(lines.size()) * lineH;
+    const int px     = 10;
+    const int py     = 80;
+
+    DrawRectangle(px, py, width, height, Color{ 0, 0, 0, 190 });
+    DrawRectangleLines(px, py, width, height, GOLD);
+
+    int ty = py + pad;
+    for (const auto& [text, color] : lines) {
+        DrawText(text.c_str(), px + pad, ty, 14, color);
+        ty += lineH;
+    }
+}
+
+void Interface::drawHelpOverlay()
+{
+    static const std::array<const char*, 16> kHelp = {
+        "CONTROLS  -  FREE CAMERA",
+        "Mouse           look around freely",
+        "ZQSD / Arrows   fly (Shift = faster)",
+        "Space / Ctrl    move up / down",
+        "Mouse wheel     fly speed",
+        "Left click      select the aimed tile (crosshair)",
+        "Double click    focus camera on that tile",
+        "R               reset to the overview",
+        "F               follow / unfollow selected player",
+        "+ / -           simulation speed (sst)",
+        "P               pause / resume",
+        "PageDown / Up   step back / forward in time (1s)",
+        "End             jump back to live",
+        "Tab             toggle global stats",
+        "M               toggle music",
+        "H / F1          this help",
+    };
+
+    const int pad   = 16;
+    const int lineH = 22;
+    const int width = 460;
+    const int height = pad * 2 + static_cast<int>(kHelp.size()) * lineH;
+    const int px = GetScreenWidth() / 2 - width / 2;
+    const int py = GetScreenHeight() / 2 - height / 2;
+
+    DrawRectangle(px, py, width, height, Color{ 0, 0, 0, 210 });
+    DrawRectangleLines(px, py, width, height, GOLD);
+
+    int ty = py + pad;
+    for (size_t i = 0; i < kHelp.size(); ++i) {
+        DrawText(kHelp[i], px + pad, ty, i == 0 ? 20 : 16, i == 0 ? GOLD : RAYWHITE);
+        ty += lineH;
+    }
+}
+
+void Interface::drawTimeline()
+{
+    const int   sw    = GetScreenWidth();
+    const float last  = latestTime();
+    const float frac  = last > 0.0f ? (_playT / last) : 1.0f;
+
+    const int barW = sw / 2;
+    const int barH = 8;
+    const int x0   = (sw - barW) / 2;
+    const int y0   = GetScreenHeight() - 52;
+
+    // Mode label above the bar.
+    if (_live) {
+        DrawText("LIVE", x0, y0 - 20, 16, GREEN);
+    } else {
+        DrawText(TextFormat("PAUSED  %.1fs / %.1fs  (PageUp/Down scrub, End: live)",
+                            _playT, last),
+                 x0, y0 - 20, 16, GOLD);
+    }
+
+    // Track + filled portion + cursor knob.
+    DrawRectangle(x0, y0, barW, barH, Color{ 0, 0, 0, 160 });
+    DrawRectangle(x0, y0, static_cast<int>(barW * frac), barH,
+                  _live ? Color{ 60, 200, 90, 200 } : Color{ 230, 190, 40, 220 });
+    DrawRectangleLines(x0, y0, barW, barH, Color{ 255, 255, 255, 90 });
+    const int knobX = x0 + static_cast<int>(barW * frac);
+    DrawCircle(knobX, y0 + barH / 2, 5.0f, _live ? GREEN : GOLD);
 }
