@@ -5,6 +5,8 @@
 #include <string_view>
 #include <vector>
 
+#include "aiPlayer.hpp"
+
 // Using resource count from zappy::protocol::ai for consistency with the project's protocol.
 // This ensures the resource indices and counts align across different components.
 inline constexpr int MAP_RESOURCE_COUNT = 7;
@@ -15,7 +17,7 @@ inline constexpr std::array<std::string_view, MAP_RESOURCE_COUNT> MAP_RESOURCE_N
 
 struct MapTile {
     std::array<int, MAP_RESOURCE_COUNT> resources{};
-    std::vector<std::uint32_t> player_ids;
+    std::vector<aiPlayer> players;
 };
 
 class GameMap {
@@ -35,8 +37,8 @@ public:
     void setResource(int x, int y, int resource_type_index, int count);
     void addResource(int x, int y, int resource_type_index, int amount);
     void removeResource(int x, int y, int resource_type_index, int amount);
-    void addPlayerToTile(int x, int y, std::uint32_t player_id);
-    void removePlayerFromTile(int x, int y, std::uint32_t player_id);
+    void addPlayerToTile(int x, int y, const aiPlayer& player);
+    void removePlayerFromTile(int x, int y, const aiPlayer& player);
 
 private:
     int _width;

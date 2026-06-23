@@ -91,6 +91,7 @@ private:
         bool    loaded{false};
     };
     std::vector<ResourceModel> _resourceModels{};
+    ResourceModel _playerModel{};
 
     // --- Networking ---
     std::unique_ptr<NetClient> _net;     // live server connection (post-handshake)
@@ -126,4 +127,6 @@ private:
     void unloadTileTextures();
     void loadResourceModels();
     void unloadResourceModels();
+    void loadPlayerModel();
+    void unloadPlayerModel();
 };
