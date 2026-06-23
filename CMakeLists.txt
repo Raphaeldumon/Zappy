@@ -39,6 +39,21 @@ endif()
 add_subdirectory(protocol)
 add_subdirectory(server)
 
+# ---- Integration tests (AI <-> server <-> GUI over real sockets) -------------
+# Driven by tools/run_integration.py against the built zappy_server. Tagged
+# "integration" so unit-only runs can skip it: ctest -LE integration
+if(ZAPPY_BUILD_TESTS)
+    find_package(Python3 COMPONENTS Interpreter QUIET)
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME integration_protocol
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/run_integration.py
+                    --server $<TARGET_FILE:zappy_server>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(integration_protocol PROPERTIES LABELS "integration" TIMEOUT 120)
+    endif()
+endif()
+
 # ---- Summary ----------------------------------------------------------------
 message(STATUS "")
 message(STATUS "==== Zappy ${PROJECT_VERSION} configuration ====")

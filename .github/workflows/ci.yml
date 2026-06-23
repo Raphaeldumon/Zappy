@@ -22,7 +22,10 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y make cmake g++ clang-format
+          # Pin clang-format-14 so CI matches the team's local version; newer
+          # clang-format releases reformat differently and break the check.
+          sudo apt-get install -y make cmake g++ clang-format-14
+          sudo update-alternatives --install /usr/bin/clang-format clang-format /usr/bin/clang-format-14 100
 
       - name: Build
         run: make re
@@ -31,7 +34,7 @@ jobs:
         run: ./tools/format_all.sh --check
 
       - name: Unit tests (CTest)
-        run: ctest --test-dir build --output-on-failure --no-tests=ignore
+        run: ctest --test-dir build --output-on-failure --no-tests=ignore -LE integration
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -41,13 +44,17 @@ jobs:
           cache-dependency-path: ai/pyproject.toml
 
       - name: Install Python package (dev extras)
-        run: pip install -e "ai[dev]"
+        run: pip install -e "ai[dev]" pyyaml
 
       - name: Ruff lint
         run: ruff check ai tools
 
       - name: Pytest
         run: pytest ai/tests -q
+
+      - name: Integration tests (AI <-> server)
+        run: ctest --test-dir build --output-on-failure -L integration
+        timeout-minutes: 5
 
       - name: Mypy (non-blocking until typed)
         run: mypy --strict ai/zappy_train

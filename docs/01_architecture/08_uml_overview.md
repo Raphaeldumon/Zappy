@@ -8,8 +8,8 @@ Rendu automatique sur GitHub et sur le site MkDocs (plugin mermaid2).
 ```mermaid
 flowchart LR
     subgraph clients
-        AI["zappy_ai<br/>(client IA)"]
-        GUI["zappy_gui<br/>(visualiseur 3D raylib)"]
+        AI["zappy_ai<br/>(client IA, Python — dossier ai/)"]
+        GUI["zappy_gui<br/>(visualiseur 3D raylib — branche gui3Dtest)"]
     end
 
     SRV["zappy_server<br/>(simulation, autoritaire)"]
@@ -85,47 +85,44 @@ sequenceDiagram
     S-->>G: "ppo #id x y o\n"
 ```
 
-## 4. GUI sur la branche `main` — `zappy_gui2d`
+## 4. GUI 3D (branche `gui3Dtest`, dossier `gui3d/`)
 
-Sur `main`, le visualiseur fonctionnel est **`zappy_gui2d`** (raylib, 2D) :
-un outil de debug volontairement minimal pour *voir* l'état du serveur en
-direct. (`zappy_gui` y est encore un stub ; le visualiseur 3D complet —
-planète torus, HUD, post-FX — vit sur la branche `feat/raylib-3d-gui`.)
+Le GUI est développé séparément (sur `main`, `gui/` n'est qu'un placeholder).
+La version active est **`gui3d/`** sur la branche `gui3Dtest` : un rendu 3D
+raylib (caméra `Camera3D`, modèles `.glb` par ressource). Le rendu et la carte
+existent ; le branchement réseau (handshake `GRAPHIC` + parse du protocole GUI)
+reste à câbler — `main.cpp` peuple aujourd'hui la carte avec des ressources de
+test.
 
 ```mermaid
 classDiagram
-    class App {
-        main() : boucle 60 FPS
-        pompe réseau -> parse -> draw
-        rendu grille + points ressources + HUD
+    class Interface {
+        run() : boucle 60 FPS
+        handleInput / update / render
+        Camera3D + modèle food (.glb)
     }
-    class NetClient {
-        connect(host, port) : handshake GRAPHIC
-        poll_lines() : lignes complètes reçues
-        send_line(req)
-        socket non bloquant
+    class RaylibEngine {
+        InitWindow / beginDrawing / endDrawing
+        load3DModel / drawShape (Shape)
+        wrapper raylib
     }
-    class Parser {
-        apply_line(world, ligne) bool
-        dispatch par tag (msz, bct, pnw...)
-        false si tag inconnu (drift protocole)
+    class GameMap {
+        getTile(x, y) / addResource
+        tiles row-major (MapTile)
     }
-    class World {
-        width / height / time_unit
-        tiles : ressources[7] par case
-        players : pos, orientation, level
-        eggs, teams, état pur (POD)
+    class MapTile {
+        resources[7]
+        player_ids
     }
 
-    App --> NetClient : pompe le socket
-    App --> Parser : 1 ligne = 1 mise à jour
-    Parser --> World : mutations
-    App --> World : lit pour dessiner
+    Interface --> RaylibEngine : rendu
+    Interface --> GameMap : état du monde
+    GameMap --> MapTile : cases
 ```
 
-Pipeline en 4 étapes : pomper le socket, parser chaque ligne,
-mettre à jour un état POD, le dessiner à 60 FPS. C'est ce même pipeline
-(net → parse → état → rendu) que la version 3D réutilise et étend.
+Le serveur reste l'unique source de vérité : à terme le GUI ne fera que
+refléter les événements poussés (cf. section 1), via le même contrat de
+protocole côté serveur, indépendamment de l'implémentation du rendu.
 
 ## 5. Règles clefs (rappel)
 
