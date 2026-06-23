@@ -43,6 +43,14 @@ const MapTile& GameMap::getTile(int x, int y) const {
     return _tiles[getIndex(x, y)];
 }
 
+void GameMap::setResource(int x, int y, int resource_type_index, int count) {
+    MapTile& tile = getTile(x, y); // Will throw if invalid coords
+    if (resource_type_index < 0 || resource_type_index >= MAP_RESOURCE_COUNT) {
+        throw std::invalid_argument("Invalid resource type index.");
+    }
+    tile.resources[resource_type_index] = std::max(0, count);
+}
+
 void GameMap::addResource(int x, int y, int resource_type_index, int amount) {
     MapTile& tile = getTile(x, y); // Will throw if invalid coords
     if (resource_type_index < 0 || resource_type_index >= MAP_RESOURCE_COUNT) {

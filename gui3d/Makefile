@@ -5,7 +5,9 @@ CXX         =   g++
 SRC         =   main.cpp \
                 interface.cpp \
                 raylibWrapper.cpp \
-                gameMap.cpp
+                gameMap.cpp \
+                netClient.cpp \
+                protocolParser.cpp
 
 OBJ         =   $(SRC:.cpp=.o)
 DEP         =   $(OBJ:.o=.d)
@@ -13,6 +15,17 @@ DEP         =   $(OBJ:.o=.d)
 CXXFLAGS    =   -Wall -Wextra -std=c++17 -g -MMD -MP -I.
 
 LDFLAGS     =   -lraylib -lGL -lm -lpthread -ldl -lrt -lX11
+
+# ---- demo knobs — override on the command line -------------------------------
+#   make demo PORT=4242 MAP_W=20 MAP_H=20 BOTS=6 FREQ=100
+PORT        ?=  4242
+MAP_W       ?=  20
+MAP_H       ?=  20
+TEAMS       ?=  red blue
+CLIENTS     ?=  5
+FREQ        ?=  50
+BOTS        ?=  3
+HOST        ?=  127.0.0.1
 
 all: $(NAME)
 
@@ -29,4 +42,21 @@ fclean: clean
 
 re: fclean all
 
-.PHONY: all clean fclean re
+## Launch server + fake AI + this GUI together. Closing the GUI window (or
+## Ctrl+C) stops all three. Builds the server via the root Makefile first.
+##   make demo
+##   make demo MAP_W=20 MAP_H=20 BOTS=6 FREQ=100
+demo: all
+	@$(MAKE) -C .. build >/dev/null
+	@echo "demo: server :$(PORT) | map $(MAP_W)x$(MAP_H) | teams '$(TEAMS)' | $(BOTS) bot(s) | freq $(FREQ)"
+	@set -e; \
+	../zappy_server -p $(PORT) -x $(MAP_W) -y $(MAP_H) -n $(TEAMS) -c $(CLIENTS) -f $(FREQ) & \
+	SRV=$$!; \
+	trap 'kill $$SRV $$AI 2>/dev/null' EXIT INT TERM; \
+	sleep 0.6; \
+	python3 ../tools/fake_ai.py -p $(PORT) -n $(firstword $(TEAMS)) --bots $(BOTS) & \
+	AI=$$!; \
+	sleep 0.3; \
+	./$(NAME) -p $(PORT) -h $(HOST)
+
+.PHONY: all clean fclean re demo

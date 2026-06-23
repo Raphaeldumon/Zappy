@@ -12,8 +12,8 @@ enum class Orientation : std::uint8_t
 class aiPlayer
 {
 private:
-    std::uint32_t _id;
-    std::string _team;
+    const std::uint32_t _id;
+    const std::string _team;
     int x{};
     int y{};
     Orientation orientation{Orientation::North};

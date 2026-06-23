@@ -31,6 +31,8 @@ public:
     const MapTile& getTile(int x, int y) const;
 
     // modify tile content.
+    // Absolute set (used by the bct protocol message, which carries full counts).
+    void setResource(int x, int y, int resource_type_index, int count);
     void addResource(int x, int y, int resource_type_index, int amount);
     void removeResource(int x, int y, int resource_type_index, int amount);
     void addPlayerToTile(int x, int y, std::uint32_t player_id);

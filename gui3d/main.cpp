@@ -1,34 +1,63 @@
 #include "interface.hpp"
+#include "netClient.hpp"
+
 #include <cstdlib>
-#include <ctime>
+#include <cstring>
 #include <iostream>
+#include <memory>
+#include <string>
 
-int main()
+namespace {
+
+void usage(const char* prog)
 {
-    // Basic map and window dimensions for testing
-    const int mapWidth = 20;
-    const int mapHeight = 20;
-    const int windowWidth = 1280;
-    const int windowHeight = 720;
+    std::cerr << "USAGE: " << prog << " -p port [-h machine]\n"
+              << "  -p port      port number\n"
+              << "  -h machine   server host (default 127.0.0.1)\n";
+}
 
-    std::cout << "Starting Zappy 3D GUI..." << std::endl;
+} // namespace
 
-    try {
-        std::srand(static_cast<unsigned int>(std::time(nullptr)));
+int main(int argc, char** argv)
+{
+    int         port = -1;
+    std::string host = "127.0.0.1";
 
-        Interface app(mapWidth, mapHeight, windowWidth, windowHeight);
-        for (int i = 0; i < 50; ++i) {
-            int x = std::rand() % mapWidth;
-            int y = std::rand() % mapHeight;
-            int resourceType = std::rand() % MAP_RESOURCE_COUNT;
-            int amount = (std::rand() % 5) + 1;
-            app.getMap().addResource(x, y, resourceType, amount);
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
+            port = std::atoi(argv[++i]);
+        } else if (std::strcmp(argv[i], "-h") == 0 && i + 1 < argc) {
+            host = argv[++i];
+        } else {
+            usage(argv[0]);
+            return 84;
         }
-        app.run();
-    } catch (const std::exception& e) {
-        std::cerr << "Fatal error: " << e.what() << std::endl;
+    }
+
+    if (port <= 0) {
+        usage(argv[0]);
         return 84;
     }
 
+    auto net = std::make_unique<NetClient>();
+    if (!net->connect(host, port)) {
+        std::cerr << "Error: cannot connect to " << host << ':' << port << '\n';
+        return 84;
+    }
+
+    int width = 0, height = 0;
+    if (!net->handshake(width, height)) {
+        std::cerr << "Error: GRAPHIC handshake failed\n";
+        return 84;
+    }
+
+    try {
+        Interface app(std::move(net), width, height,
+                      DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT);
+        app.run();
+    } catch (const std::exception& e) {
+        std::cerr << "Fatal error: " << e.what() << '\n';
+        return 84;
+    }
     return 0;
 }
