@@ -54,6 +54,11 @@ private:
     bool   _lightingReady{false};  // shader compiled and bound
     bool   _lightingEnabled{true}; // user toggle (B)
 
+    // --- Audio ---
+    Music _backgroundMusic{};
+    bool  _audioReady{false};
+    bool  _musicLoaded{false};
+    bool  _musicEnabled{true};
 
     // --- YEARS ---
     int _year{0};
@@ -85,6 +90,9 @@ private:
     void loadLighting();
     void unloadLighting();
     void applyLightingToModels(bool on); // swap model material shaders for the B toggle
+    void loadBackgroundMusic();
+    void unloadBackgroundMusic();
+    void toggleMusic();
     void loadTileTextures();
     void unloadTileTextures();
     void loadResourceModels();

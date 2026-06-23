@@ -16,12 +16,14 @@ Interface::Interface(int mapWidth, int mapHeight, int windowWidth, int windowHei
     loadLighting();       // before models: they bind this shader to their materials
     loadTileTextures();
     loadResourceModels(); // needs the GL context, so after the engine init
+    loadBackgroundMusic();
 }
 
 Interface::~Interface()
 {
     // Member destruction runs after this body, so the GL context (owned by
     // _engine) is still alive here — safe to free GPU resources.
+    unloadBackgroundMusic();
     unloadResourceModels();
     unloadTileTextures();
     unloadLighting();
@@ -71,6 +73,22 @@ namespace {
     constexpr float kItemWidth  = TILE_SIZE * 0.16f;
     constexpr float kItemHeight = TILE_SIZE * 0.40f;
     constexpr float kFlatWidth  = TILE_SIZE * 0.40f; // footprint for flat models (roast chicken)
+    constexpr const char* kMusicPath = "assets/music_back.mp3";
+    constexpr float kMusicVolume = 0.45f;
+
+    bool isMusicTogglePressed()
+    {
+        if (IsKeyPressed(KEY_M))
+            return true;
+
+        int key = GetCharPressed();
+        while (key > 0) {
+            if (key == 'm' || key == 'M')
+                return true;
+            key = GetCharPressed();
+        }
+        return false;
+    }
 }
 
 
@@ -269,6 +287,60 @@ void Interface::applyLightingToModels(bool on)
     }
 }
 
+void Interface::loadBackgroundMusic()
+{
+    InitAudioDevice();
+    if (!IsAudioDeviceReady()) {
+        TraceLog(LOG_WARNING, "loadBackgroundMusic: audio device failed to initialize");
+        return;
+    }
+    _audioReady = true;
+
+    if (!FileExists(kMusicPath)) {
+        TraceLog(LOG_WARNING, "loadBackgroundMusic: missing asset '%s'", kMusicPath);
+        return;
+    }
+
+    _backgroundMusic = LoadMusicStream(kMusicPath);
+    if (_backgroundMusic.stream.buffer == nullptr) {
+        TraceLog(LOG_WARNING, "loadBackgroundMusic: failed to load '%s'", kMusicPath);
+        return;
+    }
+
+    _backgroundMusic.looping = true;
+    SetMusicVolume(_backgroundMusic, kMusicVolume);
+    _musicLoaded = true;
+    _musicEnabled = true;
+    PlayMusicStream(_backgroundMusic);
+    TraceLog(LOG_INFO, "loadBackgroundMusic: playing '%s'", kMusicPath);
+}
+
+void Interface::unloadBackgroundMusic()
+{
+    if (_musicLoaded) {
+        StopMusicStream(_backgroundMusic);
+        UnloadMusicStream(_backgroundMusic);
+        _musicLoaded = false;
+    }
+    if (_audioReady) {
+        CloseAudioDevice();
+        _audioReady = false;
+    }
+}
+
+void Interface::toggleMusic()
+{
+    if (!_musicLoaded)
+        return;
+
+    _musicEnabled = !_musicEnabled;
+    if (_musicEnabled)
+        ResumeMusicStream(_backgroundMusic);
+    else
+        PauseMusicStream(_backgroundMusic);
+    TraceLog(LOG_INFO, "toggleMusic: music %s", _musicEnabled ? "ON" : "OFF");
+}
+
 // ---------------------------------------------------------------------------
 // Loop steps
 // ---------------------------------------------------------------------------
@@ -320,6 +392,8 @@ void Interface::handleInput()
         _lightingEnabled = !_lightingEnabled;
         applyLightingToModels(_lightingEnabled);
     }
+    if (isMusicTogglePressed())
+        toggleMusic();
 
     // Zoom with mouse wheel
     float wheel = GetMouseWheelMove();
@@ -328,6 +402,7 @@ void Interface::handleInput()
         if (_camera.position.y < 50.0f) _camera.position.y = 50.0f;
         if (_camera.position.y > 800.0f) _camera.position.y = 800.0f;
     }
+
 }
 
 void Interface::update()
@@ -341,6 +416,8 @@ void Interface::update()
         _year++;
         yearTimer -= YEAR_DURATION;
     }
+    if (_musicLoaded)
+        UpdateMusicStream(_backgroundMusic);
 }
 
 
@@ -483,11 +560,13 @@ void Interface::render()
     }
 
     DrawText(TextFormat("Map: %dx%d", _map.getWidth(), _map.getHeight()), 10, 10, 20, RAYWHITE);
-    DrawText("WASD / Arrows: pan   |   Scroll: zoom   |   B: lighting", 10, 35, 16, LIGHTGRAY);
+    DrawText("WASD / Arrows: pan   |   Scroll: zoom   |   B: lighting   |   M: music", 10, 35, 16, LIGHTGRAY);
     if (_lightingReady)
         DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,
                  _lightingEnabled ? GREEN : GRAY);
     DrawText(TextFormat("YEARS: %d", _year), 10, 75, 16, RAYWHITE);
+    DrawText(TextFormat("Music: %s", _musicEnabled && _musicLoaded ? "ON" : "OFF"), 10, 100, 16,
+             _musicEnabled && _musicLoaded ? GREEN : GRAY);
     
     DrawFPS(GetScreenWidth() - 90, 10); 
 }
