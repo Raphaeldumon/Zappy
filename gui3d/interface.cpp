@@ -433,6 +433,18 @@ void Interface::handleInput()
 
 void Interface::update()
 {
+    static float yearTimer = 0.0f;
+    constexpr float YEAR_DURATION = 10.0f;
+
+    if (_musicLoaded)
+        UpdateMusicStream(_backgroundMusic);
+
+    yearTimer += GetFrameTime();
+    if (yearTimer >= YEAR_DURATION) {
+        _year++;
+        yearTimer -= YEAR_DURATION;
+    }
+
     // Drain whatever the server pushed since last frame and fold it into the
     // world model. Non-blocking; a closed connection just yields no lines (the
     // window stays open so the final state / winner banner remains visible).
