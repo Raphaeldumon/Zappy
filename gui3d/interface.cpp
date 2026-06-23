@@ -293,6 +293,27 @@ void Interface::handleInput()
         _camera.position.z += PAN_SPEED;
         _camera.target.z   += PAN_SPEED;
     }
+    if (IsKeyDown(KEY_SPACE)) {
+        _camera.position.y += PAN_SPEED;
+        _camera.target.y   += PAN_SPEED;
+    }
+    if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
+        _camera.position.y -= PAN_SPEED;
+        _camera.target.y   -= PAN_SPEED;
+    }
+    if (IsKeyDown(KEY_Q)) {
+        _camera.target.x   += PAN_SPEED;
+    }
+    if (IsKeyDown(KEY_E)) {
+        _camera.target.x   -= PAN_SPEED;
+    }
+    //look up and down
+    if (IsKeyDown(KEY_I)) {
+        _camera.target.y   += PAN_SPEED;
+    }
+    if (IsKeyDown(KEY_O)) { 
+        _camera.target.y   -= PAN_SPEED;
+    }
 
     // Toggle lighting on/off (B). No-op until the shader actually loaded.
     if (IsKeyPressed(KEY_B) && _lightingReady) {
