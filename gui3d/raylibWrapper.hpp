@@ -7,16 +7,18 @@
 // Non-copyable and non-movable because it manages a unique GL context —
 // duplicating it would call InitWindow / CloseWindow more than once.
 class RaylibEngine {
-public:
-    RaylibEngine(int width, int height, const std::string& title);
-    ~RaylibEngine();
+    private:
+        Texture2D _background{};
+    public:
+        RaylibEngine(int width, int height, const std::string& title);
+        ~RaylibEngine();
 
-    RaylibEngine(const RaylibEngine&)            = delete;
-    RaylibEngine& operator=(const RaylibEngine&) = delete;
-    RaylibEngine(RaylibEngine&&)                 = delete;
-    RaylibEngine& operator=(RaylibEngine&&)      = delete;
+        RaylibEngine(const RaylibEngine&)            = delete;
+        RaylibEngine& operator=(const RaylibEngine&) = delete;
+        RaylibEngine(RaylibEngine&&)                 = delete;
+        RaylibEngine& operator=(RaylibEngine&&)      = delete;
 
-    bool shouldClose() const;
-    void beginDrawing();
-    void endDrawing();
+        bool shouldClose() const;
+        void beginDrawing();
+        void endDrawing();
 };

@@ -1,5 +1,6 @@
 #include "interface.hpp"
 #include "raymath.h"
+#include "rlgl.h"
 
 #include <algorithm>
 #include <cmath>
@@ -14,14 +15,18 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
 {
     initCamera();
     loadLighting();       // before models: they bind this shader to their materials
+    loadTileTextures();
     loadResourceModels(); // needs the GL context, so after the engine init
+    loadBackgroundMusic();
 }
 
 Interface::~Interface()
 {
     // Member destruction runs after this body, so the GL context (owned by
     // _engine) is still alive here — safe to free GPU resources.
+    unloadBackgroundMusic();
     unloadResourceModels();
+    unloadTileTextures();
     unloadLighting();
 }
 
@@ -69,6 +74,22 @@ namespace {
     constexpr float kItemWidth  = TILE_SIZE * 0.16f;
     constexpr float kItemHeight = TILE_SIZE * 0.40f;
     constexpr float kFlatWidth  = TILE_SIZE * 0.40f; // footprint for flat models (roast chicken)
+    constexpr const char* kMusicPath = "assets/music_back.mp3";
+    constexpr float kMusicVolume = 0.45f;
+
+    bool isMusicTogglePressed()
+    {
+        if (IsKeyPressed(KEY_M))
+            return true;
+
+        int key = GetCharPressed();
+        while (key > 0) {
+            if (key == 'm' || key == 'M')
+                return true;
+            key = GetCharPressed();
+        }
+        return false;
+    }
 }
 
 
@@ -186,6 +207,25 @@ void Interface::unloadResourceModels()
     _resourceModels.clear();
 }
 
+void Interface::loadTileTextures()
+{
+    _darkTileTexture = LoadTexture("assets/sol_dark.png");
+    if (_darkTileTexture.id == 0)
+        TraceLog(LOG_WARNING, "loadTileTextures: failed to load assets/sol_dark.png");
+
+    _orangeTileTexture = LoadTexture("assets/sol_orange.png");
+    if (_orangeTileTexture.id == 0)
+        TraceLog(LOG_WARNING, "loadTileTextures: failed to load assets/sol_orange.png");
+}
+
+void Interface::unloadTileTextures()
+{
+    if (_darkTileTexture.id != 0)
+        UnloadTexture(_darkTileTexture);
+    if (_orangeTileTexture.id != 0)
+        UnloadTexture(_orangeTileTexture);
+}
+
 void Interface::initCamera()
 {
     // Isometric-ish top-down view centered on the map.
@@ -248,6 +288,60 @@ void Interface::applyLightingToModels(bool on)
     }
 }
 
+void Interface::loadBackgroundMusic()
+{
+    InitAudioDevice();
+    if (!IsAudioDeviceReady()) {
+        TraceLog(LOG_WARNING, "loadBackgroundMusic: audio device failed to initialize");
+        return;
+    }
+    _audioReady = true;
+
+    if (!FileExists(kMusicPath)) {
+        TraceLog(LOG_WARNING, "loadBackgroundMusic: missing asset '%s'", kMusicPath);
+        return;
+    }
+
+    _backgroundMusic = LoadMusicStream(kMusicPath);
+    if (_backgroundMusic.stream.buffer == nullptr) {
+        TraceLog(LOG_WARNING, "loadBackgroundMusic: failed to load '%s'", kMusicPath);
+        return;
+    }
+
+    _backgroundMusic.looping = true;
+    SetMusicVolume(_backgroundMusic, kMusicVolume);
+    _musicLoaded = true;
+    _musicEnabled = true;
+    PlayMusicStream(_backgroundMusic);
+    TraceLog(LOG_INFO, "loadBackgroundMusic: playing '%s'", kMusicPath);
+}
+
+void Interface::unloadBackgroundMusic()
+{
+    if (_musicLoaded) {
+        StopMusicStream(_backgroundMusic);
+        UnloadMusicStream(_backgroundMusic);
+        _musicLoaded = false;
+    }
+    if (_audioReady) {
+        CloseAudioDevice();
+        _audioReady = false;
+    }
+}
+
+void Interface::toggleMusic()
+{
+    if (!_musicLoaded)
+        return;
+
+    _musicEnabled = !_musicEnabled;
+    if (_musicEnabled)
+        ResumeMusicStream(_backgroundMusic);
+    else
+        PauseMusicStream(_backgroundMusic);
+    TraceLog(LOG_INFO, "toggleMusic: music %s", _musicEnabled ? "ON" : "OFF");
+}
+
 // ---------------------------------------------------------------------------
 // Loop steps
 // ---------------------------------------------------------------------------
@@ -272,12 +366,35 @@ void Interface::handleInput()
         _camera.position.z += PAN_SPEED;
         _camera.target.z   += PAN_SPEED;
     }
+    if (IsKeyDown(KEY_SPACE)) {
+        _camera.position.y += PAN_SPEED;
+        _camera.target.y   += PAN_SPEED;
+    }
+    if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
+        _camera.position.y -= PAN_SPEED;
+        _camera.target.y   -= PAN_SPEED;
+    }
+    if (IsKeyDown(KEY_Q)) {
+        _camera.target.x   += PAN_SPEED;
+    }
+    if (IsKeyDown(KEY_E)) {
+        _camera.target.x   -= PAN_SPEED;
+    }
+    //look up and down
+    if (IsKeyDown(KEY_I)) {
+        _camera.target.y   += PAN_SPEED;
+    }
+    if (IsKeyDown(KEY_O)) { 
+        _camera.target.y   -= PAN_SPEED;
+    }
 
     // Toggle lighting on/off (B). No-op until the shader actually loaded.
     if (IsKeyPressed(KEY_B) && _lightingReady) {
         _lightingEnabled = !_lightingEnabled;
         applyLightingToModels(_lightingEnabled);
     }
+    if (isMusicTogglePressed())
+        toggleMusic();
 
     // Zoom with mouse wheel
     float wheel = GetMouseWheelMove();
@@ -286,6 +403,7 @@ void Interface::handleInput()
         if (_camera.position.y < 50.0f) _camera.position.y = 50.0f;
         if (_camera.position.y > 800.0f) _camera.position.y = 800.0f;
     }
+
 }
 
 void Interface::update()
@@ -302,7 +420,7 @@ void Interface::update()
 
 namespace {
     constexpr float kTileHeight      = 2.0f;
-    constexpr float kTileMargin      = 0.0f; // 0 = tiles touch (no seam); raise for a grid gap
+    constexpr float kTileMargin      = 0.0f;
     constexpr float kPlayerBaseSize  = TILE_SIZE * 0.4f;
     constexpr float kPlayerY         = 4.0f;
     constexpr float kPlayerHeight    = 6.0f;
@@ -310,6 +428,34 @@ namespace {
     constexpr float kItemSpacing  = TILE_SIZE * 0.22f;  // grid pitch between stacked items
 
     struct CountLabel { Vector3 worldPos; int count; Color color; };
+
+    void drawTexturedTile(Texture2D texture, float worldX, float worldZ, float size)
+    {
+        const float half = size * 0.5f;
+        const float y = kTileTopY;
+
+        rlSetTexture(texture.id);
+        rlBegin(RL_QUADS);
+            rlColor4ub(255, 255, 255, 255);
+            rlNormal3f(0.0f, 1.0f, 0.0f);
+            rlTexCoord2f(0.0f, 1.0f); rlVertex3f(worldX - half, y, worldZ - half);
+            rlTexCoord2f(0.0f, 0.0f); rlVertex3f(worldX - half, y, worldZ + half);
+            rlTexCoord2f(1.0f, 0.0f); rlVertex3f(worldX + half, y, worldZ + half);
+            rlTexCoord2f(1.0f, 1.0f); rlVertex3f(worldX + half, y, worldZ - half);
+        rlEnd();
+        rlSetTexture(0);
+    }
+
+    void drawTileOutline(float worldX, float worldZ, float size)
+    {
+        const float half = size * 0.5f;
+        const float y = kTileTopY + 0.02f;
+
+        DrawLine3D({ worldX - half, y, worldZ - half }, { worldX + half, y, worldZ - half }, BLACK);
+        DrawLine3D({ worldX + half, y, worldZ - half }, { worldX + half, y, worldZ + half }, BLACK);
+        DrawLine3D({ worldX + half, y, worldZ + half }, { worldX - half, y, worldZ + half }, BLACK);
+        DrawLine3D({ worldX - half, y, worldZ + half }, { worldX - half, y, worldZ - half }, BLACK);
+    }
 }
 
 
@@ -332,12 +478,15 @@ void Interface::render()
             float worldX = x * TILE_SIZE + TILE_SIZE / 2.0f;
             float worldZ = y * TILE_SIZE + TILE_SIZE / 2.0f;
 
-            Color tileColor = ((x + y) % 2 == 0) ? DARKGREEN : GREEN;
-            // Tiles mid-incantation glow purple until the pie result arrives.
-            if (_state.incanting.count(static_cast<long long>(y) * _map.getWidth() + x))
-                tileColor = PURPLE;
-            DrawCube({ worldX, 0.0f, worldZ }, TILE_SIZE - kTileMargin, kTileHeight, TILE_SIZE - kTileMargin, tileColor);
-            DrawCubeWires({ worldX, 0.0f, worldZ }, TILE_SIZE - kTileMargin, kTileHeight, TILE_SIZE - kTileMargin, BLACK);
+            const bool darkTile = ((x + y) % 2 == 0);
+            Texture2D tileTexture = darkTile ? _darkTileTexture : _orangeTileTexture;
+            if (tileTexture.id != 0) {
+                drawTexturedTile(tileTexture, worldX, worldZ, TILE_SIZE - kTileMargin);
+            } else {
+                DrawPlane({ worldX, kTileTopY, worldZ },
+                          { TILE_SIZE - kTileMargin, TILE_SIZE - kTileMargin }, WHITE);
+            }
+            drawTileOutline(worldX, worldZ, TILE_SIZE - kTileMargin);
 
             // Players: marker grows with headcount instead of being fixed-size.
             const int playerCount = static_cast<int>(tile.player_ids.size());
@@ -435,5 +584,9 @@ void Interface::render()
     if (_lightingReady)
         DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,
                  _lightingEnabled ? GREEN : GRAY);
+    DrawText(TextFormat("YEARS: %d", _year), 10, 75, 16, RAYWHITE);
+    DrawText(TextFormat("Music: %s", _musicEnabled && _musicLoaded ? "ON" : "OFF"), 10, 100, 16,
+             _musicEnabled && _musicLoaded ? GREEN : GRAY);
+    
     DrawFPS(GetScreenWidth() - 90, 10); 
 }

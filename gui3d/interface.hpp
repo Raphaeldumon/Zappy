@@ -60,7 +60,19 @@ private:
     bool   _lightingReady{false};  // shader compiled and bound
     bool   _lightingEnabled{true}; // user toggle (B)
 
+    // --- Audio ---
+    Music _backgroundMusic{};
+    bool  _audioReady{false};
+    bool  _musicLoaded{false};
+    bool  _musicEnabled{true};
+
+    // --- YEARS ---
+    int _year{0};
+
     // --- Assets ---
+    Texture2D _darkTileTexture{};
+    Texture2D _orangeTileTexture{};
+
     // One mesh per resource type, loaded once and drawn at every tile holding
     // that resource. The bounding box is cached so each instance can be scaled
     // to fit its grid cell and placed with its base sitting on the tile surface
@@ -89,6 +101,11 @@ private:
     void loadLighting();
     void unloadLighting();
     void applyLightingToModels(bool on); // swap model material shaders for the B toggle
+    void loadBackgroundMusic();
+    void unloadBackgroundMusic();
+    void toggleMusic();
+    void loadTileTextures();
+    void unloadTileTextures();
     void loadResourceModels();
     void unloadResourceModels();
 };
