@@ -63,6 +63,7 @@ private:
     Shader _lightShader{};
     Shader _defaultShader{};       // raylib's stock shader, to restore when toggled off
     int    _viewPosLoc{-1};
+    int    _emissiveLoc{-1};       // per-draw self-glow color (resources)
     bool   _lightingReady{false};  // shader compiled and bound
     bool   _lightingEnabled{true}; // user toggle (B)
 

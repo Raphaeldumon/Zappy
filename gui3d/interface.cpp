@@ -40,7 +40,7 @@ namespace {
     // dedicated chicken mesh; the ore types use monster meshes whose embedded
     // texture identifies the mineral.
     constexpr std::array<const char*, MAP_RESOURCE_COUNT> kResourceModelPaths = {
-        "assets/roast_chicken_HIGHRES.glb", // 0 food
+        "assets/roast_chicken.glb",         // 0 food
         "assets/monster_black.glb",         // 1 linemate
         "assets/monster_blue.glb",          // 2 deraumere
         "assets/monster_golden.glb",        // 3 sibur
@@ -49,12 +49,6 @@ namespace {
         "assets/monster_pink.glb"           // 6 thystame
     };
 
-    // Optional base-colour texture override, index-aligned with the models above.
-    // raylib only decodes PNG/JPEG when SUPPORT_FILEFORMAT_JPG is enabled, which
-    // it is NOT by default — so the chicken's embedded JPEG base colour silently
-    // fails to load and the mesh renders untextured. We ship a PNG copy of that
-    // texture and bind it manually after LoadModel. nullptr = keep the mesh's
-    // own embedded texture (the monsters use PNG and load fine).
     constexpr std::array<const char*, MAP_RESOURCE_COUNT> kResourceTextureOverrides = {
         "assets/roast_chicken_basecolor.png", // 0 food     — glb base colour is JPEG
         nullptr,                              // 1 linemate — PNG, fine
@@ -72,6 +66,19 @@ namespace {
     constexpr float kItemWidth  = TILE_SIZE * 0.16f;
     constexpr float kItemHeight = TILE_SIZE * 0.40f;
     constexpr float kFlatWidth  = TILE_SIZE * 0.40f; // footprint for flat models (roast chicken)
+
+    // Self-glow colour per resource (added emissively when lighting is on). Food
+    // (meat) doesn't glow; each mineral glows roughly its mesh tint.
+    constexpr std::array<Vector3, MAP_RESOURCE_COUNT> kResourceGlow = {{
+        { 0.00f, 0.00f, 0.00f }, // 0 food      — no glow
+        { 0.55f, 0.55f, 0.70f }, // 1 linemate  — pale white
+        { 0.20f, 0.40f, 1.00f }, // 2 deraumere — blue
+        { 1.00f, 0.80f, 0.20f }, // 3 sibur     — gold
+        { 0.20f, 1.00f, 0.30f }, // 4 mendiane  — green
+        { 0.20f, 0.90f, 0.90f }, // 5 phiras    — cyan
+        { 0.90f, 0.20f, 0.90f }, // 6 thystame  — magenta
+    }};
+    constexpr float kGlowStrength = 0.7f;
     constexpr const char* kMusicPath = "assets/music_back.mp3";
     constexpr float kMusicVolume = 0.45f;
 
@@ -269,7 +276,8 @@ void Interface::loadLighting()
         return;
     }
 
-    _viewPosLoc = GetShaderLocation(_lightShader, "viewPos");
+    _viewPosLoc  = GetShaderLocation(_lightShader, "viewPos");
+    _emissiveLoc = GetShaderLocation(_lightShader, "emissive");
 
     // Static light setup: warm sun from above, cool ambient fill.
     Vector3 toLight    = Vector3Normalize({ 0.6f, 1.0f, 0.5f }); // direction TO the light
@@ -454,19 +462,47 @@ namespace {
 
     struct CountLabel { Vector3 worldPos; int count; Color color; };
 
-    void drawTexturedTile(Texture2D texture, float worldX, float worldZ, float size)
+    // Draw every tile of one checkerboard colour in a single batch. One
+    // rlSetTexture per call (2 total for the floor) instead of one per tile, so
+    // the GPU isn't forced to flush the batch 2500x/frame on a 50x50 map.
+    // Chunked under the rlgl batch buffer so it stays correct on huge maps.
+    void drawFloorBatched(Texture2D tex, bool wantDark, int w, int h)
     {
-        const float half = size * 0.5f;
-        const float y = kTileTopY;
+        if (tex.id == 0)
+            return;
 
-        rlSetTexture(texture.id);
+        const float size = TILE_SIZE - kTileMargin;
+        const float half = size * 0.5f;
+        const float y    = kTileTopY;
+        const int   kQuadsPerBatch = 1500; // 4 verts each, well under the 8192 buffer
+
+        rlSetTexture(tex.id);
         rlBegin(RL_QUADS);
-            rlColor4ub(255, 255, 255, 255);
-            rlNormal3f(0.0f, 1.0f, 0.0f);
-            rlTexCoord2f(0.0f, 1.0f); rlVertex3f(worldX - half, y, worldZ - half);
-            rlTexCoord2f(0.0f, 0.0f); rlVertex3f(worldX - half, y, worldZ + half);
-            rlTexCoord2f(1.0f, 0.0f); rlVertex3f(worldX + half, y, worldZ + half);
-            rlTexCoord2f(1.0f, 1.0f); rlVertex3f(worldX + half, y, worldZ - half);
+        rlColor4ub(255, 255, 255, 255);
+        rlNormal3f(0.0f, 1.0f, 0.0f);
+
+        int emitted = 0;
+        for (int ty = 0; ty < h; ++ty) {
+            for (int tx = 0; tx < w; ++tx) {
+                if (((tx + ty) % 2 == 0) != wantDark)
+                    continue;
+                if (emitted >= kQuadsPerBatch) {
+                    rlEnd(); // flush, then resume (texture stays bound across this)
+                    rlBegin(RL_QUADS);
+                    rlColor4ub(255, 255, 255, 255);
+                    rlNormal3f(0.0f, 1.0f, 0.0f);
+                    emitted = 0;
+                }
+                float wx = tx * TILE_SIZE + TILE_SIZE / 2.0f;
+                float wz = ty * TILE_SIZE + TILE_SIZE / 2.0f;
+                rlTexCoord2f(0.0f, 1.0f); rlVertex3f(wx - half, y, wz - half);
+                rlTexCoord2f(0.0f, 0.0f); rlVertex3f(wx - half, y, wz + half);
+                rlTexCoord2f(1.0f, 0.0f); rlVertex3f(wx + half, y, wz + half);
+                rlTexCoord2f(1.0f, 1.0f); rlVertex3f(wx + half, y, wz - half);
+                ++emitted;
+            }
+        }
+
         rlEnd();
         rlSetTexture(0);
     }
@@ -489,28 +525,56 @@ void Interface::render()
     std::vector<CountLabel> labels;
 
     const bool lit = _lightingReady && _lightingEnabled;
-    if (lit)
+    if (lit) {
         SetShaderValue(_lightShader, _viewPosLoc, &_camera.position, SHADER_UNIFORM_VEC3);
+        Vector3 noGlow{ 0.0f, 0.0f, 0.0f };
+        SetShaderValue(_lightShader, _emissiveLoc, &noGlow, SHADER_UNIFORM_VEC3);
+    }
 
     BeginMode3D(_camera);
     // BeginShaderMode lights the immediate-mode cubes (tiles/players/fallbacks);
     // the glb models carry the same shader on their materials already.
     if (lit)
         BeginShaderMode(_lightShader);
+
+    // Floor: two batched draws (dark + orange) instead of one per tile.
+    const bool floorTextured = _darkTileTexture.id != 0 || _orangeTileTexture.id != 0;
+    if (floorTextured) {
+        drawFloorBatched(_darkTileTexture,   true,  _map.getWidth(), _map.getHeight());
+        drawFloorBatched(_orangeTileTexture, false, _map.getWidth(), _map.getHeight());
+    }
+
+    // Frustum cull: skip the expensive per-tile content (outlines, players,
+    // resource models) for tiles whose centre projects off-screen. The batched
+    // floor above stays fully drawn — it's cheap and avoids holes at the edges.
+    const Vector3 camFwd = Vector3Normalize(Vector3Subtract(_camera.target, _camera.position));
+    const float   screenW    = static_cast<float>(GetScreenWidth());
+    const float   screenH    = static_cast<float>(GetScreenHeight());
+    const float   cullMargin = 160.0f; // px slack so partly-visible edge tiles still draw
+    auto tileVisible = [&](float wx, float wz) {
+        Vector3 c{ wx, kTileTopY, wz };
+        Vector3 d{ c.x - _camera.position.x, c.y - _camera.position.y, c.z - _camera.position.z };
+        if (d.x * camFwd.x + d.y * camFwd.y + d.z * camFwd.z <= 0.0f)
+            return false; // behind the camera
+        Vector2 sp = GetWorldToScreen(c, _camera);
+        return sp.x >= -cullMargin && sp.x <= screenW + cullMargin
+            && sp.y >= -cullMargin && sp.y <= screenH + cullMargin;
+    };
+
     for (int y = 0; y < _map.getHeight(); ++y) {
         for (int x = 0; x < _map.getWidth(); ++x) {
-            const MapTile& tile = _map.getTile(x, y);
             float worldX = x * TILE_SIZE + TILE_SIZE / 2.0f;
             float worldZ = y * TILE_SIZE + TILE_SIZE / 2.0f;
 
-            const bool darkTile = ((x + y) % 2 == 0);
-            Texture2D tileTexture = darkTile ? _darkTileTexture : _orangeTileTexture;
-            if (tileTexture.id != 0) {
-                drawTexturedTile(tileTexture, worldX, worldZ, TILE_SIZE - kTileMargin);
-            } else {
+            if (!tileVisible(worldX, worldZ))
+                continue;
+
+            const MapTile& tile = _map.getTile(x, y);
+
+            // Untextured fallback only (textured floor was drawn batched above).
+            if (!floorTextured)
                 DrawPlane({ worldX, kTileTopY, worldZ },
                           { TILE_SIZE - kTileMargin, TILE_SIZE - kTileMargin }, WHITE);
-            }
             drawTileOutline(worldX, worldZ, TILE_SIZE - kTileMargin);
 
             // Players: marker grows with headcount instead of being fixed-size.
@@ -549,6 +613,14 @@ void Interface::render()
                     const bool hasModel = static_cast<size_t>(i) < _resourceModels.size()
                                         && _resourceModels[i].loaded;
 
+                    // Make this resource's instances glow their colour.
+                    if (lit && count > 0) {
+                        Vector3 glow{ kResourceGlow[i].x * kGlowStrength,
+                                      kResourceGlow[i].y * kGlowStrength,
+                                      kResourceGlow[i].z * kGlowStrength };
+                        SetShaderValue(_lightShader, _emissiveLoc, &glow, SHADER_UNIFORM_VEC3);
+                    }
+
                     for (int n = 0; n < count; ++n, ++slot) {
                         const int col = slot % cols;
                         const int row = slot / cols;
@@ -565,6 +637,12 @@ void Interface::render()
                             DrawCube({ cx, kTileTopY + s / 2.0f, cz }, s, s, s, RED);
                         }
                     }
+
+                    // Reset glow so the next resource / tile / player isn't lit up.
+                    if (lit && count > 0) {
+                        Vector3 noGlow{ 0.0f, 0.0f, 0.0f };
+                        SetShaderValue(_lightShader, _emissiveLoc, &noGlow, SHADER_UNIFORM_VEC3);
+                    }
                 }
             }
         }
@@ -577,6 +655,8 @@ void Interface::render()
             continue;
         float ex = egg.x * TILE_SIZE + TILE_SIZE / 2.0f;
         float ez = egg.y * TILE_SIZE + TILE_SIZE / 2.0f;
+        if (!tileVisible(ex, ez))
+            continue;
         DrawSphere({ ex, kTileTopY + TILE_SIZE * 0.08f, ez }, TILE_SIZE * 0.08f, BEIGE);
     }
 
