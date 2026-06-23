@@ -24,7 +24,7 @@ import time
 # Commands that move/turn or change tiles -> visible GUI events. Weighted toward
 # Forward so drones actually roam instead of spinning in place.
 MOVES = ["Forward"] * 5 + ["Right", "Left", "Look", "Inventory"]
-RESOURCES = ["food", "linemate", "deraumere", "sibur", "mendiane", "phiras", "thystame"]
+RESOURCES = ["food"]
 
 
 def run_bot(

@@ -38,16 +38,14 @@ namespace {
     // of corrupting memory at runtime.
     // One mesh per resource, index-aligned with MAP_RESOURCE_NAMES. Food has a
     // dedicated chicken mesh; the ore types use monster meshes whose embedded
-    // texture identifies the mineral. NOTE: monster_lightPink.glb is byte-
-    // identical to monster_black.glb, so phiras and linemate currently share a
-    // mesh — drop in a distinct asset to tell them apart.
+    // texture identifies the mineral.
     constexpr std::array<const char*, MAP_RESOURCE_COUNT> kResourceModelPaths = {
         "assets/roast_chicken_HIGHRES.glb", // 0 food
         "assets/monster_black.glb",         // 1 linemate
         "assets/monster_blue.glb",          // 2 deraumere
         "assets/monster_golden.glb",        // 3 sibur
         "assets/monster_green.glb",         // 4 mendiane
-        "assets/monster_lightPink.glb",     // 5 phiras
+        "assets/monster_zero_ultra.glb",    // 5 phiras (was monster_lightPink, dup of linemate)
         "assets/monster_pink.glb"           // 6 thystame
     };
 
@@ -228,15 +226,32 @@ void Interface::unloadTileTextures()
 
 void Interface::initCamera()
 {
-    // Isometric-ish top-down view centered on the map.
+    // Pivot on the map centre; eye derived from yaw/pitch/distance.
     float centerX = (_map.getWidth()  * TILE_SIZE) / 2.0f;
     float centerZ = (_map.getHeight() * TILE_SIZE) / 2.0f;
+    float span    = std::max(_map.getWidth(), _map.getHeight()) * TILE_SIZE;
 
-    _camera.position   = { centerX, 300.0f, centerZ + 200.0f }; // eye
-    _camera.target     = { centerX, 0.0f,   centerZ };           // look-at
-    _camera.up         = { 0.0f,    1.0f,   0.0f };              // world up
+    _camera.target     = { centerX, 0.0f, centerZ };
+    _camera.up         = { 0.0f, 1.0f, 0.0f };
     _camera.fovy       = 45.0f;
     _camera.projection = CAMERA_PERSPECTIVE;
+
+    _camYaw   = 0.0f;
+    _camPitch = 60.0f * DEG2RAD; // looking down at a comfortable angle
+    _camDist  = span * 1.1f;     // whole map in view
+    updateCameraPosition();
+}
+
+void Interface::updateCameraPosition()
+{
+    // Spherical offset around the pivot. pitch is the eye's angle above the
+    // ground; yaw rotates around the vertical axis.
+    float cp = std::cos(_camPitch);
+    _camera.position = {
+        _camera.target.x + _camDist * cp * std::sin(_camYaw),
+        _camera.target.y + _camDist * std::sin(_camPitch),
+        _camera.target.z + _camDist * cp * std::cos(_camYaw),
+    };
 }
 
 void Interface::loadLighting()
@@ -347,46 +362,61 @@ void Interface::toggleMusic()
 // ---------------------------------------------------------------------------
 void Interface::handleInput()
 {
-    // Camera pan with arrow keys / WASD
-    const float PAN_SPEED = 4.0f;
+    const float dt = GetFrameTime();
 
-    if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) {
-        _camera.position.x += PAN_SPEED;
-        _camera.target.x   += PAN_SPEED;
+    // Ground-plane basis derived from the current yaw, so panning always moves
+    // relative to where the camera looks (W = into the screen, D = screen-right).
+    const float s = std::sin(_camYaw);
+    const float c = std::cos(_camYaw);
+    const Vector3 forward = { -s, 0.0f, -c }; // eye -> pivot, projected on ground
+    const Vector3 right   = {  c, 0.0f, -s };
+
+    // Pan speed scales with zoom so it feels constant on screen.
+    const float panSpeed   = _camDist * 0.8f * dt;
+    const float rotSpeed   = 1.6f * dt;
+    const float pitchSpeed = 1.3f * dt;
+
+    auto panBy = [&](Vector3 dir, float amt) {
+        _camera.target.x += dir.x * amt;
+        _camera.target.z += dir.z * amt;
+    };
+
+    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    panBy(forward,  panSpeed);
+    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  panBy(forward, -panSpeed);
+    if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) panBy(right,    panSpeed);
+    if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))  panBy(right,   -panSpeed);
+
+    // Yaw (orbit) with Q/E.
+    if (IsKeyDown(KEY_Q)) _camYaw -= rotSpeed;
+    if (IsKeyDown(KEY_E)) _camYaw += rotSpeed;
+
+    // Pitch with R/F, clamped so the eye never flips under/over the map.
+    if (IsKeyDown(KEY_R)) _camPitch += pitchSpeed;
+    if (IsKeyDown(KEY_F)) _camPitch -= pitchSpeed;
+
+    // Right-drag to orbit (yaw + pitch) for fast aiming.
+    if (IsMouseButtonDown(MOUSE_BUTTON_RIGHT)) {
+        Vector2 d = GetMouseDelta();
+        _camYaw   += d.x * 0.005f;
+        _camPitch -= d.y * 0.005f;
     }
-    if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) {
-        _camera.position.x -= PAN_SPEED;
-        _camera.target.x   -= PAN_SPEED;
+
+    // Keep pitch within a sane band (~9deg .. ~85deg above the ground).
+    const float minPitch = 0.16f, maxPitch = 1.48f;
+    if (_camPitch < minPitch) _camPitch = minPitch;
+    if (_camPitch > maxPitch) _camPitch = maxPitch;
+
+    // Zoom with the wheel; distance bounded to the map scale.
+    float wheel = GetMouseWheelMove();
+    if (wheel != 0.0f) {
+        _camDist *= (1.0f - wheel * 0.1f);
+        float span = std::max(_map.getWidth(), _map.getHeight()) * TILE_SIZE;
+        float minD = TILE_SIZE * 1.5f, maxD = span * 3.0f;
+        if (_camDist < minD) _camDist = minD;
+        if (_camDist > maxD) _camDist = maxD;
     }
-    if (IsKeyDown(KEY_UP) || IsKeyDown(KEY_W)) {
-        _camera.position.z -= PAN_SPEED;
-        _camera.target.z   -= PAN_SPEED;
-    }
-    if (IsKeyDown(KEY_DOWN) || IsKeyDown(KEY_S)) {
-        _camera.position.z += PAN_SPEED;
-        _camera.target.z   += PAN_SPEED;
-    }
-    if (IsKeyDown(KEY_SPACE)) {
-        _camera.position.y += PAN_SPEED;
-        _camera.target.y   += PAN_SPEED;
-    }
-    if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
-        _camera.position.y -= PAN_SPEED;
-        _camera.target.y   -= PAN_SPEED;
-    }
-    if (IsKeyDown(KEY_Q)) {
-        _camera.target.x   += PAN_SPEED;
-    }
-    if (IsKeyDown(KEY_E)) {
-        _camera.target.x   -= PAN_SPEED;
-    }
-    //look up and down
-    if (IsKeyDown(KEY_I)) {
-        _camera.target.y   += PAN_SPEED;
-    }
-    if (IsKeyDown(KEY_O)) { 
-        _camera.target.y   -= PAN_SPEED;
-    }
+
+    updateCameraPosition();
 
     // Toggle lighting on/off (B). No-op until the shader actually loaded.
     if (IsKeyPressed(KEY_B) && _lightingReady) {
@@ -396,14 +426,9 @@ void Interface::handleInput()
     if (isMusicTogglePressed())
         toggleMusic();
 
-    // Zoom with mouse wheel
-    float wheel = GetMouseWheelMove();
-    if (wheel != 0.0f) {
-        _camera.position.y -= wheel * 15.0f;
-        if (_camera.position.y < 50.0f) _camera.position.y = 50.0f;
-        if (_camera.position.y > 800.0f) _camera.position.y = 800.0f;
-    }
-
+    // Left-click selects a tile (off-board click clears the selection).
+    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT))
+        pickTile();
 }
 
 void Interface::update()
@@ -557,6 +582,10 @@ void Interface::render()
 
     if (lit)
         EndShaderMode();
+
+    // Selection highlight drawn unlit so it stays bright regardless of lighting.
+    drawSelectionHighlight();
+
     EndMode3D();
 
     // Player head-count labels, projected to screen space now that we're out
@@ -581,13 +610,131 @@ void Interface::render()
                  GetScreenWidth() / 2 - 140, GetScreenHeight() / 2 - 20, 40, GOLD);
     
     DrawText(TextFormat("Map: %dx%d", _map.getWidth(), _map.getHeight()), 10, 10, 20, RAYWHITE);
-    DrawText("WASD / Arrows: pan   |   I/O: look up/down   |   A/E: look left/right   |   CTRL/SPACE: go up/down   |   Scroll: zoom   |   B: lighting", 10, 35, 16, LIGHTGRAY);
+    DrawText("ZQSD/Arrows: pan  |  A/E: orbit  |  R/F: tilt  |  RMB-drag: look  |  Wheel: zoom  |  LMB: pick  |  B: light  |  M: music",
+             10, 35, 16, LIGHTGRAY);
     if (_lightingReady)
         DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,
                  _lightingEnabled ? GREEN : GRAY);
     DrawText(TextFormat("YEARS: %d", _year), 10, 75, 16, RAYWHITE);
     DrawText(TextFormat("Music: %s", _musicEnabled && _musicLoaded ? "ON" : "OFF"), 10, 100, 16,
              _musicEnabled && _musicLoaded ? GREEN : GRAY);
-    
-    DrawFPS(GetScreenWidth() - 90, 10); 
+    DrawText(TextFormat("Selected: %d,%d", _selectedX, _selectedY), 10, 125, 16,
+             _selectedX >= 0 ? GOLD : GRAY);
+
+    drawTileInfoPanel();
+
+    DrawFPS(GetScreenWidth() - 90, 10);
+}
+
+// ---------------------------------------------------------------------------
+// Selection
+// ---------------------------------------------------------------------------
+void Interface::pickTile()
+{
+    Ray ray = GetScreenToWorldRay(GetMousePosition(), _camera);
+    if (std::fabs(ray.direction.y) < 1e-6f)
+        return; // ray parallel to the ground, no hit
+
+    // Intersect the tile-top plane y = kTileTopY.
+    float t = (kTileTopY - ray.position.y) / ray.direction.y;
+    if (t < 0.0f) {
+        _selectedX = _selectedY = -1; // plane is behind the camera
+        return;
+    }
+
+    float hx = ray.position.x + ray.direction.x * t;
+    float hz = ray.position.z + ray.direction.z * t;
+    int   tx = static_cast<int>(std::floor(hx / TILE_SIZE));
+    int   ty = static_cast<int>(std::floor(hz / TILE_SIZE));
+
+    if (tx >= 0 && ty >= 0 && tx < _map.getWidth() && ty < _map.getHeight()) {
+        _selectedX = tx;
+        _selectedY = ty;
+    } else {
+        _selectedX = _selectedY = -1; // clicked off the board -> deselect
+    }
+}
+
+void Interface::drawSelectionHighlight()
+{
+    if (_selectedX < 0 || _selectedY < 0)
+        return;
+
+    float wx   = _selectedX * TILE_SIZE + TILE_SIZE / 2.0f;
+    float wz   = _selectedY * TILE_SIZE + TILE_SIZE / 2.0f;
+    float size = TILE_SIZE - kTileMargin;
+    float half = size * 0.5f;
+
+    // Translucent overlay + bright gold border just above the tile surface.
+    DrawCube({ wx, kTileTopY + 0.15f, wz }, size, 0.3f, size, Color{ 255, 230, 0, 70 });
+
+    float    y = kTileTopY + 0.35f;
+    Vector3  a = { wx - half, y, wz - half };
+    Vector3  b = { wx + half, y, wz - half };
+    Vector3  c = { wx + half, y, wz + half };
+    Vector3  d = { wx - half, y, wz + half };
+    DrawLine3D(a, b, GOLD);
+    DrawLine3D(b, c, GOLD);
+    DrawLine3D(c, d, GOLD);
+    DrawLine3D(d, a, GOLD);
+}
+
+void Interface::drawTileInfoPanel()
+{
+    if (_selectedX < 0 || _selectedY < 0)
+        return;
+
+    const MapTile& tile = _map.getTile(_selectedX, _selectedY);
+
+    // Build the lines first so the panel can size itself.
+    std::vector<std::pair<std::string, Color>> lines;
+    lines.push_back({ TextFormat("Tile (%d, %d)", _selectedX, _selectedY), GOLD });
+
+    int totalRes = 0;
+    for (int i = 0; i < MAP_RESOURCE_COUNT; ++i) {
+        int q = tile.resources[i];
+        totalRes += q;
+        if (q > 0)
+            lines.push_back({ TextFormat("%-9s %d", std::string(MAP_RESOURCE_NAMES[i]).c_str(), q), RAYWHITE });
+    }
+    if (totalRes == 0)
+        lines.push_back({ "(no resources)", GRAY });
+
+    // Players standing on the tile, enriched with level/team from the registry.
+    lines.push_back({ TextFormat("Players: %d", static_cast<int>(tile.player_ids.size())), SKYBLUE });
+    for (std::uint32_t pid : tile.player_ids) {
+        auto it = _state.players.find(pid);
+        if (it != _state.players.end())
+            lines.push_back({ TextFormat("  #%u  lvl %d  %s", pid, it->second.getLevel(),
+                                         it->second.getTeam().c_str()), LIGHTGRAY });
+        else
+            lines.push_back({ TextFormat("  #%u", pid), LIGHTGRAY });
+    }
+
+    // Eggs on this tile.
+    int eggs = 0;
+    for (const auto& [eid, egg] : _state.eggs) {
+        (void)eid;
+        if (egg.x == _selectedX && egg.y == _selectedY)
+            ++eggs;
+    }
+    if (eggs > 0)
+        lines.push_back({ TextFormat("Eggs: %d", eggs), BEIGE });
+
+    // Panel geometry: top-right.
+    const int pad    = 10;
+    const int lineH  = 18;
+    const int width  = 220;
+    const int height = pad * 2 + static_cast<int>(lines.size()) * lineH;
+    const int px     = GetScreenWidth() - width - 10;
+    const int py     = 120;
+
+    DrawRectangle(px, py, width, height, Color{ 0, 0, 0, 180 });
+    DrawRectangleLines(px, py, width, height, GOLD);
+
+    int ty = py + pad;
+    for (const auto& [text, color] : lines) {
+        DrawText(text.c_str(), px + pad, ty, 14, color);
+        ty += lineH;
+    }
 }

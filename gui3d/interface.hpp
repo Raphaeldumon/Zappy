@@ -46,8 +46,14 @@ private:
     RaylibEngine _engine;
     GameMap      _map;
 
-    // --- Camera ---
+    // --- Camera (orbit model) ---
+    // The camera orbits a ground pivot (_camera.target). Its eye position is
+    // derived every frame from yaw/pitch/distance, so all controls just nudge
+    // these three scalars + the pivot — no more position/target drift.
     Camera3D _camera;
+    float    _camYaw{0.0f};   // radians, rotation around the vertical axis
+    float    _camPitch{0.0f}; // radians above the horizon (clamped)
+    float    _camDist{0.0f};  // eye-to-pivot distance (zoom)
 
     // --- Lighting ---
     // One directional light + ambient term, applied to both the glb models
@@ -91,13 +97,25 @@ private:
     ProtocolParser             _parser;  // applies wire lines to _map + _state
     GuiState                   _state;   // players, eggs, teams, winner
 
+    // --- Selection ---
+    // Tile picked by left-click; (-1,-1) = nothing selected. Drives the 3D
+    // highlight and the top-right info panel.
+    int _selectedX{-1};
+    int _selectedY{-1};
+
     // --- Internal loop steps ---
     void handleInput();
     void update();
     void render();
 
+    // --- Selection ---
+    void pickTile();           // left-click ray -> _selectedX/_selectedY
+    void drawSelectionHighlight(); // 3D outline on the picked tile (call inside Mode3D)
+    void drawTileInfoPanel();  // 2D info panel, top-right (call outside Mode3D)
+
     // --- Helpers ---
     void initCamera();
+    void updateCameraPosition(); // recompute eye from yaw/pitch/dist around target
     void loadLighting();
     void unloadLighting();
     void applyLightingToModels(bool on); // swap model material shaders for the B toggle
