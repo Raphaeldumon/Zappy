@@ -332,7 +332,15 @@ void Interface::handleInput()
 
 void Interface::update()
 {
-    // Game logic / network tick goes here.
+    static float yearTimer = 0.0f;
+    constexpr float YEAR_DURATION = 10.0f; // 1 year every 5 seconds
+
+    yearTimer += GetFrameTime();
+
+    if (yearTimer >= YEAR_DURATION) {
+        _year++;
+        yearTimer -= YEAR_DURATION;
+    }
 }
 
 
@@ -479,5 +487,7 @@ void Interface::render()
     if (_lightingReady)
         DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,
                  _lightingEnabled ? GREEN : GRAY);
+    DrawText(TextFormat("YEARS: %d", _year), 10, 75, 16, RAYWHITE);
+    
     DrawFPS(GetScreenWidth() - 90, 10); 
 }

@@ -54,6 +54,10 @@ private:
     bool   _lightingReady{false};  // shader compiled and bound
     bool   _lightingEnabled{true}; // user toggle (B)
 
+
+    // --- YEARS ---
+    int _year{0};
+
     // --- Assets ---
     Texture2D _darkTileTexture{};
     Texture2D _orangeTileTexture{};
