@@ -1,3 +1,5 @@
+#pragma once
+
 #include <cstdint>
 #include <string>
 
@@ -22,7 +24,7 @@ private:
     bool alive{true};
 public:
     aiPlayer(std::uint32_t id, const std::string& team, int x, int y, Orientation orientation) : _id(id), _team(team), x(x), y(y), orientation(orientation) {};
-    ~aiPlayer();
+    ~aiPlayer() = default;
     void changePosition(int newX, int newY) {
         x = newX;
         y = newY;

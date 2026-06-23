@@ -41,8 +41,8 @@ long long tileKey(const GameMap& map, int x, int y)
 void unmirror(GameMap& map, GuiState& state, std::uint32_t id)
 {
     auto it = state.players.find(id);
-    if (it != state.players.end() && inBounds(map, it->second.x, it->second.y))
-        map.removePlayerFromTile(it->second.x, it->second.y, id);
+    if (it != state.players.end() && inBounds(map, it->second.getX(), it->second.getY()))
+        map.removePlayerFromTile(it->second.getX(), it->second.getY(), id);
 }
 
 } // namespace
@@ -88,7 +88,12 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         if (!(iss >> idtok >> x >> y >> o >> l >> team) || !parseId(idtok, id))
             return;
         unmirror(map, state, id); // in case of a stale entry
-        state.players[id] = PlayerInfo{x, y, o, l, team};
+        // aiPlayer has const id/team and no assignment, so replace by erase+emplace.
+        state.players.erase(id);
+        auto [it, ok] = state.players.emplace(
+            id, aiPlayer(id, team, x, y, static_cast<Orientation>(o)));
+        if (ok)
+            it->second.setLevel(l);
         if (inBounds(map, x, y))
             map.addPlayerToTile(x, y, id);
         return;
@@ -100,9 +105,12 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         std::uint32_t id;
         if (!(iss >> idtok >> x >> y >> o) || !parseId(idtok, id))
             return;
+        auto it = state.players.find(id);
+        if (it == state.players.end())
+            return; // unknown player; a pnw will define it
         unmirror(map, state, id);
-        auto& p = state.players[id]; // create if unknown (defensive)
-        p.x = x; p.y = y; p.orient = o;
+        it->second.changePosition(x, y);
+        it->second.changeOrientation(static_cast<Orientation>(o));
         if (inBounds(map, x, y))
             map.addPlayerToTile(x, y, id);
         return;
@@ -116,7 +124,7 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
             return;
         auto it = state.players.find(id);
         if (it != state.players.end())
-            it->second.level = l;
+            it->second.setLevel(l);
         return;
     }
 
