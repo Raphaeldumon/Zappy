@@ -560,7 +560,7 @@ void Interface::render()
     }
 
     DrawText(TextFormat("Map: %dx%d", _map.getWidth(), _map.getHeight()), 10, 10, 20, RAYWHITE);
-    DrawText("WASD / Arrows: pan   |   Scroll: zoom   |   B: lighting   |   M: music", 10, 35, 16, LIGHTGRAY);
+    DrawText("WASD / Arrows: pan   |   I/O: look up/down   |   A/E: look left/right   |   CTRL/SPACE: go up/down   |   Scroll: zoom   |   B: lighting", 10, 35, 16, LIGHTGRAY);
     if (_lightingReady)
         DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,
                  _lightingEnabled ? GREEN : GRAY);
