@@ -55,6 +55,9 @@ private:
     bool   _lightingEnabled{true}; // user toggle (B)
 
     // --- Assets ---
+    Texture2D _darkTileTexture{};
+    Texture2D _orangeTileTexture{};
+
     // One mesh per resource type, loaded once and drawn at every tile holding
     // that resource. The bounding box is cached so each instance can be scaled
     // to fit its grid cell and placed with its base sitting on the tile surface
@@ -78,6 +81,8 @@ private:
     void loadLighting();
     void unloadLighting();
     void applyLightingToModels(bool on); // swap model material shaders for the B toggle
+    void loadTileTextures();
+    void unloadTileTextures();
     void loadResourceModels();
     void unloadResourceModels();
 };

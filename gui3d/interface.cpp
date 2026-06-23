@@ -1,5 +1,6 @@
 #include "interface.hpp"
 #include "raymath.h"
+#include "rlgl.h"
 
 #include <algorithm>
 #include <cmath>
@@ -13,6 +14,7 @@ Interface::Interface(int mapWidth, int mapHeight, int windowWidth, int windowHei
 {
     initCamera();
     loadLighting();       // before models: they bind this shader to their materials
+    loadTileTextures();
     loadResourceModels(); // needs the GL context, so after the engine init
 }
 
@@ -21,6 +23,7 @@ Interface::~Interface()
     // Member destruction runs after this body, so the GL context (owned by
     // _engine) is still alive here — safe to free GPU resources.
     unloadResourceModels();
+    unloadTileTextures();
     unloadLighting();
 }
 
@@ -185,6 +188,25 @@ void Interface::unloadResourceModels()
     _resourceModels.clear();
 }
 
+void Interface::loadTileTextures()
+{
+    _darkTileTexture = LoadTexture("assets/sol_dark.png");
+    if (_darkTileTexture.id == 0)
+        TraceLog(LOG_WARNING, "loadTileTextures: failed to load assets/sol_dark.png");
+
+    _orangeTileTexture = LoadTexture("assets/sol_orange.png");
+    if (_orangeTileTexture.id == 0)
+        TraceLog(LOG_WARNING, "loadTileTextures: failed to load assets/sol_orange.png");
+}
+
+void Interface::unloadTileTextures()
+{
+    if (_darkTileTexture.id != 0)
+        UnloadTexture(_darkTileTexture);
+    if (_orangeTileTexture.id != 0)
+        UnloadTexture(_orangeTileTexture);
+}
+
 void Interface::initCamera()
 {
     // Isometric-ish top-down view centered on the map.
@@ -295,7 +317,7 @@ void Interface::update()
 
 namespace {
     constexpr float kTileHeight      = 2.0f;
-    constexpr float kTileMargin      = 2.0f;
+    constexpr float kTileMargin      = 0.0f;
     constexpr float kPlayerBaseSize  = TILE_SIZE * 0.4f;
     constexpr float kPlayerY         = 4.0f;
     constexpr float kPlayerHeight    = 6.0f;
@@ -303,6 +325,34 @@ namespace {
     constexpr float kItemSpacing  = TILE_SIZE * 0.22f;  // grid pitch between stacked items
 
     struct CountLabel { Vector3 worldPos; int count; Color color; };
+
+    void drawTexturedTile(Texture2D texture, float worldX, float worldZ, float size)
+    {
+        const float half = size * 0.5f;
+        const float y = kTileTopY;
+
+        rlSetTexture(texture.id);
+        rlBegin(RL_QUADS);
+            rlColor4ub(255, 255, 255, 255);
+            rlNormal3f(0.0f, 1.0f, 0.0f);
+            rlTexCoord2f(0.0f, 1.0f); rlVertex3f(worldX - half, y, worldZ - half);
+            rlTexCoord2f(0.0f, 0.0f); rlVertex3f(worldX - half, y, worldZ + half);
+            rlTexCoord2f(1.0f, 0.0f); rlVertex3f(worldX + half, y, worldZ + half);
+            rlTexCoord2f(1.0f, 1.0f); rlVertex3f(worldX + half, y, worldZ - half);
+        rlEnd();
+        rlSetTexture(0);
+    }
+
+    void drawTileOutline(float worldX, float worldZ, float size)
+    {
+        const float half = size * 0.5f;
+        const float y = kTileTopY + 0.02f;
+
+        DrawLine3D({ worldX - half, y, worldZ - half }, { worldX + half, y, worldZ - half }, BLACK);
+        DrawLine3D({ worldX + half, y, worldZ - half }, { worldX + half, y, worldZ + half }, BLACK);
+        DrawLine3D({ worldX + half, y, worldZ + half }, { worldX - half, y, worldZ + half }, BLACK);
+        DrawLine3D({ worldX - half, y, worldZ + half }, { worldX - half, y, worldZ - half }, BLACK);
+    }
 }
 
 
@@ -325,9 +375,15 @@ void Interface::render()
             float worldX = x * TILE_SIZE + TILE_SIZE / 2.0f;
             float worldZ = y * TILE_SIZE + TILE_SIZE / 2.0f;
 
-            Color tileColor = ((x + y) % 2 == 0) ? DARKGREEN : GREEN;
-            DrawCube({ worldX, 0.0f, worldZ }, TILE_SIZE - kTileMargin, kTileHeight, TILE_SIZE - kTileMargin, tileColor);
-            DrawCubeWires({ worldX, 0.0f, worldZ }, TILE_SIZE - kTileMargin, kTileHeight, TILE_SIZE - kTileMargin, BLACK);
+            const bool darkTile = ((x + y) % 2 == 0);
+            Texture2D tileTexture = darkTile ? _darkTileTexture : _orangeTileTexture;
+            if (tileTexture.id != 0) {
+                drawTexturedTile(tileTexture, worldX, worldZ, TILE_SIZE - kTileMargin);
+            } else {
+                DrawPlane({ worldX, kTileTopY, worldZ },
+                          { TILE_SIZE - kTileMargin, TILE_SIZE - kTileMargin }, WHITE);
+            }
+            drawTileOutline(worldX, worldZ, TILE_SIZE - kTileMargin);
 
             // Players: marker grows with headcount instead of being fixed-size.
             const int playerCount = static_cast<int>(tile.player_ids.size());
