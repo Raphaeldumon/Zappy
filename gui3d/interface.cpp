@@ -7,9 +7,10 @@
 // ---------------------------------------------------------------------------
 // Constructor
 // ---------------------------------------------------------------------------
-Interface::Interface(int mapWidth, int mapHeight, int windowWidth, int windowHeight)
+Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight, int windowWidth, int windowHeight)
     : _engine(windowWidth, windowHeight, std::string(WINDOW_TITLE))
     , _map(mapWidth, mapHeight)
+    , _net(std::move(net))
 {
     initCamera();
     loadLighting();       // before models: they bind this shader to their materials
@@ -289,13 +290,19 @@ void Interface::handleInput()
 
 void Interface::update()
 {
-    // Game logic / network tick goes here.
+    // Drain whatever the server pushed since last frame and fold it into the
+    // world model. Non-blocking; a closed connection just yields no lines (the
+    // window stays open so the final state / winner banner remains visible).
+    if (_net) {
+        for (const auto& line : _net->poll())
+            _parser.apply(line, _map, _state);
+    }
 }
 
 
 namespace {
     constexpr float kTileHeight      = 2.0f;
-    constexpr float kTileMargin      = 2.0f;
+    constexpr float kTileMargin      = 0.0f; // 0 = tiles touch (no seam); raise for a grid gap
     constexpr float kPlayerBaseSize  = TILE_SIZE * 0.4f;
     constexpr float kPlayerY         = 4.0f;
     constexpr float kPlayerHeight    = 6.0f;
@@ -326,6 +333,9 @@ void Interface::render()
             float worldZ = y * TILE_SIZE + TILE_SIZE / 2.0f;
 
             Color tileColor = ((x + y) % 2 == 0) ? DARKGREEN : GREEN;
+            // Tiles mid-incantation glow purple until the pie result arrives.
+            if (_state.incanting.count(static_cast<long long>(y) * _map.getWidth() + x))
+                tileColor = PURPLE;
             DrawCube({ worldX, 0.0f, worldZ }, TILE_SIZE - kTileMargin, kTileHeight, TILE_SIZE - kTileMargin, tileColor);
             DrawCubeWires({ worldX, 0.0f, worldZ }, TILE_SIZE - kTileMargin, kTileHeight, TILE_SIZE - kTileMargin, BLACK);
 
@@ -385,6 +395,17 @@ void Interface::render()
             }
         }
     }
+
+    // Eggs: small cream spheres resting on the tile surface.
+    for (const auto& [id, egg] : _state.eggs) {
+        (void)id;
+        if (egg.x < 0 || egg.y < 0 || egg.x >= _map.getWidth() || egg.y >= _map.getHeight())
+            continue;
+        float ex = egg.x * TILE_SIZE + TILE_SIZE / 2.0f;
+        float ez = egg.y * TILE_SIZE + TILE_SIZE / 2.0f;
+        DrawSphere({ ex, kTileTopY + TILE_SIZE * 0.08f, ez }, TILE_SIZE * 0.08f, BEIGE);
+    }
+
     if (lit)
         EndShaderMode();
     EndMode3D();
@@ -397,7 +418,19 @@ void Interface::render()
                  static_cast<int>(screenPos.x), static_cast<int>(screenPos.y), 14, label.color);
     }
 
-    DrawText(TextFormat("Map: %dx%d", _map.getWidth(), _map.getHeight()), 10, 10, 20, RAYWHITE);
+    DrawText(TextFormat("Map: %dx%d   Teams: %d   Freq: %d   Players: %d",
+                        _map.getWidth(), _map.getHeight(),
+                        static_cast<int>(_state.teams.size()), _state.frequency,
+                        static_cast<int>(_state.players.size())),
+             10, 10, 20, RAYWHITE);
+
+    if (_net && _net->closed())
+        DrawText("disconnected", GetScreenWidth() / 2 - 70, 10, 20, RED);
+
+    if (_state.hasWinner)
+        DrawText(TextFormat("WINNER: %s", _state.winner.c_str()),
+                 GetScreenWidth() / 2 - 140, GetScreenHeight() / 2 - 20, 40, GOLD);
+
     DrawText("WASD / Arrows: pan   |   Scroll: zoom   |   B: lighting", 10, 35, 16, LIGHTGRAY);
     if (_lightingReady)
         DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,

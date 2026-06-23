@@ -2,7 +2,11 @@
 
 #include "raylibWrapper.hpp"
 #include "gameMap.hpp"
+#include "guiState.hpp"
+#include "netClient.hpp"
+#include "protocolParser.hpp"
 #include <array>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -17,7 +21,9 @@ inline constexpr float TILE_SIZE = 64.0f;
 
 class Interface {
 public:
-    Interface(int mapWidth, int mapHeight,
+    // Takes ownership of a NetClient that is already connected and past the
+    // GRAPHIC handshake; mapWidth/mapHeight come from the server's msz.
+    Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight,
               int windowWidth  = DEFAULT_WINDOW_WIDTH,
               int windowHeight = DEFAULT_WINDOW_HEIGHT);
     ~Interface();
@@ -67,6 +73,11 @@ private:
         bool    loaded{false};
     };
     std::vector<ResourceModel> _resourceModels{};
+
+    // --- Networking ---
+    std::unique_ptr<NetClient> _net;     // live server connection (post-handshake)
+    ProtocolParser             _parser;  // applies wire lines to _map + _state
+    GuiState                   _state;   // players, eggs, teams, winner
 
     // --- Internal loop steps ---
     void handleInput();
