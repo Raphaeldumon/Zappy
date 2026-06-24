@@ -791,7 +791,7 @@ void Interface::render()
                  GetScreenWidth() / 2 - 140, GetScreenHeight() / 2 - 20, 40, GOLD);
     
     DrawText(TextFormat("Map: %dx%d", _map.getWidth(), _map.getHeight()), 10, 10, 20, RAYWHITE);
-    DrawText("ZQSD/Arrows: pan  |  A/E: orbit  |  R/F: tilt  |  RMB-drag: look  |  Wheel: zoom  |  LMB: pick  |  B: light  |  M: music  |  Raph = grossepute",
+    DrawText("ZQSD/Arrows: pan  |  A/E: orbit  |  R/F: tilt  |  RMB-drag: look  |  Wheel: zoom  |  LMB: pick  |  B: light  |  M: music",
              10, 35, 16, LIGHTGRAY);
     if (_lightingReady)
         DrawText(TextFormat("Lighting: %s", _lightingEnabled ? "ON" : "OFF"), 10, 55, 16,
