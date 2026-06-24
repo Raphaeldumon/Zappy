@@ -1,8 +1,12 @@
 #include "runtime/parse_args.hpp"
 
+#include "runtime/limits.hpp"
+
+#include <algorithm>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 
 namespace zappy::runtime
 {
@@ -23,8 +27,6 @@ std::string usage(const char *prog)
 
 namespace
 {
-
-inline constexpr int MAX_CLIENTS_PER_TEAM = 100;
 
 struct RequiredOptions
 {
@@ -76,7 +78,24 @@ void parse_team_names(int argc, char **argv, int &index, ServerArgs &args)
 {
     while (index + 1 < argc && !is_option(argv[index + 1]))
     {
-        args.teams.emplace_back(argv[++index]);
+        std::string name = argv[++index];
+        if (name.empty())
+        {
+            throw std::invalid_argument("team name must not be empty");
+        }
+        if (name == "GRAPHIC")
+        {
+            throw std::invalid_argument("team name 'GRAPHIC' is reserved for the GUI");
+        }
+        if (std::find(args.teams.begin(), args.teams.end(), name) != args.teams.end())
+        {
+            throw std::invalid_argument("duplicate team name: '" + name + "'");
+        }
+        if (static_cast<int>(args.teams.size()) >= MAX_TEAMS)
+        {
+            throw std::invalid_argument("too many teams: at most " + std::to_string(MAX_TEAMS) + " allowed");
+        }
+        args.teams.push_back(std::move(name));
     }
     if (args.teams.empty())
     {

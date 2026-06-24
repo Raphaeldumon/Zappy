@@ -1,0 +1,33 @@
+# Integration scenario — basic game smoke.
+# Schema documented in docs/04_quality/02_testing_strategy.md.
+#
+# The runner (tools/run_integration.sh -> tools/run_integration.py) launches the
+# server, connects a GUI capture client + fake-AI drones, runs for the duration,
+# then checks the listed expectations.
+#
+# NOTE: assertions that need a *real* (winning) AI — e.g. any_team_wins — are not
+# checked by the fake random-walk AI; the runner reports them as SKIP, not FAIL,
+# so this stays meaningful until the real zappy_ai lands.
+name: basic_game
+
+server:
+  width: 10
+  height: 10
+  teams: [red, blue]
+  clients_per_team: 4
+  f: 1000          # high frequency so the short run exercises many ticks
+
+ai:
+  - { team: red, count: 3, policy: rule-based }
+  - { team: blue, count: 3, policy: rule-based }
+
+max_duration_sec: 6
+
+expectations:
+  - no_crashes                       # server still alive at the end
+  - gui_handshake_ok                 # GUI got msz + map snapshot
+  - all_actions_acknowledged_in_time # every AI command got ok/ko
+  - players_spawned                  # pnw seen for the connected drones
+  - protocol_clean                   # GUI never received suc/sbp, parser saw no unknown tags
+  - respawn_diffs_only               # respawn pushes only changed tiles, not the whole map
+  - any_team_wins                    # SKIP with fake AI (no incantation strategy)

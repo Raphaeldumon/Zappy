@@ -3,6 +3,7 @@
 #include "core/game_rules.hpp"
 #include "protocol/gui_emitter.hpp"
 #include "protocol/handshake.hpp"
+#include "runtime/limits.hpp"
 #include "zappy/protocol/ai_protocol.hpp"
 
 #include <chrono>
@@ -45,12 +46,7 @@ void Server::run()
 
         scheduler_.advance_to(now_ticks());
         net_.poll_once(ms_until_next_event());
-
-        if (auto winner = world_.check_win())
-        {
-            net_.broadcast_gui(protocol::GuiEmitter::seg(world_.team_name(*winner)));
-            running_ = false;
-        }
+        announce_win_if_over();
     }
 }
 
@@ -72,10 +68,10 @@ void Server::init_world()
 void Server::schedule_resource_respawn()
 {
     scheduler_.schedule(now_ticks() + 20, [this]() {
-        world_.respawn_resources();
-        for (int y = 0; y < world_.height(); ++y)
-            for (int x = 0; x < world_.width(); ++x)
-                net_.broadcast_gui(protocol::GuiEmitter::bct(x, y, world_.at(x, y).resources));
+        // Push bct only for the tiles respawn actually changed (subject: avoid
+        // re-broadcasting the whole map every cycle).
+        for (auto [x, y] : world_.respawn_resources())
+            net_.broadcast_gui(protocol::GuiEmitter::bct(x, y, world_.at(x, y).resources));
         schedule_resource_respawn();
     });
 }
@@ -107,7 +103,14 @@ void Server::schedule_food_consumption(core::PlayerId id)
 
 void Server::on_client_connect(int fd)
 {
-    net_.send_to(fd, std::string(protocol::ai::WELCOME));
+    // Guard the fd budget: refuse once we're at the hard ceiling. The fd was
+    // just accepted, so clients() already counts it — close it straight back.
+    if (static_cast<int>(net_.clients().size()) > MAX_TOTAL_CLIENTS)
+    {
+        net_.close_client(fd);
+        return;
+    }
+    net_.send_to(fd, protocol::ai::WELCOME);
 }
 
 void Server::on_client_line(int fd, std::string line)
@@ -236,6 +239,13 @@ void Server::complete_ai_handshake(int fd, core::TeamId team_id, std::string_vie
 
 void Server::complete_gui_handshake(int fd)
 {
+    // Cap concurrent GUIs: each gets full snapshots, so an unbounded count is a
+    // cheap DoS surface. Reject beyond the limit.
+    if (static_cast<int>(gui_fds_.size()) >= MAX_GUI_CLIENTS)
+    {
+        net_.close_client(fd);
+        return;
+    }
     auto *client = net_.find_client(fd);
     if (client)
         client->state = net::ClientState::GUI;
@@ -283,10 +293,50 @@ void Server::kill_player(core::PlayerId id)
 
     if (auto fd_it = player_to_fd_.find(id); fd_it != player_to_fd_.end())
     {
-        net_.send_to(fd_it->second, std::string(protocol::ai::DEAD));
+        net_.send_to(fd_it->second, protocol::ai::DEAD);
         net_.close_client(fd_it->second);
     }
     net_.broadcast_gui(protocol::GuiEmitter::pdi(id));
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+// Resolve the live player behind a socket, or null. Unlike fd_to_player_[fd],
+// this never inserts a phantom entry on an unknown fd.
+core::Player *Server::player_for(int fd) noexcept
+{
+    auto it = fd_to_player_.find(fd);
+    if (it == fd_to_player_.end())
+        return nullptr;
+    return world_.find_player(it->second);
+}
+
+void Server::send_ok(int fd)
+{
+    net_.send_to(fd, protocol::ai::OK);
+}
+
+void Server::send_ko(int fd)
+{
+    net_.send_to(fd, protocol::ai::KO);
+}
+
+void Server::broadcast_player_pos(core::PlayerId pid)
+{
+    if (auto *p = world_.find_player(pid))
+        net_.broadcast_gui(protocol::GuiEmitter::ppo(pid, p->x, p->y, p->orientation));
+}
+
+bool Server::announce_win_if_over()
+{
+    auto winner = world_.check_win();
+    if (!winner)
+        return false;
+    net_.broadcast_gui(protocol::GuiEmitter::seg(world_.team_name(*winner)));
+    running_ = false;
+    return true;
 }
 
 // ---------------------------------------------------------------------------

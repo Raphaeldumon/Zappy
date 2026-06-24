@@ -19,12 +19,12 @@ LDFLAGS     =   -lraylib -lGL -lm -lpthread -ldl -lrt -lX11
 # ---- demo knobs — override on the command line -------------------------------
 #   make demo PORT=4242 MAP_W=20 MAP_H=20 BOTS=6 FREQ=100
 PORT        ?=  4242
-MAP_W       ?=  5
-MAP_H       ?=  5
-TEAMS       ?=  red blue
-CLIENTS     ?=  5
-FREQ        ?=  20
-BOTS        ?=  3
+MAP_W       ?=  1
+MAP_H       ?=  1
+TEAMS       ?=  red
+CLIENTS     ?=  10
+FREQ        ?=  10
+BOTS        ?=  1
 HOST        ?=  127.0.0.1
 
 all: $(NAME)
@@ -48,14 +48,20 @@ re: fclean all
 ##   make demo MAP_W=20 MAP_H=20 BOTS=6 FREQ=100
 demo: all
 	@$(MAKE) -C .. build >/dev/null
-	@echo "demo: server :$(PORT) | map $(MAP_W)x$(MAP_H) | teams '$(TEAMS)' | $(BOTS) bot(s) | freq $(FREQ)"
+	@$(MAKE) -C ../ai >/dev/null
+	@echo "demo: server :$(PORT) | map $(MAP_W)x$(MAP_H) | teams '$(TEAMS)' | $(BOTS) AI bot(s) | freq $(FREQ)"
 	@set -e; \
 	../zappy_server -p $(PORT) -x $(MAP_W) -y $(MAP_H) -n $(TEAMS) -c $(CLIENTS) -f $(FREQ) & \
 	SRV=$$!; \
-	trap 'kill $$SRV $$AI 2>/dev/null' EXIT INT TERM; \
+	PIDS="$$SRV"; \
+	trap 'kill $$PIDS 2>/dev/null' EXIT INT TERM; \
 	sleep 0.6; \
-	python3 ../tools/fake_ai.py -p $(PORT) -n $(firstword $(TEAMS)) --bots $(BOTS) & \
-	AI=$$!; \
+	for t in $(TEAMS); do \
+		for i in $$(seq 1 $(BOTS)); do \
+			../ai/zappy_ai -p $(PORT) -n $$t & \
+			PIDS="$$PIDS $$!"; \
+		done; \
+	done; \
 	sleep 0.3; \
 	./$(NAME) -p $(PORT) -h $(HOST)
 

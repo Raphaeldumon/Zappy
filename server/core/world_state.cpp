@@ -438,10 +438,16 @@ Egg *WorldState::find_egg(EggId id) noexcept
 
 static constexpr double RESOURCE_DENSITIES[RESOURCE_COUNT] = {0.5, 0.3, 0.15, 0.1, 0.1, 0.08, 0.05};
 
-void WorldState::respawn_resources()
+std::vector<std::pair<int, int>> WorldState::respawn_resources()
 {
     int total_tiles = width_ * height_;
     std::uniform_int_distribution<int> tile_dist(0, total_tiles - 1);
+
+    // Track which tile indices we bump so the caller can emit bct only for those.
+    // A tile touched several times is reported once: a per-tile flag plus an
+    // ordered list of first-touch indices.
+    std::vector<char> touched(static_cast<std::size_t>(total_tiles), 0);
+    std::vector<int> changed_idx;
 
     for (std::size_t r = 0; r < static_cast<std::size_t>(RESOURCE_COUNT); ++r)
     {
@@ -454,8 +460,19 @@ void WorldState::respawn_resources()
         {
             int idx = tile_dist(rng_);
             ++tiles_[static_cast<std::size_t>(idx)].resources[r];
+            if (!touched[static_cast<std::size_t>(idx)])
+            {
+                touched[static_cast<std::size_t>(idx)] = 1;
+                changed_idx.push_back(idx);
+            }
         }
     }
+
+    std::vector<std::pair<int, int>> changed;
+    changed.reserve(changed_idx.size());
+    for (int idx : changed_idx)
+        changed.emplace_back(idx % width_, idx / width_); // (x, y), row-major
+    return changed;
 }
 
 // ---------------------------------------------------------------------------

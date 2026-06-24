@@ -2,7 +2,7 @@
 
 ## Contraintes sujet (rappel)
 
-- Binary `zappy_server`, **C/C++/Rust** → choisi : **C++17/20**
+- Binary `zappy_server`, **C/C++/Rust** → choisi : **C++20**
 - **Single process, single thread**
 - **poll(2)** obligatoire (le sujet précise "must use poll" et déconseille le busy-waiting)
 - Usage : `./zappy_server -p port -x width -y height -n team1 team2 ... -c clientsNb -f freq`
@@ -15,9 +15,8 @@
 ```
                       ┌─────────────────────────────────────┐
                       │     main(int argc, char **argv)     │
-                      │   - parse args (CLI11)              │
-                      │   - load config                     │
-                      │   - signal handler (SIGINT/USR1)    │
+                      │   - parse_args (parse_args.cpp)     │
+                      │   - signal handler (SIGINT/SIGTERM) │
                       │   - Server::run()                   │
                       └──────────────┬──────────────────────┘
                                      │
@@ -25,30 +24,23 @@
                   │           class Server              │
                   │  ┌──────────────┐ ┌───────────────┐ │
                   │  │ NetworkLayer │ │   WorldState  │ │
-                  │  │  - asio/poll │ │  - tiles      │ │
+                  │  │  - poll(2)   │ │  - tiles      │ │
                   │  │  - clients   │ │  - players    │ │
-                  │  │  - admin sock│ │  - eggs       │ │
-                  │  └──────┬───────┘ │  - resources  │ │
-                  │         │         └───────┬───────┘ │
+                  │  │              │ │  - eggs/teams │ │
+                  │  └──────┬───────┘ └───────┬───────┘ │
                   │  ┌──────▼─────────────────▼───────┐ │
                   │  │       EventScheduler           │ │
-                  │  │  - priority queue actions      │ │
-                  │  │  - tick = 1/f sec              │ │
+                  │  │  - priority queue (tick, seq)  │ │
+                  │  │  - tick dérivé de 1/f          │ │
                   │  │  - resource respawn every 20   │ │
                   │  │  - incantation timer 300/f     │ │
                   │  └──────────────┬─────────────────┘ │
-                  │                 │                   │
                   │  ┌──────────────▼─────────────────┐ │
-                  │  │      ProtocolDispatcher        │ │
-                  │  │   - AI protocol parser         │ │
-                  │  │   - GUI protocol emitter       │ │
-                  │  │   - Admin protocol             │ │
-                  │  └──────────────┬─────────────────┘ │
-                  │                 │                   │
-                  │  ┌──────────────▼─────────────────┐ │
-                  │  │       Metrics + Recorder       │ │
-                  │  │   - prometheus exporter        │ │
-                  │  │   - .zrec writer (optionnel)   │ │
+                  │  │   protocol/ (parse + emit)      │ │
+                  │  │   - handshake                   │ │
+                  │  │   - ai_handler (AI parser)      │ │
+                  │  │   - gui_handler (GUI requests)  │ │
+                  │  │   - gui_emitter (GUI messages)  │ │
                   │  └────────────────────────────────┘ │
                   └─────────────────────────────────────┘
 ```
@@ -58,135 +50,134 @@
 ```
 server/
 ├── CMakeLists.txt
-├── include/zappy/server/
-│   ├── server.hpp
-│   ├── world_state.hpp
-│   ├── tile.hpp
-│   ├── player.hpp
-│   ├── egg.hpp
-│   ├── resource.hpp
-│   ├── event_scheduler.hpp
-│   ├── network_layer.hpp
-│   ├── client.hpp
-│   ├── protocol_ai.hpp
-│   ├── protocol_gui.hpp
-│   ├── protocol_admin.hpp
-│   ├── config.hpp
-│   ├── recorder.hpp
-│   └── metrics.hpp
-├── src/
+├── core/                       ← logique pure, zéro I/O (unit-testable)
+│   ├── types.hpp               ← Player, Tile, Egg, Team, Orientation, ResourceSet
+│   ├── world_state.{hpp,cpp}   ← état du monde + règles de jeu
+│   ├── world_state_events.hpp
+│   ├── game_rules.hpp          ← table d'élévation, coûts, constantes
+│   └── event_scheduler.{hpp,cpp}
+├── net/                        ← I/O réseau
+│   ├── network_layer.{hpp,cpp} ← poll(2), accept, buffers
+│   └── client.{hpp,cpp}        ← état + buffers recv/send par client
+├── protocol/                   ← encodage/décodage du fil
+│   ├── handshake.{hpp,cpp}
+│   ├── ai_handler.{hpp,cpp}    ← parse des commandes AI
+│   ├── gui_handler.{hpp,cpp}   ← parse des requêtes GUI
+│   └── gui_emitter.{hpp,cpp}   ← fabrique des messages GUI
+├── runtime/                    ← orchestration
 │   ├── main.cpp
-│   ├── server.cpp
-│   ├── world_state.cpp
-│   ├── ...
-│   └── ...
+│   ├── parse_args.{hpp,cpp}
+│   ├── limits.hpp              ← plafonds (teams, clients, GUIs)
+│   ├── server.{hpp,cpp}        ← boucle + handshake + cycle de vie
+│   └── server_commands.cpp     ← pipeline de commandes AI + dispatch GUI
 └── tests/
     ├── test_world_state.cpp
     ├── test_event_scheduler.cpp
+    ├── test_game_rules.cpp
     ├── test_protocol_ai.cpp
     ├── test_protocol_gui.cpp
-    └── ...
+    ├── test_handshake.cpp
+    ├── test_network.cpp
+    └── test_parse_args.cpp
 ```
+
+Le découpage `core/` (logique pure, sans réseau) garde le jeu unit-testable et
+réutilisable par un futur binding simulateur.
 
 ## Modules en détail
 
-### `world_state`
-- Tableau 2D de `Tile`, indexation `(x,y) -> idx = y*W + x` avec wrap toroidal
-- `std::vector<Player>` (id auto-incrément), `std::vector<Egg>`, `std::vector<Team>`
-- Méthodes : `move_forward`, `turn_left/right`, `take_object`, `set_object`, `start_incantation`, `eject`, `fork`, `look(range)` retournant le tableau de tiles dans le cône de vision
+### `core/world_state`
+- Tableau 1D de `Tile`, indexation `(x,y) -> idx = y*W + x` avec wrap toroïdal
+- `std::unordered_map<PlayerId, Player>`, `std::vector<Egg>`, `std::vector<Team>`
+- Méthodes : `move_forward`, `turn_left/right`, `take_object`, `set_object`, `eject`,
+  `add_egg`/`hatch_egg`, `look` (cône de vision), `respawn_resources`, `check_win`
 - Vision = pyramide en avant : niveau 1 → 1+3 cases, niveau 2 → 1+3+5, etc.
-- Wrap toroidal géré dans `Tile& at(int x, int y)` avec modulo positif
+- Wrap toroïdal via `wrap_x`/`wrap_y` (modulo positif), exposé par `Tile& at(x, y)`
+- Élévation : `game_rules.hpp::can_elevate` + `consume_elevation_stones`
 
-### `event_scheduler`
-- `priority_queue<TimedEvent, vector, greater>` ordonné par `tick_target`
-- Chaque action met un event dans la queue avec `tick_target = current_tick + (cost * f_inv)`
-- À chaque iteration du run loop, on consomme tous les events dont `tick_target <= now`
-- Respawn ressources : event récurrent toutes les 20 unités
-- Incantation : event spécial qui réévalue les conditions à l'expiration (300/f sec)
-- `fork` : event 42/f sec → ajoute un egg sur la tile
+### `core/event_scheduler`
+- `priority_queue<Event>` ordonné par `(tick, seq)` — le `seq` casse les égalités
+  pour un ordre FIFO déterministe (rejouabilité)
+- Chaque action planifie un event à `now_ticks() + cost`
+- `advance_to(now)` consomme tous les events dont `tick <= now`
+- Annulation paresseuse via une liste de tombstones (`cancel(id)`)
+- Respawn ressources : event récurrent toutes les 20 unités (se re-planifie)
+- Incantation : event à 300/f qui réévalue les conditions à l'expiration
+- `fork` : event 42/f → ajoute un egg sur la tile
 
-### `network_layer`
-- `asio::io_context` en single-thread, basé sur `poll_reactor`
-- Boucle principale :
+### `net/network_layer`
+- **poll(2)** direct (pas de lib réseau externe), single-thread
+- Boucle principale (`Server::run`) :
   ```cpp
-  while (running) {
-      auto next_event_time = scheduler.next_event_time();
-      auto poll_timeout = next_event_time - now;
-      io_ctx.run_for(poll_timeout);
-      scheduler.tick(now);
+  while (running_) {
+      scheduler_.advance_to(now_ticks());
+      net_.poll_once(ms_until_next_event());
+      announce_win_if_over();
   }
   ```
-- Active polling **interdit** : le serveur dort jusqu'au prochain event ou paquet réseau
-- Sockets : 1 listening pour AI/GUI (port `-p`), 1 listening pour admin (port `-p + 1000`)
-- Buffer commande par client : max 10 commandes en file (conformité sujet)
+- Active polling **interdit** : `poll()` dort jusqu'au prochain paquet **ou** le
+  prochain event dû (timeout = `ms_until_next_event()`)
+- 1 socket d'écoute pour AI/GUI (port `-p`)
+- `pollfds` reconstruits paresseusement (flag `pollfds_dirty_`)
+- Écritures bufferisées par client, POLLOUT armé seulement si données en attente
+- Plafonds dans `runtime/limits.hpp` (teams, clients par équipe, GUIs, total)
 
-### `protocol_ai`
-- Parser ligne par ligne (`\n` terminator)
-- Mapping table : `{"Forward", &handle_forward}, {"Right", &handle_right}, ...`
-- Bad command → réponse `"ko\n"`
-- File de commandes par player (max 10), serveur dépile au rythme du `event_scheduler`
-- Handshake :
+### `protocol/ai_handler`
+- Parser ligne par ligne (terminateur `\n`)
+- Table de mapping `{"Forward", Command::Forward}, ...`
+- Commande inconnue/malformée → `nullopt` → le serveur répond `"ko\n"`
+- File de commandes par client (max 10, conformité sujet) ; le serveur dépile au
+  rythme du `event_scheduler`
+- Handshake (`handshake.cpp`) :
   ```
   S -> "WELCOME\n"
   C -> "TEAM_NAME\n"
   S -> "CLIENT_NUM\n"  (nb slots libres)
   S -> "X Y\n"         (dimensions)
   ```
-- Cas spécial `TEAM_NAME == "GRAPHIC"` → bascule sur `protocol_gui`
+- Cas spécial `TEAM_NAME == "GRAPHIC"` → bascule sur le protocole GUI
+- `GRAPHIC` est réservé : `parse_args` refuse une équipe nommée `GRAPHIC`
+  (ainsi que les doublons et les noms vides)
 
-### `protocol_gui`
+### `protocol/gui_handler` + `gui_emitter`
 - Voir [`06_protocols.md`](06_protocols.md) pour la table exhaustive
-- Stratégie push-only : le serveur émet l'événement granulaire à chaque changement
-- Pas de re-broadcast complet de l'état, uniquement diffs
-- À la connexion GUI : envoi du snapshot complet (`msz`, `mct`, `tna`, `pnw` pour chaque player, `enw` pour chaque egg, `sgt`)
-
-### `protocol_admin` (bonus)
-- Socket séparé `-p + 1000`
-- Commandes texte : `pause`, `resume`, `set f <value>`, `kill <player_id>`, `spawn <res> <x> <y> <n>`, `snapshot`, `reload-config`
-- Auth simple : token CLI `--admin-token <token>`
-
-### `recorder` (bonus)
-- Si flag `--record <path>`, ouvre un `.zrec` et écrit chaque event GUI émis
-- Format : header magic `ZREC` + version u32 + frames `{u64 timestamp_ms; u32 len; char payload[]}`
-- Voir [`docs/01_architecture/06_protocols.md#format-zrec`](06_protocols.md#format-zrec)
-
-### `metrics`
-- HTTP server intégré via `prometheus-cpp` sur port `9090`
-- Métriques exposées :
-  - `zappy_tick_total{}` (counter)
-  - `zappy_players_alive{team}` (gauge)
-  - `zappy_actions_processed_total{action}` (counter)
-  - `zappy_action_latency_seconds{action}` (histogram)
-  - `zappy_bytes_sent_total{client_type}` (counter)
-  - `zappy_active_clients{team}` (gauge)
-  - `zappy_incantations_total{level,result}` (counter)
-
-## Mode simulation (training)
-
-Compilation `-DZAPPY_SIMULATION_MODE=ON` → :
-- `NetworkLayer` désactivé (stub)
-- `EventScheduler` avance immédiatement au prochain event (pas de sleep)
-- Sortie : lib statique `libzappy_sim.a` consommable depuis pybind11
-
-## Performance cibles
-
-| KPI | Cible |
-|-----|-------|
-| Ticks/sec normal mode | 500 (avec `f=500`) |
-| Ticks/sec simulation mode | 1M+ (single env) |
-| Mémoire RSS | <300 MB pour map 200x200 + 24 players + 4 teams |
-| Latence action AI → réponse | <2 ms (hors temps d'attente du cost de l'action) |
+- `gui_emitter` : fabriques statiques des messages (`msz`, `bct`, `pnw`, `ppo`, …)
+- `gui_handler` : parse les requêtes GUI entrantes (`msz`, `mct`, `bct`, `ppo`,
+  `plv`, `pin`, `sgt`, `sst`) ; tag inconnu → `suc`, paramètre invalide → `sbp`
+- Stratégie push : le serveur émet l'événement granulaire à chaque changement,
+  pas de re-broadcast complet de l'état
+- À la connexion GUI : snapshot complet (`msz`, `sgt`, `tna`, `bct` × W·H,
+  `pnw` par player, `enw` par egg)
 
 ## Tests
 
-- `test_world_state.cpp` : tile wrap, vision cone, take/set object, elevation eligibility
-- `test_event_scheduler.cpp` : ordering, cancel, tick precision
-- `test_protocol_ai.cpp` : parsing, bad commands, max 10 in queue
-- `test_protocol_gui.cpp` : event emission on state change, format conformity
-- `test_recorder.cpp` : roundtrip write→read, version compatibility
+Lancés via CTest (`make tests_run`). Tous les binaires `core/`/`protocol/` sont
+des `main()` autonomes avec `assert` (migration Catch2 prévue, ADR-006).
+
+- `test_world_state.cpp` : wrap, mouvement (4 orientations + wrap), turns,
+  take/set, eject, look, slots d'équipe, `check_win`
+- `test_event_scheduler.cpp` : ordering, cancel, précision des ticks
+- `test_game_rules.cpp` : table d'élévation, `broadcast_direction`
+- `test_protocol_ai.cpp` : parsing, commandes invalides, file max 10
+- `test_protocol_gui.cpp` : émission GUI, conformité du format
+- `test_handshake.cpp` : routage GRAPHIC→GUI / équipe connue→AI / inconnue→Invalid
+- `test_network.cpp` : buffering des lignes côté client
+- `test_parse_args.cpp` : options requises, GRAPHIC/doublon/vide refusés, plafonds
+
+Tests d'intégration (`tools/run_integration.py`, label ctest `integration`) :
+lancent un vrai serveur + drones fake-AI + capture GUI, et vérifient
+no_crashes / handshake GUI / acks des commandes / spawns / absence de drift
+protocole. Couvre `server_commands.cpp` / `server.cpp` / `network_layer.cpp`
+que les tests unitaires ne peuvent pas atteindre.
+
+## Couverture
+
+`make coverage` (gcovr) : résumé propre, tests exclus du %. La logique pure
+(`core/` + `protocol/`) est bien couverte ; le pipeline réseau/commandes l'est
+via les tests d'intégration.
 
 ## Signaux
 
-- `SIGINT` : graceful shutdown (close sockets, flush logs, close recorder)
-- `SIGUSR1` : dump snapshot vers `./snapshot-<timestamp>.json`
-- `SIGUSR2` : reload config (mêmes valeurs que via socket admin)
+- `SIGINT` / `SIGTERM` : arrêt propre — le handler bascule `running_` à false,
+  la boucle sort et ferme les sockets. `SA_RESTART` désactivé pour que `poll()`
+  retourne `EINTR` immédiatement à la réception du signal.
