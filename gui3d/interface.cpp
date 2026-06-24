@@ -428,7 +428,7 @@ void Interface::handleInput()
 
     // ---- Free look: the captured mouse turns the head (yaw/pitch).
     Vector2 md = GetMouseDelta();
-    _camYaw   += md.x * 0.0030f;
+    _camYaw   -= md.x * 0.0030f;
     _camPitch -= md.y * 0.0030f;
     // Clamp pitch just shy of straight up/down so the view never flips.
     const float limit = 1.553f; // ~89deg
