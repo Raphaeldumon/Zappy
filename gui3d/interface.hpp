@@ -91,6 +91,40 @@ private:
     std::vector<ResourceModel> _resourceModels{};
     ResourceModel _playerModel{};
 
+    // --- Player animation ---
+    // Clips loaded from the player .glb, resolved by name to fixed slots so the
+    // rest of the code refers to them by intent rather than by file order. Every
+    // player on screen carries its own clip + frame and gets its pose uploaded
+    // right before its own DrawModelEx, so they animate independently.
+    enum class PlayerClip { Idle, Walk, Death, Kick, Dance, Pickup, Jump, Count };
+
+    ModelAnimation* _playerAnims{nullptr};
+    int             _playerAnimCount{0};
+    // _clipIndex[(int)PlayerClip::X] = index into _playerAnims, or -1 if the .glb
+    // has no animation with that name.
+    std::array<int, static_cast<std::size_t>(PlayerClip::Count)> _clipIndex{};
+
+    struct PlayerAnimState {
+        PlayerClip loopClip{PlayerClip::Idle};  // looping base state: Idle / Walk / Dance
+        float      loopFrame{0.0f};
+        PlayerClip oneShot{PlayerClip::Count};  // active one-shot, Count = none
+        float      oneShotFrame{0.0f};
+        int        lastX{-9999};                 // last seen tile, to detect movement
+        int        lastY{-9999};
+        double     walkUntil{0.0};               // GetTime() until which Walk plays after a step
+    };
+    std::unordered_map<std::uint32_t, PlayerAnimState> _playerAnimState;
+
+    // pdi erases the player before we can animate the death, so we spawn a ghost
+    // that plays the Death clip once at the last known pose, then disappears.
+    struct DeathGhost {
+        float       x{0.0f};
+        float       y{0.0f};
+        Orientation orientation{Orientation::North};
+        float       frame{0.0f};
+    };
+    std::vector<DeathGhost> _deathGhosts;
+
     // --- Networking ---
     std::unique_ptr<NetClient> _net;     // live server connection (post-handshake)
     ProtocolParser             _parser;  // applies wire lines to _map + _state
@@ -166,4 +200,7 @@ private:
     void unloadResourceModels();
     void loadPlayerModel();
     void unloadPlayerModel();
+    void loadPlayerAnimations();          // resolve clip names -> _clipIndex, log them
+    void updatePlayerAnimations();        // per-frame anim state machine (call from update())
+    void applyPlayerPose(std::uint32_t id); // upload a player's current clip+frame before draw
 };

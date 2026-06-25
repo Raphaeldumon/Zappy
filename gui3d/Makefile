@@ -22,9 +22,9 @@ PORT        ?=  4242
 MAP_W       ?=  20
 MAP_H       ?=  20
 TEAMS       ?=  red
-CLIENTS     ?=  10
-FREQ        ?=  10
-BOTS        ?=  1
+CLIENTS     ?=  100
+FREQ        ?=  100
+BOTS        ?=  8
 HOST        ?=  127.0.0.1
 
 all: $(NAME)

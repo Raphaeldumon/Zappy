@@ -18,11 +18,31 @@ struct EggInfo {
     int y{0};
 };
 
+// One-shot animation triggers the parser emits when it sees an action packet the
+// renderer wants to react to. The renderer drains this queue every frame, turning
+// each event into a per-player one-shot clip (Kick/Pickup/Jump) or a death ghost.
+// Death carries the last pose because pdi erases the player before we can draw it.
+enum class PlayerAnimEventKind : std::uint8_t {
+    Kick,    // pex: this player ejected others
+    Pickup,  // pgt: this player collected an item
+    Jump,    // pbc: this player broadcast a message
+    Death    // pdi: this player died
+};
+
+struct PlayerAnimEvent {
+    std::uint32_t       id{0};
+    PlayerAnimEventKind kind{PlayerAnimEventKind::Kick};
+    int                 x{0};
+    int                 y{0};
+    Orientation         orientation{Orientation::North};
+};
+
 struct GuiState {
     std::unordered_map<std::uint32_t, aiPlayer> players;
     std::unordered_map<std::uint32_t, EggInfo>  eggs;
     std::vector<std::string>                    teams;
     std::unordered_set<long long>               incanting; // tile keys (y*W+x) mid-incantation
+    std::vector<PlayerAnimEvent>                animEvents; // drained by the renderer each frame
     int                                         frequency{0};
     bool                                        hasWinner{false};
     std::string                                 winner;

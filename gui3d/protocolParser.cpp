@@ -138,8 +138,33 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         std::uint32_t id;
         if (!(iss >> idtok) || !parseId(idtok, id))
             return;
+        // Capture the last pose before erasing so the renderer can play a death
+        // animation at the spot the player vanished from (it is gone after this).
+        auto it = state.players.find(id);
+        if (it != state.players.end())
+            state.animEvents.push_back({id, PlayerAnimEventKind::Death,
+                it->second.getX(), it->second.getY(), it->second.getOrientation()});
         unmirror(map, state, id);
         state.players.erase(id);
+        return;
+    }
+
+    // Action packets the model already reflects via bct/ppo, but which we surface
+    // as one-shot animations: eject (pex), broadcast (pbc), collect (pgt).
+    if (tag == "pex" || tag == "pbc" || tag == "pgt") {
+        std::string idtok;
+        std::uint32_t id;
+        if (!(iss >> idtok) || !parseId(idtok, id))
+            return;
+        auto it = state.players.find(id);
+        if (it == state.players.end())
+            return;
+        const PlayerAnimEventKind kind =
+            tag == "pex" ? PlayerAnimEventKind::Kick
+          : tag == "pbc" ? PlayerAnimEventKind::Jump
+                         : PlayerAnimEventKind::Pickup;
+        state.animEvents.push_back({id, kind,
+            it->second.getX(), it->second.getY(), it->second.getOrientation()});
         return;
     }
 
@@ -187,6 +212,6 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         return;
     }
 
-    // msz: map already sized at construction. Everything else (pin/pgt/pdr/pfk/
-    // pex/pbc/smg/suc/sbp) is cosmetic — bct/ppo already keep the model correct.
+    // msz: map already sized at construction. Everything else (pin/pdr/pfk/
+    // smg/suc/sbp) is cosmetic — bct/ppo already keep the model correct.
 }

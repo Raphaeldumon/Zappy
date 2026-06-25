@@ -561,7 +561,7 @@ class ZappyEnv(gym.Env):
         port: int = 4242,
         frequency: int = 100,
         team: str = "RL",
-        target_level: int = 2,
+        target_level: int = 4,
         max_steps: int = 200,
         food_target: int = 30,
         reward_level: float = 50.0,
