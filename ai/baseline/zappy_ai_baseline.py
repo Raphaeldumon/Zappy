@@ -34,7 +34,6 @@ class State(enum.Enum):
     EXPLORE = "EXPLORE"
     FARM_FOOD = "FARM_FOOD"
     CALL_TEAMMATES = "CALL_TEAMMATES"
-    FOLLOW = "FOLLOW"
     PREPARE_INCANTATION = "PREPARE_INCANTATION"
     INCANT = "INCANT"
     REPRODUCE = "REPRODUCE"
@@ -304,93 +303,98 @@ class AI:
         except ValueError:
             return None
 
+    def spawn_child_for_egg(self) -> None:
+        """Launch a fresh AI process to occupy the egg this player just laid.
+
+        Server Fork only creates an egg + frees one team slot; a player hatches
+        from it only when a new client connects with the team name. So every
+        successful Fork must spawn a new process, else eggs rot and the team
+        population can never grow past the initial bots.
+        """
+        argv = [sys.executable, os.path.abspath(sys.argv[0]),
+                "-p", str(self.port),
+                "-n", self.team,
+                "-h", self.host]
+        if self.frequency_override is not None:
+            argv += ["-f", str(self.frequency_override)]
+        try:
+            subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,  # detach: our signals/exit don't kill it
+                close_fds=True,          # don't leak our socket into the child
+            )
+            print(f"[AI] spawned child to claim egg ({' '.join(argv)})",
+                  file=sys.stderr)
+        except OSError as error:
+            print(f"[AI] failed to spawn child for egg: {error}", file=sys.stderr)
+
     def run(self) -> int:
+        # Auto-reap forked children so spawned bots don't pile up as zombies.
+        if hasattr(signal, "SIGCHLD"):
+            signal.signal(signal.SIGCHLD, signal.SIG_IGN)
+
         self.connect()
         self.handshake()
 
-        try:
-            return int(line.replace("Current level:", "").strip())
-        except ValueError:
-            return None
+        while self.running:
+            for line in self.read_available():
+                if line:
+                    self.handle_line(line)
 
+            self.tick()
+            time.sleep(0.002)
 
-class Brain:
-    def __init__(
-        self,
-        team_name: str,
-        memory: WorldMemory,
-        queue: CommandQueue,
-        frequency: int,
-    ):
-        self.team_name = team_name
-        self.memory = memory
-        self.queue = queue
-        self.frequency = max(1, frequency)
+        if self.sock:
+            self.sock.close()
 
-        self.state = State.INIT
-        self.stones_to_drop: List[str] = []
-
-        self.bot_id = random.randint(1000, 9999)
-
-        self.preparing_incantation = False
-        self.waiting_incantation_result = False
-
-        self.movement_plan: List[str] = []
-
-        if self.frequency >= 100:
-            self.max_plan_length = 2
-        else:
-            self.max_plan_length = 3
-
-        self.max_forks = 6
-        self.fork_food_threshold = 25
-        self.fork_max_level = 6
-
-        self.survive_food_threshold = 8
-
-        # On ne démarre pas un gather à 18 food : trop bas.
-        self.gather_start_food_threshold = 24
-
-        # Une fois le gather lancé, on ne l'abandonne pas juste parce que
-        # la food descend à 23/22.
-        self.gather_abort_food_threshold = 10
-
-        self.eject_food_threshold = 20
-
-        # --- GATHER / ACK ---
-        self.gather_request_counter = 0
-        self.active_gather_req: Optional[str] = None
-        self.active_gather_level: int = 0
-        self.active_gather_need: int = 0
-        self.active_gather_acks: Dict[int, float] = {}
-        self.gather_started_at: float = 0.0
-        self.gather_last_broadcast_at: float = 0.0
-        self.gather_attempts: int = 0
-        self.gather_arrival_started_at: float = 0.0
-        self.last_gather_giveup_at: float = 0.0
-
-        # Après un gather raté, objectif forcé :
-        # FARM_FOOD -> FORK, au lieu de retenter CALL trop tôt.
-        self.must_fork_after_gather_fail: bool = False
-
-        self.answered_gather_requests: Dict[str, float] = {}
-        self.pending_gather_ack_req: Optional[str] = None
-        self.pending_gather_ack_level: int = 0
-        self.pending_gather_ack_leader: Optional[int] = None
-
-        # Leader election : plus petit bot_id gagne.
-        self.following_gather_req: Optional[str] = None
-        self.following_gather_leader: Optional[int] = None
-        self.following_gather_until: float = 0.0
-        # Last sound bearing (0-8) heard from the leader we're walking to. Updated
-        # on every gather broadcast; drives FOLLOW state movement between messages.
-        self.following_gather_direction: int = 0
-        # Freeze-on-tile handshake for the incantation ritual.
-        self.arrived_hold_until: float = 0.0
-        self.incant_hold_broadcasts: int = 0
+        return 0
 
     def tick(self) -> None:
-        if self.state == State.DEAD:
+        if not self.running or self.state == State.DEAD:
+            return
+
+        if self.pending_cmd is not None:
+            if time.time() - self.pending_at > self.cmd_timeout(self.pending_cmd):
+                print(f"[AI] command timeout: {self.pending_cmd}", file=sys.stderr)
+                self.pending_cmd = None
+            else:
+                return
+
+        self.prune_answered_reqs()
+
+        if self.send_pending_ack():
+            return
+
+        if self.memory.force_look:
+            self.memory.force_look = False
+            self.send_cmd("Look")
+            return
+
+        if self.pending_follow_direction is not None:
+            direction = self.pending_follow_direction
+            self.pending_follow_direction = None
+            self.set_follow_plan(direction)
+
+            if self.send_next_plan_cmd():
+                return
+
+        if self.send_next_plan_cmd():
+            return
+
+        if self.should_refresh_inventory():
+            self.send_cmd("Inventory")
+            return
+
+        self.choose_state()
+        self.run_state()
+
+    def handle_line(self, line: str) -> None:
+        print(f"[SERVER -> AI] {line}", file=sys.stderr)
+
+        if line == "dead":
+            self.state = State.DEAD
+            self.running = False
             return
 
         msg = self.parse_broadcast(line)
@@ -438,8 +442,10 @@ class Brain:
                 self.memory.forks_done += 1
                 self.memory.last_fork_at = time.time()
                 self.must_fork_after_gather_fail = False
+                # Egg laid: launch the client that will hatch from it.
+                self.spawn_child_for_egg()
                 print(
-                    f"[AI] fork ok -> egg laid, waiting for external client "
+                    f"[AI] fork ok -> egg laid, spawned client "
                     f"(forks_done={self.memory.forks_done})",
                     file=sys.stderr,
                 )
@@ -490,21 +496,8 @@ class Brain:
             self.state = State.SURVIVE
             return
 
-        # Frozen for a teammate's incantation ritual (HOLD received): stay put.
-        # Survival above still overrides this, so we never freeze into death.
-        if time.time() < self.arrived_hold_until and not self.preparing_incantation:
-            self.state = State.FOLLOW
-            return
-
         if self.preparing_incantation:
             self.state = State.PREPARE_INCANTATION if self.stones_to_drop else State.INCANT
-            return
-
-        # Following a leader takes priority over gathering our own stones: the
-        # incantation only needs N bodies on the tile, the leader supplies stones.
-        # (food survival above already preempts this.)
-        if self.is_following_gather():
-            self.state = State.FOLLOW
             return
 
         if self.needs_look():
@@ -522,9 +515,8 @@ class Brain:
                 self.state = State.CALL_TEAMMATES
                 return
 
-            # Si je suis en train de suivre un leader, je marche vers lui.
-            if self.is_following_gather():
-                self.state = State.FOLLOW
+            if self.is_following():
+                self.state = State.LOOK
                 return
 
             if self.must_fork_after_gather_fail:
@@ -572,8 +564,6 @@ class Brain:
             self.farm_food()
         elif self.state == State.CALL_TEAMMATES:
             self.call_teammates()
-        elif self.state == State.FOLLOW:
-            self.follow_leader()
         elif self.state == State.PREPARE_INCANTATION:
             self.prepare_incantation()
         elif self.state == State.INCANT:
@@ -590,11 +580,6 @@ class Brain:
 
     def gather_arrival_timeout(self) -> float:
         return max(8.0, 300.0 / self.frequency)
-
-    def incant_hold_window(self) -> float:
-        # How long a teammate freezes on the tile after a HOLD, covering the
-        # leader's Set+Incantation cycles so the player count doesn't drop.
-        return max(3.0, 150.0 / self.frequency)
 
     def gather_cooldown(self) -> float:
         return max(4.0, 180.0 / self.frequency)
@@ -645,15 +630,6 @@ class Brain:
 
         return False
 
-    def broadcast_incant_hold(self) -> bool:
-        # "Everyone of my level on my tile: freeze, I'm about to incant."
-        msg = (
-            f"{self.team_name}:HOLD:"
-            f"level={self.memory.level}:"
-            f"from={self.bot_id}"
-        )
-        return self.queue.send(f"Broadcast {msg}")
-
     def abort_gather(self, reason: str, giveup: bool) -> None:
         if not self.active_req:
             return
@@ -691,19 +667,7 @@ class Brain:
             self.send_cmd("Take food")
             return
 
-        if players_on_tile < required_players:
-            self.incant_hold_broadcasts = 0
-
         if self.players_on_tile() >= need:
-            # Freeze the teammates here BEFORE the multi-step Set/Incantation
-            # ritual, otherwise they wander off mid-ritual and the count drops
-            # below the requirement -> server returns ko. Broadcast HOLD a couple
-            # times so everyone on the tile latches a freeze timer, then incant.
-            if self.incant_hold_broadcasts < 2:
-                if self.broadcast_incant_hold():
-                    self.incant_hold_broadcasts += 1
-                return
-            self.incant_hold_broadcasts = 0
             self.abort_gather("enough players on tile", False)
             self.prepare_incantation()
             return
@@ -788,41 +752,7 @@ class Brain:
         except (KeyError, ValueError):
             return None
 
-    def handle_team_message(self, direction: int, text: str) -> None:
-        if not text.startswith(f"{self.team_name}:"):
-            return
-
-        kind, fields = self.parse_team_payload(text)
-        if not kind:
-            return
-
-        sender_id = self.int_field(fields, "from")
-        if sender_id == self.bot_id:
-            return
-
-        if sender_id is not None:
-            self.memory.known_teammates[sender_id] = time.time()
-
-        self.memory.team_messages.append((direction, text))
-
-        if kind == "GATHER":
-            self.handle_gather_message(direction, fields, sender_id)
-            return
-
-        if kind == "GATHER_ACK":
-            self.handle_gather_ack(fields, sender_id)
-            return
-
-        if kind == "HOLD":
-            self.handle_hold_message(fields, sender_id)
-            return
-
-    def handle_gather_message(
-        self,
-        direction: int,
-        fields: Dict[str, str],
-        sender_id: Optional[int],
-    ) -> None:
+    def handle_gather(self, direction: int, fields: Dict[str, str], sender: int) -> None:
         req_id = fields.get("req", "")
         level = self.get_int(fields, "level")
 
@@ -843,45 +773,11 @@ class Brain:
         if self.is_following() and self.following_leader is not None and sender > self.following_leader:
             return
 
-        self.following_gather_req = req_id
-        self.following_gather_leader = sender_id
-        self.following_gather_until = time.time() + self.gather_arrival_timeout()
-        # Remember the bearing; FOLLOW state walks toward it from the main loop
-        # (doing it here is useless — a command is almost always already pending).
-        self.following_gather_direction = direction
-
-        self.queue_gather_ack(req_id, level, sender_id)
-
-    def handle_hold_message(
-        self,
-        fields: Dict[str, str],
-        sender_id: Optional[int],
-    ) -> None:
-        if sender_id == self.bot_id:
-            return
-        level = self.int_field(fields, "level")
-        if level != self.memory.level:
-            return
-        if self.preparing_incantation or self.waiting_incantation_result:
-            return
-        if self.memory.inventory.get("food", 0) <= self.survive_food_threshold:
-            return  # too hungry to wait around; survival wins
-        # A leader of my level is about to incant on a nearby/this tile. Freeze so
-        # the player count stays put through its ritual. Cheap if I'm not actually
-        # on the tile — at worst I idle a few hundred ms.
-        self.arrived_hold_until = time.time() + self.incant_hold_window()
-        print(
-            f"[AI] HOLD from {sender_id}: freezing {self.incant_hold_window():.1f}s",
-            file=sys.stderr,
-        )
-
-    def handle_gather_ack(
-        self,
-        fields: Dict[str, str],
-        sender_id: Optional[int],
-    ) -> None:
-        if sender_id is None:
-            return
+        if self.active_req:
+            if sender < self.bot_id:
+                self.abort_gather(f"lower bot_id leader wins before lock: {sender} < {self.bot_id}", False)
+            else:
+                return
 
         if not self.can_answer_gather(level, sender):
             return
@@ -919,94 +815,11 @@ class Brain:
         if req_id in self.answered_reqs or self.pending_ack_req == req_id:
             return
 
-        food_tile = self.find_tile_containing("food")
+        self.pending_ack_req = req_id
+        self.pending_ack_level = level
+        self.pending_ack_leader = leader
 
-        if food_tile == 0:
-            self.queue.send("Take food")
-            return
-
-        if food_tile is not None:
-            self.move_towards_tile(food_tile, full_plan=True)
-            return
-
-        if self.memory.moves_since_look >= 1:
-            self.queue.send("Look")
-            return
-
-        self.queue.send("Forward")
-
-    def look(self) -> None:
-        self.queue.send("Look")
-
-    def follow_leader(self) -> None:
-        # Walk toward the leader using the last bearing it broadcast. Driven from
-        # the main loop (queue empty, no movement plan), so unlike the old reactive
-        # path it actually fires. The leader rebroadcasts, refreshing the bearing,
-        # so we re-aim each message and converge over several steps.
-        if self.memory.inventory.get("food", 0) <= self.survive_food_threshold:
-            self.following_gather_req = None
-            self.following_gather_leader = None
-            self.state = State.SURVIVE
-            self.survive()
-            return
-
-        # Frozen for a ritual (HOLD): hold position, do not move.
-        if time.time() < self.arrived_hold_until:
-            self.queue.send("Look")
-            return
-
-        direction = self.following_gather_direction
-
-        # Bearing 0 = we're on the leader's tile. Latch a freeze and Look so the
-        # leader keeps counting us present; it drives the incantation from here.
-        if direction == 0:
-            self.arrived_hold_until = max(
-                self.arrived_hold_until, time.time() + self.incant_hold_window()
-            )
-            self.queue.send("Look")
-            return
-
-        plan = self.broadcast_direction_to_plan(direction)[: self.max_plan_length]
-        if not plan:
-            self.queue.send("Look")
-            return
-
-        first = plan.pop(0)
-        self.movement_plan = plan
-        self.queue.send(first)
-        if not self.movement_plan:
-            self.memory.force_look = True
-
-    def collect(self) -> None:
-        resource = self.best_resource_on_current_tile()
-
-        if resource:
-            self.queue.send(f"Take {resource}")
-            return
-
-        target = self.find_best_resource_tile()
-
-        if target is not None:
-            self.move_towards_tile(target)
-            return
-
-        self.state = State.EXPLORE
-        self.explore()
-
-    def prepare_incantation(self) -> None:
-        if not self.preparing_incantation:
-            self.preparing_incantation = True
-            self.stones_to_drop = self.required_stones_list()
-            self.movement_plan.clear()
-            self.abort_gather("start incantation preparation")
-
-        if self.stones_to_drop:
-            stone = self.stones_to_drop.pop(0)
-            self.queue.send(f"Set {stone}")
-            return
-
-        self.state = State.INCANT
-        self.incant()
+        print(f"[AI] queued GATHER_ACK req={req_id} leader={leader}", file=sys.stderr)
 
     def send_pending_ack(self) -> bool:
         if not self.pending_ack_req:
@@ -1383,451 +1196,37 @@ class Brain:
             self.plan = plan
 
     def broadcast_plan(self, direction: int) -> List[str]:
-        # K is the server's sound bearing in THIS bot's own frame: 0 = same tile,
-        # 1 = straight ahead, then CLOCKWISE to 8 (see server broadcast_direction /
-        # test_game_rules). So 3 = our right, 5 = behind, 7 = our left. Step so the
-        # source moves toward our front; the leader rebroadcasts and we re-aim.
         if direction == 0:
             return ["Look"]
-        if direction in (1, 2, 8):       # ahead or ahead-diagonal -> just advance
+        if direction == 1:
             return ["Forward"]
-
-        if direction in (3, 4):           # on our right -> face right, advance
-            return ["Right", "Forward"]
-
-        if direction == 5:                # directly behind -> turn around
-            return ["Right", "Right", "Forward"]
-        if direction in (6, 7):           # on our left -> face left, advance
+        if direction in (2, 3):
             return ["Left", "Forward"]
+        if direction in (4, 5):
+            return ["Left", "Left", "Forward"]
+        if direction == 6:
+            return ["Right", "Right", "Forward"]
+        if direction in (7, 8):
+            return ["Right", "Forward"]
         return []
-
-
-class FrequencyEstimator:
-    FORWARD_COST = 7
-
-    def __init__(self, network: NetworkClient):
-        self.network = network
-        self.deferred_lines: List[str] = []
-        self.last_connect_value: Optional[int] = None
-
-    def _round_trip(self, command: str, is_response, guard: float = 60.0):
-        start = time.perf_counter()
-        self.network.send_line(command)
-
-        while time.perf_counter() - start < guard:
-            for line in self.network.read_available_lines():
-                if line == "dead":
-                    self.deferred_lines.append(line)
-                    return None
-                if is_response(line):
-                    return time.perf_counter() - start
-                self.deferred_lines.append(line)
-            time.sleep(0.0005)
-
-        return None
-
-    def estimate(self, samples: int = 6, default: int = 100) -> int:
-        def is_int(line: str) -> bool:
-            if line.lstrip("-").isdigit():
-                self.last_connect_value = int(line)
-                return True
-            return False
-
-        def is_ok(line: str) -> bool:
-            return line == "ok"
-
-        connect_times: List[float] = []
-        for _ in range(samples):
-            dt = self._round_trip("Connect_nbr", is_int)
-            if dt is None:
-                return default
-            connect_times.append(dt)
-
-        forward_times: List[float] = []
-        for _ in range(samples):
-            dt = self._round_trip("Forward", is_ok)
-            if dt is None:
-                return default
-            forward_times.append(dt)
-
-        delta = min(forward_times) - min(connect_times)
-        if delta <= 0:
-            delta = min(forward_times)
-
-        freq = round(self.FORWARD_COST / delta)
-        return max(1, freq)
-
-
-class ZappyAI:
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        team_name: str,
-        frequency_override: Optional[int] = None,
-    ):
-        self.frequency_override = frequency_override
-        self.frequency = max(1, frequency_override or 100)
-        self.network = NetworkClient(host, port, team_name)
-        self.memory = WorldMemory()
-        self.queue = CommandQueue(self.network, self.frequency)
-        self.brain = Brain(team_name, self.memory, self.queue, self.frequency)
-        self.running = True
-
-    def run(self) -> None:
-        # Auto-reap forked children so spawned bots don't pile up as zombies.
-        if hasattr(signal, "SIGCHLD"):
-            signal.signal(signal.SIGCHLD, signal.SIG_IGN)
-
-        self.network.connect()
-        self.handshake()
-
-        while self.running:
-            self.read_server_messages()
-            self.brain.tick()
-            time.sleep(0.002)
-
-        self.network.close()
-
-    def spawn_child_for_egg(self) -> None:
-        """Launch a fresh AI process to occupy the egg this player just laid.
-
-        The server's Fork only creates an egg and frees one team connection
-        slot; a player hatches from it only when a new client connects with the
-        team name. So every successful Fork must be matched by a new process,
-        otherwise eggs rot and the team population can never grow.
-        """
-        argv = [sys.executable, os.path.abspath(sys.argv[0]),
-                "-p", str(self.network.port),
-                "-n", self.network.team_name,
-                "-h", self.network.host]
-        if self.frequency_override is not None:
-            argv += ["-f", str(self.frequency_override)]
-        try:
-            subprocess.Popen(
-                argv,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,  # detach: our signals/exit don't kill it
-                close_fds=True,          # don't leak our socket into the child
-            )
-            print(f"[AI] spawned child to claim egg ({' '.join(argv)})",
-                  file=sys.stderr)
-        except OSError as error:
-            print(f"[AI] failed to spawn child for egg: {error}", file=sys.stderr)
-
-    def apply_frequency(self, freq: int) -> None:
-        freq = max(1, int(freq))
-        self.frequency = freq
-        self.queue.frequency = freq
-        self.brain.frequency = freq
-        self.brain.max_plan_length = 2 if freq >= 100 else 3
-
-    def handshake(self) -> None:
-        welcome = self.network.read_blocking_line()
-        if welcome != "WELCOME":
-            raise RuntimeError(f"Invalid handshake, expected WELCOME, got: {welcome}")
-
-        self.network.send_line(self.network.team_name)
-
-        client_num = self.network.read_blocking_line()
-        dimensions = self.network.read_blocking_line()
-
-        try:
-            self.memory.client_num = int(client_num)
-        except ValueError:
-            self.memory.client_num = 0
-
-        self.memory.free_slots = self.memory.client_num
-        self.memory.last_connect_at = time.time()
-
-        try:
-            width, height = dimensions.split()
-            self.memory.width = int(width)
-            self.memory.height = int(height)
-        except ValueError:
-            raise RuntimeError(f"Invalid map dimensions: {dimensions}")
-
-        for line in self.network.drain_blocking_buffer():
-            self.handle_line(line)
-
-        if self.frequency_override is not None:
-            measured = self.frequency_override
-            print(
-                f"[AI] frequency override (-f) f={measured} (no measurement)",
-                file=sys.stderr,
-            )
-        elif self.running:
-            estimator = FrequencyEstimator(self.network)
-            measured = estimator.estimate(samples=6, default=100)
-            print(f"[AI] measured server frequency f={measured}", file=sys.stderr)
-
-            if estimator.last_connect_value is not None:
-                self.memory.client_num = estimator.last_connect_value
-                self.memory.free_slots = estimator.last_connect_value
-                self.memory.last_connect_at = time.time()
-
-            for line in estimator.deferred_lines:
-                self.handle_line(line)
-        else:
-            measured = self.frequency
-
-        self.apply_frequency(measured)
-
-        print(
-            f"[AI] Connected as team={self.network.team_name}, "
-            f"bot_id={self.brain.bot_id}, "
-            f"slots={self.memory.client_num}, "
-            f"map={self.memory.width}x{self.memory.height}, "
-            f"freq={self.frequency}",
-            file=sys.stderr,
-        )
-
-        if self.running:
-            self.queue.send("Inventory")
-
-    def read_server_messages(self) -> None:
-        lines = self.network.read_available_lines()
-
-        for line in lines:
-            if not line:
-                continue
-
-            self.handle_line(line)
-
-    def update_action_counters(self, command: str) -> None:
-        if not command:
-            return
-
-        if command != "Inventory":
-            self.memory.actions_since_inventory += 1
-
-        if command in ("Forward", "Left", "Right"):
-            self.memory.moves_since_look += 1
-
-    def mark_inventory_dirty_after_command(self, command: str) -> None:
-        if command in ("Inventory", "Look"):
-            return
-
-        if command in ("Forward", "Left", "Right"):
-            return
-
-        if command.startswith("Take "):
-            self.memory.inventory_dirty = True
-            return
-
-        if command.startswith("Set "):
-            if not self.brain.preparing_incantation:
-                self.memory.inventory_dirty = True
-            return
-
-        if command == "Incantation":
-            self.memory.inventory_dirty = True
-            return
-
-        if command.startswith("Broadcast"):
-            return
-
-        if command in ("Fork", "Eject"):
-            self.memory.inventory_dirty = True
-            return
-
-    def force_look_after_failed_take(self, command: str) -> None:
-        failed_resource = command.replace("Take ", "", 1)
-
-        if self.memory.visible_tiles:
-            try:
-                self.memory.visible_tiles[0].remove(failed_resource)
-            except ValueError:
-                pass
-
-        self.brain.movement_plan.clear()
-        self.memory.force_look = True
-        self.memory.inventory_dirty = False
-        self.memory.moves_since_look = 999
-
-    def handle_line(self, line: str) -> None:
-        print(f"[SERVER -> AI] {line}", file=sys.stderr)
-
-        if line == "dead":
-            self.memory.level = 0
-            self.brain.state = State.DEAD
-            self.brain.waiting_incantation_result = False
-            self.running = False
-            return
-
-        broadcast = Parser.parse_broadcast(line)
-        if broadcast:
-            direction, text = broadcast
-            self.brain.handle_team_message(direction, text)
-            return
-
-        if line.startswith("eject:"):
-            self.memory.was_ejected = True
-            self.brain.movement_plan.clear()
-            self.memory.force_look = True
-            return
-
-        new_level = Parser.parse_current_level(line)
-        if new_level is not None:
-            self.memory.level = new_level
-            self.memory.inventory_dirty = True
-            self.memory.force_look = True
-            self.brain.stones_to_drop.clear()
-            self.brain.preparing_incantation = False
-            self.brain.waiting_incantation_result = False
-            self.brain.movement_plan.clear()
-            self.brain.must_fork_after_gather_fail = False
-            self.brain.following_gather_req = None
-            self.brain.following_gather_leader = None
-            self.brain.following_gather_until = 0.0
-            self.brain.abort_gather("level changed")
-            self.queue.pop_expected_response()
-            return
-
-        if line == "Elevation underway":
-            return
-
-        if line.lstrip("-").isdigit() and self.queue.current_pending() == "Connect_nbr":
-            try:
-                self.memory.free_slots = int(line)
-            except ValueError:
-                self.memory.free_slots = 0
-
-            self.memory.last_connect_at = time.time()
-            self.queue.pop_expected_response()
-
-            print(
-                f"[AI] connect_nbr -> free_slots={self.memory.free_slots}",
-                file=sys.stderr,
-            )
-            return
-
-        if line in ("ok", "ko"):
-            pending = self.queue.pop_expected_response()
-            command = pending.command if pending else ""
-
-            self.update_action_counters(command)
-
-            if line == "ok":
-                self.mark_inventory_dirty_after_command(command)
-
-            if command == "Incantation":
-                self.brain.preparing_incantation = False
-                self.brain.waiting_incantation_result = False
-                self.brain.stones_to_drop.clear()
-                self.brain.movement_plan.clear()
-                self.memory.inventory_dirty = True
-                self.memory.force_look = True
-                self.brain.abort_gather("incantation response")
-
-            if line == "ok" and command == "Fork":
-                self.memory.forks_done += 1
-                self.memory.last_fork_at = time.time()
-                self.brain.must_fork_after_gather_fail = False
-                # Egg laid: launch the client that will hatch from it.
-                self.spawn_child_for_egg()
-                print(
-                    f"[AI] fork ok -> egg laid, spawned client "
-                    f"(forks_done={self.memory.forks_done})",
-                    file=sys.stderr,
-                )
-
-            if line == "ko":
-                if command.startswith("Take "):
-                    self.force_look_after_failed_take(command)
-                    return
-
-                if command.startswith("Set "):
-                    self.memory.inventory_dirty = True
-                    self.memory.force_look = True
-                    return
-
-                if command == "Incantation":
-                    self.memory.inventory_dirty = True
-                    self.memory.force_look = True
-                    return
-
-                self.memory.inventory_dirty = True
-
-            return
-
-        if Parser.is_inventory_response(line):
-            self.memory.inventory = Parser.parse_inventory(line)
-            self.memory.last_inventory_at = time.time()
-            self.memory.inventory_dirty = False
-            self.memory.actions_since_inventory = 0
-            self.queue.pop_expected_response()
-
-            print(
-                f"[AI] inventory updated: "
-                f"food={self.memory.inventory.get('food', 0)} "
-                f"linemate={self.memory.inventory.get('linemate', 0)} "
-                f"deraumere={self.memory.inventory.get('deraumere', 0)} "
-                f"sibur={self.memory.inventory.get('sibur', 0)} "
-                f"mendiane={self.memory.inventory.get('mendiane', 0)} "
-                f"phiras={self.memory.inventory.get('phiras', 0)} "
-                f"thystame={self.memory.inventory.get('thystame', 0)}",
-                file=sys.stderr,
-            )
-            return
-
-        if Parser.is_look_response(line):
-            self.memory.visible_tiles = Parser.parse_look(line)
-            self.memory.last_look_at = time.time()
-            self.memory.moves_since_look = 0
-            self.memory.force_look = False
-            self.queue.pop_expected_response()
-            return
-
-        print(f"[AI] Ignored unknown line: {line}", file=sys.stderr)
-
-
-def print_usage(program_name: str) -> None:
-    print(
-        f"USAGE: {program_name} -p port -n name -h machine [-f freq]\n"
-        "\n"
-        "option description\n"
-        "-p port      port number\n"
-        "-n name      name of the team\n"
-        "-h machine   name of the machine; localhost by default\n"
-        "-f freq      optional: force server frequency\n",
-        file=sys.stderr,
-    )
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
-
     parser.add_argument("-p", dest="port", type=int)
     parser.add_argument("-n", dest="name")
     parser.add_argument("-h", dest="host", default="localhost")
     parser.add_argument("-f", dest="frequency", type=int, default=None)
-    parser.add_argument("--help", action="store_true", dest="help")
+    parser.add_argument("--help", action="store_true")
 
-    try:
-        args, unknown = parser.parse_known_args()
-    except SystemExit:
-        print_usage(sys.argv[0])
-        raise SystemExit(84)
+    args, unknown = parser.parse_known_args()
 
-    if args.help:
-        print_usage(sys.argv[0])
-        raise SystemExit(0)
+    if args.help or unknown or args.port is None or args.name is None:
+        print(f"USAGE: {sys.argv[0]} -p port -n name -h machine [-f freq]", file=sys.stderr)
+        raise SystemExit(0 if args.help else 84)
 
-    if unknown:
-        print_usage(sys.argv[0])
-        raise SystemExit(84)
-
-    if args.port is None or args.name is None:
-        print_usage(sys.argv[0])
-        raise SystemExit(84)
-
-    if args.port <= 0 or args.port > 65535:
-        print_usage(sys.argv[0])
-        raise SystemExit(84)
-
-    if args.frequency is not None and args.frequency <= 0:
-        print_usage(sys.argv[0])
+    if args.port <= 0 or args.port > 65535 or (args.frequency is not None and args.frequency <= 0):
+        print(f"USAGE: {sys.argv[0]} -p port -n name -h machine [-f freq]", file=sys.stderr)
         raise SystemExit(84)
 
     return args
@@ -1836,27 +1235,200 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     try:
         args = parse_args()
-    except SystemExit as exit_code:
-        return int(exit_code.code)
-
-    ai = ZappyAI(
-        host=args.host,
-        port=args.port,
-        team_name=args.name,
-        frequency_override=args.frequency,
-    )
-
-    try:
-        ai.run()
+        return AI(args.host, args.port, args.name, args.frequency).run()
     except KeyboardInterrupt:
         print("[AI] Interrupted", file=sys.stderr)
         return 130
-    except Exception as error:
-        print(f"[AI] Error: {error}", file=sys.stderr)
+    except Exception as err:
+        print(f"[AI] Error: {err}", file=sys.stderr)
         return 84
-
-    return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+
+
+# --------------------------------------------------------------------------- #
+# Compatibility layer for train_ai / train_rl.py
+# --------------------------------------------------------------------------- #
+# train_ai importe NetworkClient, Parser et INCANTATION_REQUIREMENTS.
+# Cette baseline expose AI + REQ, donc on ajoute juste les wrappers attendus.
+# Ça ne change PAS la logique de jeu de l'IA baseline.
+
+INCANTATION_REQUIREMENTS = REQ
+
+
+class NetworkClient:
+    def __init__(self, host: str, port: int, team_name: str):
+        self.host = host
+        self.port = port
+        self.team_name = team_name
+        self.sock: Optional[socket.socket] = None
+        self.recv_buffer = ""
+        self.blocking_buffer: List[str] = []
+
+    def connect(self) -> None:
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.connect((self.host, self.port))
+        self.sock.setblocking(False)
+
+    def close(self) -> None:
+        if self.sock is not None:
+            try:
+                self.sock.close()
+            finally:
+                self.sock = None
+
+    def send_line(self, line: str) -> None:
+        if self.sock is None:
+            raise RuntimeError("socket not connected")
+
+        if not line.endswith("\n"):
+            line += "\n"
+
+        self.sock.sendall(line.encode())
+
+    def read_available_lines(self) -> List[str]:
+        if self.sock is None:
+            return []
+
+        out: List[str] = []
+
+        while True:
+            readable, _, _ = select.select([self.sock], [], [], 0)
+
+            if not readable:
+                break
+
+            try:
+                data = self.sock.recv(4096)
+            except BlockingIOError:
+                break
+            except ConnectionResetError:
+                out.append("dead")
+                break
+
+            if not data:
+                out.append("dead")
+                break
+
+            self.recv_buffer += data.decode(errors="ignore")
+
+            while "\n" in self.recv_buffer:
+                line, self.recv_buffer = self.recv_buffer.split("\n", 1)
+                out.append(line.strip())
+
+        return out
+
+    def read_blocking_line(self, timeout: float = 5.0) -> str:
+        if self.blocking_buffer:
+            return self.blocking_buffer.pop(0)
+
+        start = time.time()
+
+        while time.time() - start < timeout:
+            lines = self.read_available_lines()
+
+            if lines:
+                self.blocking_buffer.extend(lines)
+                return self.blocking_buffer.pop(0)
+
+            time.sleep(0.005)
+
+        raise TimeoutError("timeout waiting server")
+
+    def drain_blocking_buffer(self) -> List[str]:
+        lines = self.blocking_buffer[:]
+        self.blocking_buffer.clear()
+        return lines
+
+
+class Parser:
+    @staticmethod
+    def parse_inventory(line: str) -> Dict[str, int]:
+        inv = {r: 0 for r in RESOURCES}
+        clean = line.strip()
+
+        if clean.startswith("["):
+            clean = clean[1:]
+
+        if clean.endswith("]"):
+            clean = clean[:-1]
+
+        for part in clean.split(","):
+            toks = part.strip().split()
+
+            if len(toks) == 2 and toks[0] in inv:
+                try:
+                    inv[toks[0]] = int(toks[1])
+                except ValueError:
+                    inv[toks[0]] = 0
+
+        return inv
+
+    @staticmethod
+    def parse_look(line: str) -> List[List[str]]:
+        clean = line.strip()
+
+        if clean.startswith("["):
+            clean = clean[1:]
+
+        if clean.endswith("]"):
+            clean = clean[:-1]
+
+        return [tile.strip().split() for tile in clean.split(",")]
+
+    @staticmethod
+    def is_inventory_response(line: str) -> bool:
+        if not (line.startswith("[") and line.endswith("]")):
+            return False
+
+        clean = line[1:-1].strip()
+
+        if not clean:
+            return False
+
+        for part in clean.split(","):
+            toks = part.strip().split()
+
+            if len(toks) != 2:
+                return False
+
+            if toks[0] not in RESOURCES:
+                return False
+
+            if not toks[1].isdigit():
+                return False
+
+        return True
+
+    @staticmethod
+    def is_look_response(line: str) -> bool:
+        return (
+            line.startswith("[")
+            and line.endswith("]")
+            and not Parser.is_inventory_response(line)
+        )
+
+    @staticmethod
+    def parse_broadcast(line: str) -> Optional[Tuple[int, str]]:
+        if not line.startswith("message "):
+            return None
+
+        try:
+            prefix, text = line.split(",", 1)
+            return int(prefix.replace("message", "").strip()), text.strip()
+        except ValueError:
+            return None
+
+    @staticmethod
+    def parse_current_level(line: str) -> Optional[int]:
+        if not line.startswith("Current level:"):
+            return None
+
+        try:
+            return int(line.replace("Current level:", "", 1).strip())
+        except ValueError:
+            return None
