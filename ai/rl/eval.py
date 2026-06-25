@@ -1,240 +1,324 @@
 #!/usr/bin/env python3
 """
-eval.py — Évaluation des performances de zappy_ai.
+eval_rl.py — Évaluation d'un agent Zappy entraîné (Double DQN).
 
-Pendant logique de train.py : train.py PRODUIT des parties (data), eval.py
-les JUGE. Aucune notion de ML ici non plus — on agrège des métriques
-mesurables sur l'IA FSM :
+Évalue un checkpoint produit par train_rl.py en le faisant jouer, en GREEDY
+(epsilon=0 par défaut), contre le VRAI serveur Zappy déjà lancé. Comme train_rl,
+ce script NE recrée PAS de monde : il se CONNECTE à un serveur existant
+(--host/--port) ; un épisode = une vie de drone. --launch-server reste une
+commodité optionnelle qui démarre UNE instance du vrai binaire fourni.
 
-  * taux de victoire par équipe (via "seg") ;
-  * niveau max atteint (distribution) ;
-  * nombre de joueurs distincts ayant atteint chaque niveau ;
-  * morts par partie ;
-  * proportion de parties allant jusqu'à un vainqueur vs timeout ;
-  * durée moyenne / médiane des parties.
+Il réutilise l'environnement, l'agent et l'espace d'actions de train_rl
+(ZappyEnv, DQNAgent, ACTIONS, OBS_DIM, setup_server) : l'évaluation passe donc
+exactement par le même protocole et le même encodage d'observation que
+l'entraînement (sinon les métriques seraient mensongères).
 
-La condition de victoire du sujet (>= 6 joueurs au niveau max 8) sert de
-critère de réussite "objectif", en plus du seg renvoyé par le serveur.
+Métriques produites :
+  * taux de réussite : épisodes ayant atteint --target-level ;
+  * niveau atteint (moyenne / médiane / distribution) ;
+  * taux de mort vs survie ;
+  * pas par épisode (efficacité), nourriture finale ;
+  * retour cumulé (récompense shaping) — indicatif ;
+  * distribution des actions choisies (détection de comportements dégénérés).
 
-Deux usages :
-  1. eval.py results.json              -> lit un JSON déjà produit par train.py
-  2. eval.py --run [options train]     -> lance d'abord un lot via train.run_batch
+Une baseline aléatoire optionnelle (--baseline) donne un point de comparaison :
+un agent utile doit faire nettement mieux que des actions tirées au hasard.
+
+Exemples
+--------
+  # serveur déjà lancé :
+  #   ./zappy_server -p 4242 -x 10 -y 10 -n RL -c 64 -f 1000
+  python3 eval_rl.py --load runs/zappy_dqn.pt --host localhost --port 4242 \
+                     --frequency 1000 --episodes 30 --baseline
+
+  # commodité : laisser eval_rl lancer le vrai binaire fourni
+  python3 eval_rl.py --load runs/zappy_dqn.pt \
+                     --launch-server ../../build/bin/zappy_server \
+                     --port 4242 --frequency 1000 --episodes 30
 """
+
+from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
+from collections import Counter
+from dataclasses import dataclass, asdict, field
 from typing import Dict, List, Optional
 
+import numpy as np
 
-MAX_LEVEL = 8
-WIN_PLAYERS = 6
+# On réutilise tout le moteur de train_rl (même dossier).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+if _THIS_DIR not in sys.path:
+    sys.path.insert(0, _THIS_DIR)
+
+import train as T  # ZappyEnv, DQNAgent, ACTIONS, OBS_DIM, setup_server
 
 
 # --------------------------------------------------------------------------- #
-# Chargement des données
+# Résultats.
 # --------------------------------------------------------------------------- #
 
-def load_results(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+@dataclass
+class EpisodeResult:
+    index: int
+    max_level: int
+    reached_target: bool
+    died: bool
+    truncated: bool
+    steps: int
+    final_food: int
+    ret: float
+    terminal: str            # 'level' / 'dead' / 'truncated'
+    action_counts: Dict[str, int] = field(default_factory=dict)
 
 
-def run_then_load(args: argparse.Namespace) -> dict:
-    """Réutilise le moteur de train.py pour générer un lot frais, sans
-    dupliquer la logique d'orchestration."""
+@dataclass
+class Summary:
+    policy: str
+    episodes: int
+    target_level: int
+    success_rate: float          # fraction ayant atteint target_level
+    death_rate: float
+    mean_level: float
+    median_level: float
+    mean_steps: float
+    mean_final_food: float
+    mean_return: float
+    level_distribution: Dict[int, int]
+    action_distribution: Dict[str, int]
+
+
+# --------------------------------------------------------------------------- #
+# Boucle d'évaluation (générique : agent greedy OU politique aléatoire).
+# --------------------------------------------------------------------------- #
+
+def run_episode(env: T.ZappyEnv, choose_action, idx: int) -> EpisodeResult:
+    obs, _ = env.reset()
+    done = False
+    max_level = env.conn.state.level if env.conn else 1
+    ret = 0.0
+    counts: Counter = Counter()
+    info: Dict = {"level": max_level, "food": 0, "steps": 0, "outcome": "?"}
+    terminated = truncated = False
+
+    while not done:
+        action = choose_action(obs)
+        counts[T.ACTIONS[int(action)]] += 1
+        obs, reward, terminated, truncated, info = env.step(action)
+        done = terminated or truncated
+        ret += reward
+        max_level = max(max_level, info["level"])
+
+    died = (info.get("outcome") == "dead")
+    reached = max_level >= env.target_level
+    if reached and not died:
+        terminal = "level"
+    elif died:
+        terminal = "dead"
+    else:
+        terminal = "truncated"
+
+    return EpisodeResult(
+        index=idx,
+        max_level=max_level,
+        reached_target=reached,
+        died=died,
+        truncated=bool(truncated and not died),
+        steps=info.get("steps", 0),
+        final_food=info.get("food", 0),
+        ret=round(ret, 3),
+        terminal=terminal,
+        action_counts=dict(counts),
+    )
+
+
+def summarize(policy: str, target_level: int,
+              results: List[EpisodeResult]) -> Summary:
+    n = len(results)
+    levels = [r.max_level for r in results]
+    level_dist: Dict[int, int] = {}
+    for l in levels:
+        level_dist[l] = level_dist.get(l, 0) + 1
+    action_dist: Counter = Counter()
+    for r in results:
+        action_dist.update(r.action_counts)
+
+    return Summary(
+        policy=policy,
+        episodes=n,
+        target_level=target_level,
+        success_rate=round(sum(r.reached_target for r in results) / n, 4),
+        death_rate=round(sum(r.died for r in results) / n, 4),
+        mean_level=round(statistics.mean(levels), 3),
+        median_level=float(statistics.median(levels)),
+        mean_steps=round(statistics.mean(r.steps for r in results), 2),
+        mean_final_food=round(statistics.mean(r.final_food for r in results), 2),
+        mean_return=round(statistics.mean(r.ret for r in results), 3),
+        level_distribution=dict(sorted(level_dist.items())),
+        action_distribution=dict(action_dist.most_common()),
+    )
+
+
+def print_summary(s: Summary) -> None:
+    bar = "-" * 56
+    print(bar, file=sys.stderr)
+    print(f"  Politique         : {s.policy}", file=sys.stderr)
+    print(f"  Épisodes          : {s.episodes}", file=sys.stderr)
+    print(f"  Niveau cible      : {s.target_level}", file=sys.stderr)
+    print(f"  Taux de réussite  : {s.success_rate:.1%} "
+          f"(atteint le niveau cible)", file=sys.stderr)
+    print(f"  Taux de mort      : {s.death_rate:.1%}", file=sys.stderr)
+    print(f"  Niveau atteint    : moy {s.mean_level} | méd {s.median_level}",
+          file=sys.stderr)
+    print(f"  Pas / épisode     : {s.mean_steps}", file=sys.stderr)
+    print(f"  Nourriture finale : {s.mean_final_food}", file=sys.stderr)
+    print(f"  Retour moyen      : {s.mean_return}", file=sys.stderr)
+    print(f"  Distribution niv. : {s.level_distribution}", file=sys.stderr)
+    top = list(s.action_distribution.items())[:6]
+    print(f"  Actions (top 6)   : {top}", file=sys.stderr)
+    print(bar, file=sys.stderr)
+
+
+# --------------------------------------------------------------------------- #
+# Programme principal.
+# --------------------------------------------------------------------------- #
+
+def evaluate(args: argparse.Namespace) -> int:
+    if not args.load:
+        print("[eval_rl] --load <model.pt> requis", file=sys.stderr)
+        return 84
+
+    launcher, host, port = T.setup_server(args)
+    report: Dict = {}
     try:
-        import ai.rl.train as train
-    except ImportError:
-        print("[eval] train.py introuvable (doit être dans le même dossier)",
-              file=sys.stderr)
-        raise SystemExit(84)
+        env = T.ZappyEnv(
+            host=host, port=port, frequency=args.frequency, team=args.team,
+            target_level=args.target_level, max_steps=args.max_steps,
+        )
 
-    cfg = train.BatchConfig(
-        server_bin=args.server,
-        ai_script=args.ai,
-        teams=args.teams,
-        width=args.width,
-        height=args.height,
-        clients=args.clients,
-        frequency=args.frequency,
-        games=args.games,
-        max_duration=args.max_duration,
-        host=args.host,
-        use_gui=not args.no_gui,
-    )
-    results = train.run_batch(cfg)
-    return {"config": train.asdict(cfg), "results": results}
+        # --- agent entraîné ----------------------------------------------- #
+        agent = T.DQNAgent(obs_dim=T.OBS_DIM, n_actions=len(T.ACTIONS),
+                           device=args.device, hidden=args.hidden)
+        ckpt = agent.load(args.load)
+        if ckpt.get("obs_dim") not in (None, T.OBS_DIM) or \
+           ckpt.get("n_actions") not in (None, len(T.ACTIONS)):
+            print(
+                f"[eval_rl] incompatibilité de checkpoint: "
+                f"obs_dim={ckpt.get('obs_dim')} n_actions={ckpt.get('n_actions')} "
+                f"(attendu {T.OBS_DIM}/{len(T.ACTIONS)})",
+                file=sys.stderr,
+            )
+            return 84
+        print(f"[eval_rl] modèle chargé: {args.load} "
+              f"(meta={ckpt.get('meta', {})})", file=sys.stderr)
 
+        def greedy(obs):
+            return agent.act(obs, epsilon=args.epsilon)
 
-# --------------------------------------------------------------------------- #
-# Calcul des métriques
-# --------------------------------------------------------------------------- #
+        agent_results: List[EpisodeResult] = []
+        for i in range(1, args.episodes + 1):
+            r = run_episode(env, greedy, i)
+            agent_results.append(r)
+            print(f"[eval_rl ep {i:3d}] niv={r.max_level} cible={'oui' if r.reached_target else 'non':3} "
+                  f"fin={r.terminal:9} pas={r.steps:3d} food={r.final_food:3d} "
+                  f"ret={r.ret:7.2f}", file=sys.stderr)
 
-def all_teams(results: List[dict]) -> List[str]:
-    names = []
-    for game in results:
-        for team in game.get("teams", {}):
-            if team not in names:
-                names.append(team)
-    return names
+        agent_summary = summarize("dqn_greedy", args.target_level, agent_results)
+        print_summary(agent_summary)
+        report["agent"] = {
+            "summary": asdict(agent_summary),
+            "episodes": [asdict(r) for r in agent_results],
+            "checkpoint": args.load,
+            "checkpoint_meta": ckpt.get("meta", {}),
+        }
 
+        # --- baseline aléatoire (optionnelle) ----------------------------- #
+        if args.baseline:
+            rng = np.random.default_rng(args.seed)
 
-def team_metrics(results: List[dict], team: str) -> dict:
-    """Agrège les métriques d'une équipe sur l'ensemble des parties."""
-    games_played = 0
-    wins = 0
-    objective_wins = 0          # >= 6 joueurs au niveau max (critère sujet)
-    max_levels: List[int] = []
-    deaths: List[int] = []
-    players_seen: List[int] = []
+            def random_policy(obs):
+                return int(rng.integers(0, len(T.ACTIONS)))
 
-    for game in results:
-        stats = game.get("teams", {}).get(team)
-        if stats is None:
-            continue
-        games_played += 1
+            base_results: List[EpisodeResult] = []
+            for i in range(1, args.episodes + 1):
+                base_results.append(run_episode(env, random_policy, i))
+            base_summary = summarize("random", args.target_level, base_results)
+            print_summary(base_summary)
+            report["baseline_random"] = {
+                "summary": asdict(base_summary),
+                "episodes": [asdict(r) for r in base_results],
+            }
+            # verdict simple
+            delta = agent_summary.success_rate - base_summary.success_rate
+            verdict = "MIEUX que l'aléatoire" if delta > 0 else \
+                      ("ÉGAL à l'aléatoire" if delta == 0 else "PIRE que l'aléatoire")
+            print(f"[eval_rl] verdict: l'agent fait {verdict} "
+                  f"(Δ réussite = {delta:+.1%})", file=sys.stderr)
+            report["verdict"] = {"success_rate_delta": round(delta, 4),
+                                 "label": verdict}
+    finally:
+        try:
+            env.close()
+        except Exception:
+            pass
+        if launcher is not None:
+            launcher.stop()
 
-        if game.get("winner") == team:
-            wins += 1
+    if args.out:
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+        with open(args.out, "w") as fh:
+            json.dump(report, fh, indent=2, ensure_ascii=False)
+        print(f"[eval_rl] rapport JSON écrit: {args.out}", file=sys.stderr)
 
-        max_levels.append(stats.get("max_level", 1))
-        deaths.append(stats.get("deaths", 0))
-        players_seen.append(stats.get("players_seen", 0))
-
-        # level_counts peut avoir des clés str (JSON) ou int.
-        lvl_counts = stats.get("level_counts", {})
-        at_max = int(lvl_counts.get(str(MAX_LEVEL), lvl_counts.get(MAX_LEVEL, 0)))
-        if at_max >= WIN_PLAYERS:
-            objective_wins += 1
-
-    return {
-        "games_played": games_played,
-        "wins_seg": wins,
-        "win_rate_seg": _ratio(wins, games_played),
-        "objective_wins": objective_wins,
-        "objective_win_rate": _ratio(objective_wins, games_played),
-        "avg_max_level": _avg(max_levels),
-        "best_max_level": max(max_levels) if max_levels else 0,
-        "avg_deaths": _avg(deaths),
-        "avg_players_seen": _avg(players_seen),
-    }
-
-
-def global_metrics(results: List[dict]) -> dict:
-    durations = [g.get("duration_s", 0.0) for g in results]
-    reasons: Dict[str, int] = {}
-    for g in results:
-        reasons[g.get("reason", "?")] = reasons.get(g.get("reason", "?"), 0) + 1
-    return {
-        "games": len(results),
-        "avg_duration_s": _avg(durations),
-        "median_duration_s": round(statistics.median(durations), 2) if durations else 0,
-        "reasons": reasons,
-        "decided_games": sum(1 for g in results if g.get("winner")),
-    }
+    return 0
 
 
-def _avg(xs: List[float]) -> float:
-    return round(sum(xs) / len(xs), 2) if xs else 0.0
-
-
-def _ratio(num: int, den: int) -> float:
-    return round(num / den, 3) if den else 0.0
-
-
-# --------------------------------------------------------------------------- #
-# Rapport
-# --------------------------------------------------------------------------- #
-
-def print_report(payload: dict) -> dict:
-    results = payload.get("results", [])
-    if not results:
-        print("[eval] aucun résultat à évaluer.", file=sys.stderr)
-        return {}
-
-    gm = global_metrics(results)
-    report = {"global": gm, "teams": {}}
-
-    print("=" * 56)
-    print("  ÉVALUATION ZAPPY_AI  (FSM, pas de ML)")
-    print("=" * 56)
-    print(f"Parties jouées        : {gm['games']}")
-    print(f"Parties décidées (seg): {gm['decided_games']}")
-    print(f"Durée moyenne         : {gm['avg_duration_s']} s")
-    print(f"Durée médiane         : {gm['median_duration_s']} s")
-    print(f"Fins                  : {gm['reasons']}")
-    print("-" * 56)
-
-    for team in all_teams(results):
-        m = team_metrics(results, team)
-        report["teams"][team] = m
-        print(f"[{team}]")
-        print(f"  victoires (seg)        : {m['wins_seg']}/{m['games_played']} "
-              f"(taux {m['win_rate_seg']})")
-        print(f"  victoires objectif >=6@8: {m['objective_wins']}/{m['games_played']} "
-              f"(taux {m['objective_win_rate']})")
-        print(f"  niveau max moyen        : {m['avg_max_level']} "
-              f"(meilleur {m['best_max_level']}/{MAX_LEVEL})")
-        print(f"  morts / partie (moy)    : {m['avg_deaths']}")
-        print(f"  joueurs vus / partie    : {m['avg_players_seen']}")
-        print("-" * 56)
-
-    return report
-
-
-# --------------------------------------------------------------------------- #
-# CLI
-# --------------------------------------------------------------------------- #
-
-def parse_args() -> argparse.Namespace:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Évaluation des résultats de train.py (pas de ML)."
+        description="Évaluation d'un agent Zappy DQN contre le VRAI serveur."
     )
-    p.add_argument("results", nargs="?", default="results.json",
-                   help="fichier JSON produit par train.py")
-    p.add_argument("--out", default=None,
-                   help="écrire le rapport agrégé dans ce JSON")
+    p.add_argument("--load", required=True, help="checkpoint .pt à évaluer")
+    p.add_argument("--episodes", type=int, default=30,
+                   help="nombre d'épisodes d'évaluation")
+    p.add_argument("--epsilon", type=float, default=0.0,
+                   help="exploration pendant l'éval (0 = greedy)")
+    p.add_argument("--baseline", action="store_true",
+                   help="ajouter une baseline aléatoire pour comparer")
+    p.add_argument("--out", default=os.path.join(_THIS_DIR, "runs", "eval_report.json"),
+                   help="fichier JSON de sortie (vide pour ne rien écrire)")
 
-    # --run : générer un lot frais via train.py avant d'évaluer
-    p.add_argument("--run", action="store_true",
-                   help="lancer d'abord un lot via train.run_batch")
-    p.add_argument("--server", default="./zappy_server")
-    p.add_argument("--ai", default="./zappy_ai.py")
-    p.add_argument("--teams", nargs="+", default=["team1"])
-    p.add_argument("-x", "--width", type=int, default=10)
-    p.add_argument("-y", "--height", type=int, default=10)
-    p.add_argument("-c", "--clients", type=int, default=6)
-    p.add_argument("-f", "--frequency", type=int, default=100)
-    p.add_argument("--games", type=int, default=5)
-    p.add_argument("--max-duration", type=float, default=120.0)
+    # serveur : par défaut on se connecte à un serveur DÉJÀ lancé.
     p.add_argument("--host", default="localhost")
-    p.add_argument("--no-gui", action="store_true")
-    return p.parse_args()
+    p.add_argument("--port", type=int, default=4242)
+    p.add_argument("--launch-server", default=None, metavar="BIN",
+                   help="OPTIONNEL: lance UNE instance du VRAI zappy_server fourni")
+    p.add_argument("--width", type=int, default=10, help="(si --launch-server) -x")
+    p.add_argument("--height", type=int, default=10, help="(si --launch-server) -y")
+    p.add_argument("--clients", type=int, default=64,
+                   help="(si --launch-server) -c : assez de slots pour reconnecter")
+    p.add_argument("--frequency", type=int, default=100,
+                   help="-f du serveur (timeouts) ; mets-le haut pour aller vite")
+    p.add_argument("--team", default="RL")
+    p.add_argument("--target-level", type=int, default=2)
+    p.add_argument("--max-steps", type=int, default=200)
+    p.add_argument("--hidden", type=int, default=128,
+                   help="taille cachée (doit matcher l'entraînement)")
+    p.add_argument("--seed", type=int, default=0)
+    import torch
+    p.add_argument("--device",
+                   default="cuda" if torch.cuda.is_available() else "cpu")
+    return p
 
 
 def main() -> int:
-    args = parse_args()
-
-    if args.run:
-        payload = run_then_load(args)
-    else:
-        try:
-            payload = load_results(args.results)
-        except FileNotFoundError:
-            print(f"[eval] fichier introuvable: {args.results} "
-                  f"(lance d'abord train.py ou utilise --run)", file=sys.stderr)
-            return 84
-
-    report = print_report(payload)
-
-    if args.out and report:
-        with open(args.out, "w", encoding="utf-8") as fh:
-            json.dump(report, fh, indent=2)
-        print(f"[eval] rapport écrit dans {args.out}", file=sys.stderr)
-
-    return 0
+    args = build_parser().parse_args()
+    if not args.out:
+        args.out = None
+    return evaluate(args)
 
 
 if __name__ == "__main__":

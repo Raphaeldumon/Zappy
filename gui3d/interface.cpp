@@ -267,7 +267,7 @@ void Interface::loadPlayerAnimations()
 
     for (int i = 0; i < _playerAnimCount; ++i)
         TraceLog(LOG_INFO, "player anim[%d] '%s' frames=%d",
-                 i, _playerAnims[i].name, _playerAnims[i].frameCount);
+                 i, _playerAnims[i].name, _playerAnims[i].keyframeCount);
 }
 
 void Interface::unloadPlayerModel()
@@ -286,10 +286,13 @@ void Interface::unloadPlayerModel()
 }
 
 namespace {
-    constexpr float kAnimFps   = 30.0f; // GLTF clips carry no reliable fps; play at a fixed rate
-    constexpr double kWalkHold = 0.45;  // seconds of Walk played after each discrete server step
-    constexpr float kPickupSpeed = 6.0f; // Pickup is authored long; play it faster so the
-                                         // collect reads as a quick snatch (1.0 = kAnimFps)
+    // raylib 6.x: ModelAnimation.frame is a float interpolated across keyframeCount
+    // sparse keyframes, so a fixed fps would race short clips and crawl long ones.
+    // Drive playback by wall-clock duration instead: a clip loops every
+    // kClipSeconds regardless of how many keyframes it has.
+    constexpr float kClipSeconds = 1.0f; // seconds for one full clip pass
+    constexpr double kWalkHold   = 0.45; // seconds of Walk played after each discrete server step
+    constexpr float kPickupSpeed = 6.0f; // Pickup plays this many times faster (quick snatch)
 }
 
 void Interface::updatePlayerAnimations()
@@ -354,19 +357,20 @@ void Interface::updatePlayerAnimations()
         }
 
         if (const int idx = _clipIndex[static_cast<std::size_t>(st.loopClip)]; idx >= 0) {
-            const int n = _playerAnims[idx].frameCount;
+            const int n = _playerAnims[idx].keyframeCount;
             if (n > 0)
-                st.loopFrame = std::fmod(st.loopFrame + dt * kAnimFps, static_cast<float>(n));
+                st.loopFrame = std::fmod(st.loopFrame + dt * n / kClipSeconds,
+                                         static_cast<float>(n));
         }
 
         if (st.oneShot != PlayerClip::Count) {
             const int idx = _clipIndex[static_cast<std::size_t>(st.oneShot)];
-            if (idx < 0 || _playerAnims[idx].frameCount <= 0) {
+            if (idx < 0 || _playerAnims[idx].keyframeCount <= 0) {
                 st.oneShot = PlayerClip::Count;
             } else {
                 const float speed = st.oneShot == PlayerClip::Pickup ? kPickupSpeed : 1.0f;
-                st.oneShotFrame += dt * kAnimFps * speed;
-                if (st.oneShotFrame >= _playerAnims[idx].frameCount)
+                st.oneShotFrame += dt * _playerAnims[idx].keyframeCount / kClipSeconds * speed;
+                if (st.oneShotFrame >= _playerAnims[idx].keyframeCount)
                     st.oneShot = PlayerClip::Count; // played once; fall back to the loop clip
             }
         }
@@ -375,12 +379,12 @@ void Interface::updatePlayerAnimations()
 
     // Advance and retire death ghosts once their clip has played through.
     const int didx = _clipIndex[static_cast<std::size_t>(PlayerClip::Death)];
-    if (didx < 0 || _playerAnims[didx].frameCount <= 0) {
+    if (didx < 0 || _playerAnims[didx].keyframeCount <= 0) {
         _deathGhosts.clear();
     } else {
-        const int n = _playerAnims[didx].frameCount;
+        const int n = _playerAnims[didx].keyframeCount;
         for (auto& g : _deathGhosts)
-            g.frame += dt * kAnimFps;
+            g.frame += dt * n / kClipSeconds;
         _deathGhosts.erase(
             std::remove_if(_deathGhosts.begin(), _deathGhosts.end(),
                            [n](const DeathGhost& g) { return g.frame >= n; }),
@@ -402,7 +406,7 @@ void Interface::applyPlayerPose(std::uint32_t id)
     const int        idx     = _clipIndex[static_cast<std::size_t>(clip)];
     if (idx < 0)
         return;
-    UpdateModelAnimation(_playerModel.model, _playerAnims[idx], static_cast<int>(frame));
+    UpdateModelAnimation(_playerModel.model, _playerAnims[idx], frame);
 }
 
 void Interface::loadTileTextures()
@@ -1042,8 +1046,7 @@ void Interface::render()
             for (const auto& g : _deathGhosts) {
                 if (!tileVisible(g.x, g.y))
                     continue;
-                UpdateModelAnimation(_playerModel.model, _playerAnims[didx],
-                                     static_cast<int>(g.frame));
+                UpdateModelAnimation(_playerModel.model, _playerAnims[didx], g.frame);
                 DrawModelEx(_playerModel.model, { g.x, kTileTopY, g.y },
                             { 0.0f, 1.0f, 0.0f }, playerOrientationAngle(g.orientation),
                             _playerModel.scale, WHITE);
