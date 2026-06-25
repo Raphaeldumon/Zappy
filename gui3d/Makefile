@@ -23,7 +23,7 @@ MAP_W       ?=  20
 MAP_H       ?=  20
 TEAMS       ?=  red
 CLIENTS     ?=  100
-FREQ        ?=  100
+FREQ        ?=  1000
 BOTS        ?=  8
 HOST        ?=  127.0.0.1
 
