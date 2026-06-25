@@ -290,9 +290,16 @@ namespace {
     // sparse keyframes, so a fixed fps would race short clips and crawl long ones.
     // Drive playback by wall-clock duration instead: a clip loops every
     // kClipSeconds regardless of how many keyframes it has.
-    constexpr float kClipSeconds = 1.0f; // seconds for one full clip pass
-    constexpr double kWalkHold   = 0.45; // seconds of Walk played after each discrete server step
+    constexpr float kClipSeconds = 1.0f; // seconds for one full clip pass (Idle / Dance)
+    // Walk has its own, shorter cycle so a full stride plays out over a single
+    // one-cell glide. Keep these three roughly equal: the legs finish a stride
+    // (kWalkClipSeconds) about when the body finishes sliding (~3*kMoveSmooth)
+    // and Walk stays selected the whole way (kWalkHold).
+    constexpr float kWalkClipSeconds = 0.55f; // one full Walk stride
+    constexpr double kWalkHold   = 0.55; // seconds of Walk played after each discrete server step
     constexpr float kPickupSpeed = 6.0f; // Pickup plays this many times faster (quick snatch)
+    constexpr float kMoveSmooth  = 0.15f; // time constant (s) for the cell-to-cell glide;
+                                          // ~3x reaches the cell in ~0.45s, matching one stride
 }
 
 void Interface::updatePlayerAnimations()
@@ -337,11 +344,40 @@ void Interface::updatePlayerAnimations()
         PlayerAnimState& st = it->second;
         const aiPlayer&  p  = pit->second;
 
+        if (!st.posInit) {                     // first sighting: appear in place
+            st.dispX   = static_cast<float>(p.getX());
+            st.dispY   = static_cast<float>(p.getY());
+            st.posInit = true;
+        }
+
         if (p.getX() != st.lastX || p.getY() != st.lastY) {
-            if (st.lastX != -9999)             // skip the walk burst on first sighting
+            if (st.lastX != -9999) {           // skip the walk burst on first sighting
                 st.walkUntil = now + kWalkHold;
+                // A single forward step changes one axis by exactly one cell.
+                // Anything bigger is a toroidal wrap or a teleport (fork/respawn):
+                // gliding across the whole map would look worse than a cut, so
+                // snap the display straight to the new cell.
+                const int dx = p.getX() - st.lastX;
+                const int dy = p.getY() - st.lastY;
+                if (dx < -1 || dx > 1 || dy < -1 || dy > 1) {
+                    st.dispX = static_cast<float>(p.getX());
+                    st.dispY = static_cast<float>(p.getY());
+                }
+            }
             st.lastX = p.getX();
             st.lastY = p.getY();
+        }
+
+        // Ease the display position toward the logical tile so a one-cell step
+        // becomes a visible glide whose duration roughly matches the Walk clip.
+        {
+            const float tgtX = static_cast<float>(p.getX());
+            const float tgtY = static_cast<float>(p.getY());
+            const float k = 1.0f - std::exp(-dt / kMoveSmooth);
+            st.dispX += (tgtX - st.dispX) * k;
+            st.dispY += (tgtY - st.dispY) * k;
+            if (std::fabs(tgtX - st.dispX) < 0.001f) st.dispX = tgtX;
+            if (std::fabs(tgtY - st.dispY) < 0.001f) st.dispY = tgtY;
         }
 
         const bool dancing = _state.incanting.count(
@@ -358,9 +394,12 @@ void Interface::updatePlayerAnimations()
 
         if (const int idx = _clipIndex[static_cast<std::size_t>(st.loopClip)]; idx >= 0) {
             const int n = _playerAnims[idx].keyframeCount;
-            if (n > 0)
-                st.loopFrame = std::fmod(st.loopFrame + dt * n / kClipSeconds,
+            if (n > 0) {
+                const float clipSecs = (st.loopClip == PlayerClip::Walk)
+                                     ? kWalkClipSeconds : kClipSeconds;
+                st.loopFrame = std::fmod(st.loopFrame + dt * n / clipSecs,
                                          static_cast<float>(n));
+            }
         }
 
         if (st.oneShot != PlayerClip::Count) {
@@ -805,8 +844,18 @@ void Interface::update()
         if (it == _state.players.end()) {
             _followedPlayer = -1;
         } else {
-            const Vector3 now = { it->second.getX() * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f,
-                                  it->second.getY() * TILE_SIZE + TILE_SIZE / 2.0f };
+            // Track the smoothed display position (falls back to the tile when no
+            // anim state yet) so the camera glides with the body instead of
+            // jumping a full cell each time the followed player steps.
+            float fx = static_cast<float>(it->second.getX());
+            float fy = static_cast<float>(it->second.getY());
+            if (const auto ait = _playerAnimState.find(static_cast<std::uint32_t>(_followedPlayer));
+                ait != _playerAnimState.end() && ait->second.posInit) {
+                fx = ait->second.dispX;
+                fy = ait->second.dispY;
+            }
+            const Vector3 now = { fx * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f,
+                                  fy * TILE_SIZE + TILE_SIZE / 2.0f };
             _camera.position = Vector3Add(_camera.position, Vector3Subtract(now, _followAnchor));
             _followAnchor    = now;
             updateCameraTarget();
@@ -962,8 +1011,18 @@ void Interface::render()
                     const aiPlayer& player = tile.players[static_cast<size_t>(i)];
                     const int col = i % cols;
                     const int row = i / cols;
-                    const float px = originX + kPlayerSpacing * static_cast<float>(col);
-                    const float pz = originZ + kPlayerSpacing * static_cast<float>(row);
+                    float px = originX + kPlayerSpacing * static_cast<float>(col);
+                    float pz = originZ + kPlayerSpacing * static_cast<float>(row);
+
+                    // The animator advances dispX/dispY behind the logical tile
+                    // while a step is in flight; shift the model by that lag so it
+                    // slides in from the previous cell instead of popping into this
+                    // one. When settled (disp == tile) the offset is zero.
+                    if (const auto ait = _playerAnimState.find(player.getId());
+                        ait != _playerAnimState.end()) {
+                        px += (ait->second.dispX - static_cast<float>(x)) * TILE_SIZE;
+                        pz += (ait->second.dispY - static_cast<float>(y)) * TILE_SIZE;
+                    }
 
                     if (_playerModel.loaded) {
                         // Upload this player's own clip+frame before drawing it, so

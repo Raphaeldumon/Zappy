@@ -112,6 +112,13 @@ private:
         int        lastX{-9999};                 // last seen tile, to detect movement
         int        lastY{-9999};
         double     walkUntil{0.0};               // GetTime() until which Walk plays after a step
+        // Smoothly interpolated display position in (fractional) tile units. The
+        // logical tile jumps the instant ppo arrives; dispX/dispY ease toward it
+        // so the body glides one cell over instead of teleporting, keeping the
+        // translation in step with the Walk clip. posInit guards the first frame.
+        float      dispX{0.0f};
+        float      dispY{0.0f};
+        bool       posInit{false};
     };
     std::unordered_map<std::uint32_t, PlayerAnimState> _playerAnimState;
 
