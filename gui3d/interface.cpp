@@ -231,13 +231,178 @@ void Interface::loadPlayerModel()
 
     TraceLog(LOG_INFO, "PLAYERMODEL '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=%.1f",
              kPlayerModelPath, dx, dy, dz, s);
+
+    loadPlayerAnimations();
+}
+
+void Interface::loadPlayerAnimations()
+{
+    _clipIndex.fill(-1);
+    _playerAnims = LoadModelAnimations(kPlayerModelPath, &_playerAnimCount);
+    if (!_playerAnims || _playerAnimCount <= 0) {
+        _playerAnims     = nullptr;
+        _playerAnimCount = 0;
+        TraceLog(LOG_WARNING, "loadPlayerAnimations: '%s' has no animations", kPlayerModelPath);
+        return;
+    }
+
+    // Resolve each wanted clip by its name in the .glb. Names are authored in the
+    // model; a missing one leaves the slot at -1 and that state simply no-ops.
+    const auto bind = [&](PlayerClip clip, const char* name) {
+        for (int i = 0; i < _playerAnimCount; ++i) {
+            if (TextIsEqual(_playerAnims[i].name, name)) {
+                _clipIndex[static_cast<std::size_t>(clip)] = i;
+                return;
+            }
+        }
+        TraceLog(LOG_WARNING, "player animation '%s' not found in '%s'", name, kPlayerModelPath);
+    };
+    bind(PlayerClip::Idle,   "Idle");
+    bind(PlayerClip::Walk,   "Walk");
+    bind(PlayerClip::Death,  "Death");
+    bind(PlayerClip::Kick,   "Kick");
+    bind(PlayerClip::Dance,  "Dance");
+    bind(PlayerClip::Pickup, "Pickup");
+    bind(PlayerClip::Jump,   "Jump");
+
+    for (int i = 0; i < _playerAnimCount; ++i)
+        TraceLog(LOG_INFO, "player anim[%d] '%s' frames=%d",
+                 i, _playerAnims[i].name, _playerAnims[i].frameCount);
 }
 
 void Interface::unloadPlayerModel()
 {
+    if (_playerAnims) {
+        UnloadModelAnimations(_playerAnims, _playerAnimCount);
+        _playerAnims     = nullptr;
+        _playerAnimCount = 0;
+    }
+    _clipIndex.fill(-1);
+    _playerAnimState.clear();
+    _deathGhosts.clear();
     if (_playerModel.loaded)
         UnloadModel(_playerModel.model);
     _playerModel = {};
+}
+
+namespace {
+    constexpr float kAnimFps   = 30.0f; // GLTF clips carry no reliable fps; play at a fixed rate
+    constexpr double kWalkHold = 0.45;  // seconds of Walk played after each discrete server step
+    constexpr float kPickupSpeed = 6.0f; // Pickup is authored long; play it faster so the
+                                         // collect reads as a quick snatch (1.0 = kAnimFps)
+}
+
+void Interface::updatePlayerAnimations()
+{
+    if (!_playerModel.loaded || _playerAnimCount <= 0)
+        return;
+
+    const float  dt  = GetFrameTime();
+    const double now = GetTime();
+
+    // Make sure every live player has a runtime entry (new players spawn Idle).
+    for (const auto& [id, player] : _state.players) {
+        (void)player;
+        _playerAnimState.try_emplace(id);
+    }
+
+    // Turn queued protocol events into per-player one-shots / death ghosts.
+    for (const auto& ev : _state.animEvents) {
+        if (ev.kind == PlayerAnimEventKind::Death) {
+            _deathGhosts.push_back({ ev.x * TILE_SIZE + TILE_SIZE / 2.0f,
+                                     ev.y * TILE_SIZE + TILE_SIZE / 2.0f,
+                                     ev.orientation, 0.0f });
+            _playerAnimState.erase(ev.id);
+            continue;
+        }
+        const PlayerClip clip = ev.kind == PlayerAnimEventKind::Kick   ? PlayerClip::Kick
+                              : ev.kind == PlayerAnimEventKind::Pickup ? PlayerClip::Pickup
+                                                                       : PlayerClip::Jump;
+        PlayerAnimState& st = _playerAnimState[ev.id];
+        st.oneShot      = clip;
+        st.oneShotFrame = 0.0f;
+    }
+    _state.animEvents.clear();
+
+    // Advance each player's looping state (Idle/Walk/Dance) and any active one-shot.
+    for (auto it = _playerAnimState.begin(); it != _playerAnimState.end();) {
+        const auto pit = _state.players.find(it->first);
+        if (pit == _state.players.end()) {     // player gone (e.g. left); drop its state
+            it = _playerAnimState.erase(it);
+            continue;
+        }
+        PlayerAnimState& st = it->second;
+        const aiPlayer&  p  = pit->second;
+
+        if (p.getX() != st.lastX || p.getY() != st.lastY) {
+            if (st.lastX != -9999)             // skip the walk burst on first sighting
+                st.walkUntil = now + kWalkHold;
+            st.lastX = p.getX();
+            st.lastY = p.getY();
+        }
+
+        const bool dancing = _state.incanting.count(
+            static_cast<long long>(p.getY()) * _map.getWidth() + p.getX()) > 0;
+
+        PlayerClip want = PlayerClip::Idle;
+        if (dancing)                 want = PlayerClip::Dance;
+        else if (now < st.walkUntil) want = PlayerClip::Walk;
+
+        if (want != st.loopClip) {
+            st.loopClip  = want;
+            st.loopFrame = 0.0f;
+        }
+
+        if (const int idx = _clipIndex[static_cast<std::size_t>(st.loopClip)]; idx >= 0) {
+            const int n = _playerAnims[idx].frameCount;
+            if (n > 0)
+                st.loopFrame = std::fmod(st.loopFrame + dt * kAnimFps, static_cast<float>(n));
+        }
+
+        if (st.oneShot != PlayerClip::Count) {
+            const int idx = _clipIndex[static_cast<std::size_t>(st.oneShot)];
+            if (idx < 0 || _playerAnims[idx].frameCount <= 0) {
+                st.oneShot = PlayerClip::Count;
+            } else {
+                const float speed = st.oneShot == PlayerClip::Pickup ? kPickupSpeed : 1.0f;
+                st.oneShotFrame += dt * kAnimFps * speed;
+                if (st.oneShotFrame >= _playerAnims[idx].frameCount)
+                    st.oneShot = PlayerClip::Count; // played once; fall back to the loop clip
+            }
+        }
+        ++it;
+    }
+
+    // Advance and retire death ghosts once their clip has played through.
+    const int didx = _clipIndex[static_cast<std::size_t>(PlayerClip::Death)];
+    if (didx < 0 || _playerAnims[didx].frameCount <= 0) {
+        _deathGhosts.clear();
+    } else {
+        const int n = _playerAnims[didx].frameCount;
+        for (auto& g : _deathGhosts)
+            g.frame += dt * kAnimFps;
+        _deathGhosts.erase(
+            std::remove_if(_deathGhosts.begin(), _deathGhosts.end(),
+                           [n](const DeathGhost& g) { return g.frame >= n; }),
+            _deathGhosts.end());
+    }
+}
+
+void Interface::applyPlayerPose(std::uint32_t id)
+{
+    if (_playerAnimCount <= 0)
+        return;
+    const auto it = _playerAnimState.find(id);
+    if (it == _playerAnimState.end())
+        return;
+    const PlayerAnimState& st = it->second;
+    const bool       oneShot = st.oneShot != PlayerClip::Count;
+    const PlayerClip clip    = oneShot ? st.oneShot : st.loopClip;
+    const float      frame   = oneShot ? st.oneShotFrame : st.loopFrame;
+    const int        idx     = _clipIndex[static_cast<std::size_t>(clip)];
+    if (idx < 0)
+        return;
+    UpdateModelAnimation(_playerModel.model, _playerAnims[idx], static_cast<int>(frame));
 }
 
 void Interface::loadTileTextures()
@@ -428,7 +593,7 @@ void Interface::handleInput()
 
     // ---- Free look: the captured mouse turns the head (yaw/pitch).
     Vector2 md = GetMouseDelta();
-    _camYaw   += md.x * 0.0030f;
+    _camYaw   -= md.x * 0.0030f;
     _camPitch -= md.y * 0.0030f;
     // Clamp pitch just shy of straight up/down so the view never flips.
     const float limit = 1.553f; // ~89deg
@@ -571,6 +736,11 @@ void Interface::rebuildWorldTo(float t)
         else
             break; // _history is in arrival order, so the rest is in the future
     }
+    // The replay re-fired every historical action packet; drop the queued one-shots
+    // so a scrub doesn't trigger a burst of kicks/jumps/deaths on the next frame.
+    _state.animEvents.clear();
+    _deathGhosts.clear();
+    _playerAnimState.clear();
     _playT = t;
 }
 
@@ -638,6 +808,9 @@ void Interface::update()
             updateCameraTarget();
         }
     }
+
+    // Drive per-player animation state (walk/idle/dance + one-shots + death ghosts).
+    updatePlayerAnimations();
 }
 
 
@@ -789,6 +962,9 @@ void Interface::render()
                     const float pz = originZ + kPlayerSpacing * static_cast<float>(row);
 
                     if (_playerModel.loaded) {
+                        // Upload this player's own clip+frame before drawing it, so
+                        // each robot shows its own animation despite sharing one model.
+                        applyPlayerPose(player.getId());
                         DrawModelEx(_playerModel.model, { px, kTileTopY, pz },
                                     { 0.0f, 1.0f, 0.0f }, playerOrientationAngle(player.getOrientation()),
                                     _playerModel.scale, WHITE);
@@ -856,6 +1032,23 @@ void Interface::render()
         if (!tileVisible(ex, ez))
             continue;
         DrawSphere({ ex, kTileTopY + TILE_SIZE * 0.08f, ez }, TILE_SIZE * 0.08f, BEIGE);
+    }
+
+    // Death ghosts: players already erased from the world, replaying the Death clip
+    // once at the spot they fell so the death reads on screen.
+    if (_playerModel.loaded && !_deathGhosts.empty()) {
+        const int didx = _clipIndex[static_cast<std::size_t>(PlayerClip::Death)];
+        if (didx >= 0) {
+            for (const auto& g : _deathGhosts) {
+                if (!tileVisible(g.x, g.y))
+                    continue;
+                UpdateModelAnimation(_playerModel.model, _playerAnims[didx],
+                                     static_cast<int>(g.frame));
+                DrawModelEx(_playerModel.model, { g.x, kTileTopY, g.y },
+                            { 0.0f, 1.0f, 0.0f }, playerOrientationAngle(g.orientation),
+                            _playerModel.scale, WHITE);
+            }
+        }
     }
 
     drawSelectionHighlight();
