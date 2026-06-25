@@ -291,15 +291,14 @@ namespace {
     // Drive playback by wall-clock duration instead: a clip loops every
     // kClipSeconds regardless of how many keyframes it has.
     constexpr float kClipSeconds = 1.0f; // seconds for one full clip pass (Idle / Dance)
-    // Walk has its own, shorter cycle so a full stride plays out over a single
-    // one-cell glide. Keep these three roughly equal: the legs finish a stride
-    // (kWalkClipSeconds) about when the body finishes sliding (~3*kMoveSmooth)
-    // and Walk stays selected the whole way (kWalkHold).
-    constexpr float kWalkClipSeconds = 0.55f; // one full Walk stride
-    constexpr double kWalkHold   = 0.55; // seconds of Walk played after each discrete server step
+    // The body slides one cell over kMoveDuration at constant speed, and the Walk
+    // clip is locked to that same progress (see updatePlayerAnimations), so feet
+    // and ground move together. kStridesPerCell is how many full walk cycles play
+    // per cell: bump it up/down until the feet look planted instead of skating
+    // (depends on the clip's built-in stride length).
+    constexpr float kMoveDuration   = 0.5f; // seconds to walk one cell
+    constexpr float kStridesPerCell = 1.0f; // walk cycles per cell (foot-slide tuning knob)
     constexpr float kPickupSpeed = 6.0f; // Pickup plays this many times faster (quick snatch)
-    constexpr float kMoveSmooth  = 0.15f; // time constant (s) for the cell-to-cell glide;
-                                          // ~3x reaches the cell in ~0.45s, matching one stride
 }
 
 void Interface::updatePlayerAnimations()
@@ -307,8 +306,7 @@ void Interface::updatePlayerAnimations()
     if (!_playerModel.loaded || _playerAnimCount <= 0)
         return;
 
-    const float  dt  = GetFrameTime();
-    const double now = GetTime();
+    const float dt = GetFrameTime();
 
     // Make sure every live player has a runtime entry (new players spawn Idle).
     for (const auto& [id, player] : _state.players) {
@@ -345,47 +343,55 @@ void Interface::updatePlayerAnimations()
         const aiPlayer&  p  = pit->second;
 
         if (!st.posInit) {                     // first sighting: appear in place
-            st.dispX   = static_cast<float>(p.getX());
-            st.dispY   = static_cast<float>(p.getY());
+            st.dispX = st.fromX = static_cast<float>(p.getX());
+            st.dispY = st.fromY = static_cast<float>(p.getY());
+            st.moveProgress = 1.0f;
             st.posInit = true;
         }
 
         if (p.getX() != st.lastX || p.getY() != st.lastY) {
-            if (st.lastX != -9999) {           // skip the walk burst on first sighting
-                st.walkUntil = now + kWalkHold;
-                // A single forward step changes one axis by exactly one cell.
-                // Anything bigger is a toroidal wrap or a teleport (fork/respawn):
-                // gliding across the whole map would look worse than a cut, so
-                // snap the display straight to the new cell.
+            if (st.lastX != -9999) {           // skip the glide on first sighting
                 const int dx = p.getX() - st.lastX;
                 const int dy = p.getY() - st.lastY;
+                // One forward step changes a single axis by one cell. Anything
+                // bigger is a toroidal wrap or a teleport (fork/respawn): sliding
+                // across the map would look worse than a cut, so snap.
                 if (dx < -1 || dx > 1 || dy < -1 || dy > 1) {
-                    st.dispX = static_cast<float>(p.getX());
-                    st.dispY = static_cast<float>(p.getY());
+                    st.dispX = st.fromX = static_cast<float>(p.getX());
+                    st.dispY = st.fromY = static_cast<float>(p.getY());
+                    st.moveProgress = 1.0f;
+                } else {
+                    // Start a fresh constant-speed glide from wherever the body is
+                    // right now (so a step arriving mid-glide chains cleanly).
+                    st.fromX = st.dispX;
+                    st.fromY = st.dispY;
+                    st.moveProgress = 0.0f;
                 }
             }
             st.lastX = p.getX();
             st.lastY = p.getY();
         }
 
-        // Ease the display position toward the logical tile so a one-cell step
-        // becomes a visible glide whose duration roughly matches the Walk clip.
-        {
-            const float tgtX = static_cast<float>(p.getX());
-            const float tgtY = static_cast<float>(p.getY());
-            const float k = 1.0f - std::exp(-dt / kMoveSmooth);
-            st.dispX += (tgtX - st.dispX) * k;
-            st.dispY += (tgtY - st.dispY) * k;
-            if (std::fabs(tgtX - st.dispX) < 0.001f) st.dispX = tgtX;
-            if (std::fabs(tgtY - st.dispY) < 0.001f) st.dispY = tgtY;
+        // Constant-speed linear glide: the ground slides uniformly under the feet
+        // (an ease-out would let the legs out-pace the body and skate at the end).
+        const float tgtX = static_cast<float>(p.getX());
+        const float tgtY = static_cast<float>(p.getY());
+        if (st.moveProgress < 1.0f) {
+            st.moveProgress = std::fmin(1.0f, st.moveProgress + dt / kMoveDuration);
+            st.dispX = st.fromX + (tgtX - st.fromX) * st.moveProgress;
+            st.dispY = st.fromY + (tgtY - st.fromY) * st.moveProgress;
+        } else {
+            st.dispX = tgtX;
+            st.dispY = tgtY;
         }
 
         const bool dancing = _state.incanting.count(
             static_cast<long long>(p.getY()) * _map.getWidth() + p.getX()) > 0;
+        const bool moving = st.moveProgress < 1.0f;
 
         PlayerClip want = PlayerClip::Idle;
-        if (dancing)                 want = PlayerClip::Dance;
-        else if (now < st.walkUntil) want = PlayerClip::Walk;
+        if (dancing)     want = PlayerClip::Dance;
+        else if (moving) want = PlayerClip::Walk;
 
         if (want != st.loopClip) {
             st.loopClip  = want;
@@ -395,10 +401,16 @@ void Interface::updatePlayerAnimations()
         if (const int idx = _clipIndex[static_cast<std::size_t>(st.loopClip)]; idx >= 0) {
             const int n = _playerAnims[idx].keyframeCount;
             if (n > 0) {
-                const float clipSecs = (st.loopClip == PlayerClip::Walk)
-                                     ? kWalkClipSeconds : kClipSeconds;
-                st.loopFrame = std::fmod(st.loopFrame + dt * n / clipSecs,
-                                         static_cast<float>(n));
+                if (st.loopClip == PlayerClip::Walk) {
+                    // Drive the stride straight from the glide progress so the
+                    // feet cycle exactly as fast as the body crosses the cell.
+                    st.loopFrame = std::fmod(st.moveProgress * kStridesPerCell
+                                                 * static_cast<float>(n),
+                                             static_cast<float>(n));
+                } else {
+                    st.loopFrame = std::fmod(st.loopFrame + dt * n / kClipSeconds,
+                                             static_cast<float>(n));
+                }
             }
         }
 

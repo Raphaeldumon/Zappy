@@ -111,14 +111,17 @@ private:
         float      oneShotFrame{0.0f};
         int        lastX{-9999};                 // last seen tile, to detect movement
         int        lastY{-9999};
-        double     walkUntil{0.0};               // GetTime() until which Walk plays after a step
-        // Smoothly interpolated display position in (fractional) tile units. The
-        // logical tile jumps the instant ppo arrives; dispX/dispY ease toward it
-        // so the body glides one cell over instead of teleporting, keeping the
-        // translation in step with the Walk clip. posInit guards the first frame.
-        float      dispX{0.0f};
+        // Cell-to-cell glide. The logical tile jumps the instant ppo arrives; the
+        // body instead slides at constant speed from where it was (fromX/fromY) to
+        // that tile across moveProgress 0->1. The Walk clip is driven by the SAME
+        // moveProgress, so the legs and the ground advance together (no foot
+        // sliding) and one stride lands per cell. progress == 1 means settled.
+        float      dispX{0.0f};                  // current displayed pos, fractional tile units
         float      dispY{0.0f};
-        bool       posInit{false};
+        float      fromX{0.0f};                  // where the current step started
+        float      fromY{0.0f};
+        float      moveProgress{1.0f};           // 0..1 across the active step
+        bool       posInit{false};               // guards the first-frame seed
     };
     std::unordered_map<std::uint32_t, PlayerAnimState> _playerAnimState;
 
