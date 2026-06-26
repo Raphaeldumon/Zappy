@@ -45,6 +45,14 @@ void unmirror(GameMap& map, GuiState& state, std::uint32_t id)
         map.removePlayerFromTile(it->second.getX(), it->second.getY(), it->second);
 }
 
+void setWinnerIfLevel8(const aiPlayer& player, GuiState& state)
+{
+    if (state.hasWinner || player.getLevel() < 8)
+        return;
+    state.hasWinner = true;
+    state.winner = player.getTeam();
+}
+
 } // namespace
 
 void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& state)
@@ -92,8 +100,10 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         state.players.erase(id);
         auto [it, ok] = state.players.emplace(
             id, aiPlayer(id, team, x, y, static_cast<Orientation>(o)));
-        if (ok)
+        if (ok) {
             it->second.setLevel(l);
+            setWinnerIfLevel8(it->second, state);
+        }
         if (inBounds(map, x, y))
             map.addPlayerToTile(x, y, it->second);
         return;
@@ -125,6 +135,7 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         auto it = state.players.find(id);
         if (it != state.players.end()) {
             it->second.setLevel(l);
+            setWinnerIfLevel8(it->second, state);
             if (inBounds(map, it->second.getX(), it->second.getY())) {
                 map.removePlayerFromTile(it->second.getX(), it->second.getY(), it->second);
                 map.addPlayerToTile(it->second.getX(), it->second.getY(), it->second);

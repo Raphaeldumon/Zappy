@@ -148,6 +148,7 @@ private:
     // --- Spectator state ---
     bool         _showStats{false};      // Tab: global environment stats panel
     bool         _showHelp{false};       // H / F1: full controls overlay
+    float        _endScroll{0.0f};       // mouse-wheel offset for the end-screen player list
     std::int64_t _followedPlayer{-1};    // F: camera rides along this player id (-1 = none)
     gfx::Vec3    _followAnchor{};        // followed player's world pos last frame
     double       _lastClickTime{-1.0};   // for double-click (focus) detection
@@ -186,6 +187,7 @@ private:
     void drawHud();                 // permanent compact HUD (top-left)
     void drawStatsPanel();          // global environment stats (Tab)
     void drawHelpOverlay();         // full controls list (H / F1)
+    void drawEndScreen();           // centered winner summary after seg
 
     // --- Timeline helpers ---
     void recordIncoming();          // drain socket into _history (+apply if live)

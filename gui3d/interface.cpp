@@ -1,6 +1,7 @@
 #include "interface.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <filesystem>
 
@@ -606,8 +607,13 @@ void Interface::handleInput()
     }
 
     // ---- Wheel sets the fly speed (not zoom — there's no pivot to zoom to).
+    // After the game ends, the same wheel scrolls the winner report instead.
     float wheel = _engine.mouseWheel();
-    if (wheel != 0.0f) {
+    if (wheel != 0.0f && _state.hasWinner) {
+        _endScroll -= wheel * 56.0f;
+        if (_endScroll < 0.0f)
+            _endScroll = 0.0f;
+    } else if (wheel != 0.0f) {
         _flySpeed *= (1.0f + wheel * 0.12f);
         const float span = std::max(_map.getWidth(), _map.getHeight()) * TILE_SIZE;
         const float minS = span * 0.05f, maxS = span * 4.0f;
@@ -821,6 +827,50 @@ namespace {
 
     struct CountLabel { gfx::Vec3 worldPos; int count; gfx::Color color; };
 
+    gfx::Color colorForTeam(const std::string& team)
+    {
+        std::string lower;
+        lower.reserve(team.size());
+        for (unsigned char c : team)
+            lower.push_back(static_cast<char>(std::tolower(c)));
+
+        if (lower.find("red") != std::string::npos)
+            return gfx::Color{ 230, 60, 70, 255 };
+        if (lower.find("blue") != std::string::npos)
+            return gfx::Color{ 70, 155, 255, 255 };
+        if (lower.find("green") != std::string::npos)
+            return gfx::Color{ 60, 210, 120, 255 };
+        if (lower.find("yellow") != std::string::npos)
+            return gfx::Color{ 255, 210, 55, 255 };
+        if (lower.find("purple") != std::string::npos || lower.find("violet") != std::string::npos)
+            return gfx::Color{ 180, 105, 255, 255 };
+        if (lower.find("orange") != std::string::npos)
+            return gfx::Color{ 255, 145, 55, 255 };
+
+        std::uint32_t h = 2166136261u;
+        for (unsigned char c : team) {
+            h ^= c;
+            h *= 16777619u;
+        }
+        return gfx::Color{
+            static_cast<std::uint8_t>(80 + (h & 0x7f)),
+            static_cast<std::uint8_t>(90 + ((h >> 8) & 0x7f)),
+            static_cast<std::uint8_t>(110 + ((h >> 16) & 0x7f)),
+            255
+        };
+    }
+
+    const char* orientationLabel(Orientation orientation)
+    {
+        switch (orientation) {
+            case Orientation::North: return "N";
+            case Orientation::East:  return "E";
+            case Orientation::South: return "S";
+            case Orientation::West:  return "W";
+        }
+        return "?";
+    }
+
     void drawTileOutline(RaylibEngine& engine, float worldX, float worldZ, float size)
     {
         const float half = size * 0.5f;
@@ -1022,10 +1072,6 @@ void Interface::render()
                          static_cast<int>(screenPos.x), static_cast<int>(screenPos.y), 14, label.color);
     }
 
-    if (_state.hasWinner)
-        _engine.drawText(gfx::fmt("WINNER: %s", _state.winner.c_str()),
-                         _engine.screenWidth() / 2 - 140, _engine.screenHeight() / 2 - 20, 40, gfx::GOLD);
-
     drawHud();
     drawTimeline();
     drawTileInfoPanel();
@@ -1033,6 +1079,8 @@ void Interface::render()
         drawStatsPanel();
     if (_showHelp)
         drawHelpOverlay();
+    if (_state.hasWinner)
+        drawEndScreen();
 
     _engine.drawFps(_engine.screenWidth() - 90, 10);
 }
@@ -1247,20 +1295,139 @@ void Interface::drawStatsPanel()
                                static_cast<int>(_elapsed) % 60), gfx::LIGHTGRAY });
 
     // Panel geometry: left side, under the HUD.
-    const int pad    = 12;
-    const int lineH  = 18;
-    const int width  = 280;
+    const int pad    = 18;
+    const int lineH  = 24;
+    const int width  = 420;
     const int height = pad * 2 + static_cast<int>(lines.size()) * lineH;
     const int px     = 10;
     const int py     = 80;
 
-    _engine.drawRect(px, py, width, height, gfx::Color{ 0, 0, 0, 190 });
+    _engine.drawRect(px, py, width, height, gfx::Color{ 0, 0, 0, 115 });
     _engine.drawRectLines(px, py, width, height, gfx::GOLD);
 
     int ty = py + pad;
     for (const auto& [text, color] : lines) {
-        _engine.drawText(text, px + pad, ty, 14, color);
+        _engine.drawText(text, px + pad, ty, 18, color);
         ty += lineH;
+    }
+}
+
+void Interface::drawEndScreen()
+{
+    struct TeamStats {
+        int alive{0};
+        int totalLevel{0};
+        int maxLevel{0};
+        int level8{0};
+    };
+
+    std::unordered_map<std::string, TeamStats> teamStats;
+    for (const auto& team : _state.teams)
+        teamStats.try_emplace(team);
+
+    std::vector<const aiPlayer*> alivePlayers;
+    alivePlayers.reserve(_state.players.size());
+    for (const auto& [id, player] : _state.players) {
+        (void)id;
+        alivePlayers.push_back(&player);
+        TeamStats& stats = teamStats[player.getTeam()];
+        ++stats.alive;
+        stats.totalLevel += player.getLevel();
+        stats.maxLevel = std::max(stats.maxLevel, player.getLevel());
+        if (player.getLevel() >= 8)
+            ++stats.level8;
+    }
+    std::sort(alivePlayers.begin(), alivePlayers.end(),
+              [](const aiPlayer* a, const aiPlayer* b) { return a->getId() < b->getId(); });
+
+    const gfx::Color winnerColor = colorForTeam(_state.winner);
+    const int sw = _engine.screenWidth();
+    const int sh = _engine.screenHeight();
+    const int width  = std::min(920, std::max(620, sw - 80));
+    const int height = std::min(620, std::max(460, sh - 80));
+    const int px = (sw - width) / 2;
+    const int py = (sh - height) / 2;
+    const int pad = 24;
+
+    _engine.drawRect(px, py, width, height, gfx::Color{ winnerColor.r, winnerColor.g, winnerColor.b, 72 });
+    _engine.drawRect(px, py, width, height, gfx::Color{ 0, 0, 0, 126 });
+    _engine.drawRectLines(px, py, width, height, winnerColor);
+
+    _engine.drawText("VICTORY", px + pad, py + 18, 34, winnerColor);
+    _engine.drawText(gfx::fmt("%s wins", _state.winner.c_str()), px + pad, py + 58, 22, gfx::RAYWHITE);
+    _engine.drawText(gfx::fmt("Alive players: %d   Eggs left: %d   Time unit: %d",
+                              static_cast<int>(alivePlayers.size()),
+                              static_cast<int>(_state.eggs.size()),
+                              _state.frequency),
+                     px + pad, py + 88, 18, gfx::LIGHTGRAY);
+
+    const int statsY = py + 124;
+    const int teamNameW = 170;
+    _engine.drawText("GLOBAL CLAN STATS", px + pad, statsY, 20, gfx::SKYBLUE);
+    _engine.drawText("Team", px + pad, statsY + 34, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Alive", px + pad + teamNameW, statsY + 34, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Max", px + pad + teamNameW + 80, statsY + 34, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Avg", px + pad + teamNameW + 145, statsY + 34, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Lvl 8", px + pad + teamNameW + 215, statsY + 34, 16, gfx::LIGHTGRAY);
+
+    int ty = statsY + 60;
+    for (const auto& [team, stats] : teamStats) {
+        const bool winner = team == _state.winner;
+        const gfx::Color color = winner ? winnerColor : gfx::RAYWHITE;
+        const float avg = stats.alive > 0 ? static_cast<float>(stats.totalLevel) / static_cast<float>(stats.alive) : 0.0f;
+        _engine.drawText(gfx::fmt("%s%s", winner ? "> " : "  ", team.c_str()), px + pad, ty, 16, color);
+        _engine.drawText(gfx::fmt("%d", stats.alive), px + pad + teamNameW, ty, 16, color);
+        _engine.drawText(gfx::fmt("%d", stats.maxLevel), px + pad + teamNameW + 80, ty, 16, color);
+        _engine.drawText(gfx::fmt("%.1f", avg), px + pad + teamNameW + 145, ty, 16, color);
+        _engine.drawText(gfx::fmt("%d", stats.level8), px + pad + teamNameW + 215, ty, 16, color);
+        ty += 24;
+    }
+
+    const int listX = px + pad;
+    const int listY = std::max(ty + 18, py + 276);
+    const int listW = width - pad * 2;
+    const int listH = py + height - pad - listY;
+    const int rowH = 28;
+    const int contentH = static_cast<int>(alivePlayers.size()) * rowH;
+    const int maxScroll = std::max(0, contentH - std::max(0, listH - 42));
+    if (_endScroll > static_cast<float>(maxScroll))
+        _endScroll = static_cast<float>(maxScroll);
+
+    _engine.drawText("ALIVE PLAYERS", listX, listY, 20, gfx::SKYBLUE);
+    _engine.drawText("ID", listX, listY + 30, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Team", listX + 80, listY + 30, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Lvl", listX + 290, listY + 30, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Pos", listX + 360, listY + 30, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Dir", listX + 470, listY + 30, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Life", listX + 540, listY + 30, 16, gfx::LIGHTGRAY);
+
+    const int rowsY = listY + 54;
+    const int rowsH = std::max(0, listH - 54);
+    for (std::size_t i = 0; i < alivePlayers.size(); ++i) {
+        const aiPlayer& player = *alivePlayers[i];
+        const int rowY = rowsY + static_cast<int>(i) * rowH - static_cast<int>(_endScroll);
+        if (rowY < rowsY || rowY + rowH > rowsY + rowsH)
+            continue;
+        const bool winner = player.getTeam() == _state.winner;
+        const gfx::Color color = winner ? winnerColor : gfx::RAYWHITE;
+        if (i % 2 == 0)
+            _engine.drawRect(listX, rowY - 4, listW, rowH, gfx::Color{ 255, 255, 255, 18 });
+        _engine.drawText(gfx::fmt("#%u", player.getId()), listX, rowY, 16, color);
+        _engine.drawText(player.getTeam(), listX + 80, rowY, 16, color);
+        _engine.drawText(gfx::fmt("%d", player.getLevel()), listX + 290, rowY, 16, color);
+        _engine.drawText(gfx::fmt("%d,%d", player.getX(), player.getY()), listX + 360, rowY, 16, color);
+        _engine.drawText(orientationLabel(player.getOrientation()), listX + 470, rowY, 16, color);
+        _engine.drawText(gfx::fmt("%d", player.getLifeUnits()), listX + 540, rowY, 16, color);
+    }
+
+    if (maxScroll > 0) {
+        const int barX = listX + listW - 8;
+        const int barY = rowsY;
+        const int barH = rowsH;
+        const int knobH = std::max(28, barH * barH / std::max(barH, contentH));
+        const int knobY = barY + static_cast<int>((barH - knobH) * (_endScroll / static_cast<float>(maxScroll)));
+        _engine.drawRect(barX, barY, 4, barH, gfx::Color{ 255, 255, 255, 50 });
+        _engine.drawRect(barX - 2, knobY, 8, knobH, winnerColor);
     }
 }
 
