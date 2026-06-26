@@ -63,7 +63,7 @@ demo: all
 	sleep 0.6; \
 	for t in $(TEAMS); do \
 		for i in $$(seq 1 $(BOTS)); do \
-			../ai/zappy_ai -p $(PORT) -n $$t & \
+			../ai/zappy_ai -p $(PORT) -n $$t -v & \
 			PIDS="$$PIDS $$!"; \
 		done; \
 	done; \

@@ -1,9 +1,10 @@
 #include "interface.hpp"
-#include "raymath.h"
-#include "rlgl.h"
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
+
+namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
 // Constructor
@@ -14,24 +15,26 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     , _net(std::move(net))
 {
     initCamera();
-    loadSkybox();         // needs the GL context, so after the engine init
+    // The skybox needs the GL context, so load it after the engine init.
+    _engine.loadSkybox("assets/Background.png",
+                       "assets/shaders/skybox.vs", "assets/shaders/skybox.fs");
     loadTileTextures();
     loadResourceModels();
     loadPlayerModel();
     loadBackgroundMusic();
-    DisableCursor();      // capture the mouse for free-look (Esc releases on close)
+    _engine.disableCursor(); // capture the mouse for free-look (Esc releases on close)
 }
 
 Interface::~Interface()
 {
     // Member destruction runs after this body, so the GL context (owned by
     // _engine) is still alive here — safe to free GPU resources.
-    EnableCursor();
+    _engine.enableCursor();
     unloadBackgroundMusic();
     unloadPlayerModel();
     unloadResourceModels();
     unloadTileTextures();
-    unloadSkybox();
+    _engine.unloadSkybox();
 }
 
 
@@ -77,16 +80,16 @@ namespace {
     constexpr const char* kMusicPath = "assets/music_back.mp3";
     constexpr float kMusicVolume = 0.45f;
 
-    bool isMusicTogglePressed()
+    bool isMusicTogglePressed(RaylibEngine& engine)
     {
-        if (IsKeyPressed(KEY_M))
+        if (engine.keyPressed(gfx::Key::M))
             return true;
 
-        int key = GetCharPressed();
+        int key = engine.charPressed();
         while (key > 0) {
             if (key == 'm' || key == 'M')
                 return true;
-            key = GetCharPressed();
+            key = engine.charPressed();
         }
         return false;
     }
@@ -122,12 +125,12 @@ void Interface::loadResourceModels()
         const char* path = kResourceModelPaths[i];
         ResourceModel rm;
 
-        if (!FileExists(path)) {
-            TraceLog(LOG_WARNING, "loadResourceModels: missing asset '%s' (falling back to cube)", path);
+        if (!fs::exists(path)) {
+            gfx::logWarn("loadResourceModels: missing asset '%s' (falling back to cube)", path);
         } else {
-            rm.model = LoadModel(path);
-            if (rm.model.meshCount <= 0) {
-                TraceLog(LOG_WARNING, "loadResourceModels: failed to load '%s' (falling back to cube)", path);
+            rm.handle = _engine.loadModel(path);
+            if (rm.handle == gfx::NoHandle) {
+                gfx::logWarn("loadResourceModels: failed to load '%s' (falling back to cube)", path);
             } else {
                 rm.loaded = true;
 
@@ -135,17 +138,12 @@ void Interface::loadResourceModels()
                 // not decode by default — bind a PNG override so the mesh shows up
                 // textured instead of plain white.
                 const char* tex = kResourceTextureOverrides[i];
-                if (tex != nullptr && FileExists(tex) && rm.model.materialCount > 0) {
-                    Texture2D t = LoadTexture(tex);
-                    if (t.id != 0) {
-                        // raylib prepends a default material at index 0 and puts the
-                        // real glTF materials at index 1+, so binding only [0] misses
-                        // the material the mesh actually uses. Apply to all of them.
-                        for (int m = 0; m < rm.model.materialCount; ++m)
-                            SetMaterialTexture(&rm.model.materials[m], MATERIAL_MAP_DIFFUSE, t);
-                    } else {
-                        TraceLog(LOG_WARNING, "loadResourceModels: override texture '%s' failed to load", tex);
-                    }
+                if (tex != nullptr && fs::exists(tex)) {
+                    gfx::TextureHandle t = _engine.loadTexture(tex);
+                    if (t != gfx::NoHandle)
+                        _engine.bindModelTexture(rm.handle, t);
+                    else
+                        gfx::logWarn("loadResourceModels: override texture '%s' failed to load", tex);
                 }
 
                 // Re-centre the mesh: different assets have their origin in
@@ -153,15 +151,14 @@ void Interface::loadResourceModels()
                 // transform so the footprint is centred on the origin and the base
                 // rests at y=0 — then every instance can just be dropped at a tile
                 // cell + surface height and rotated in place.
-                BoundingBox box = GetModelBoundingBox(rm.model);
+                gfx::BBox box = _engine.modelBounds(rm.handle);
                 float dx = box.max.x - box.min.x;
                 float dy = box.max.y - box.min.y;
                 float dz = box.max.z - box.min.z;
-                Vector3 centre = { (box.min.x + box.max.x) * 0.5f,
-                                   box.min.y,
-                                   (box.min.z + box.max.z) * 0.5f };
-                rm.model.transform = MatrixMultiply(rm.model.transform,
-                                                    MatrixTranslate(-centre.x, -centre.y, -centre.z));
+                gfx::Vec3 centre = { (box.min.x + box.max.x) * 0.5f,
+                                     box.min.y,
+                                     (box.min.z + box.max.z) * 0.5f };
+                _engine.translateModel(rm.handle, { -centre.x, -centre.y, -centre.z });
 
                 const float sx = std::max(dx, 0.0001f);
                 const float sy = std::max(dy, 0.0001f);
@@ -178,8 +175,8 @@ void Interface::loadResourceModels()
                     rm.scale = { s, s, s };
                 }
 
-                TraceLog(LOG_INFO, "RESMODEL %zu '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=(%.1f,%.1f,%.1f)",
-                         i, path, dx, dy, dz, rm.scale.x, rm.scale.y, rm.scale.z);
+                gfx::logInfo("RESMODEL %zu '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=(%.1f,%.1f,%.1f)",
+                             i, path, dx, dy, dz, rm.scale.x, rm.scale.y, rm.scale.z);
             }
         }
 
@@ -189,38 +186,37 @@ void Interface::loadResourceModels()
 
 void Interface::unloadResourceModels()
 {
-    // UnloadModel also frees the material-map textures we bound above.
+    // unloadModel also frees the material-map textures we bound above.
     for (auto& rm : _resourceModels) {
         if (rm.loaded)
-            UnloadModel(rm.model);
+            _engine.unloadModel(rm.handle);
     }
     _resourceModels.clear();
 }
 
 void Interface::loadPlayerModel()
 {
-    if (!FileExists(kPlayerModelPath)) {
-        TraceLog(LOG_WARNING, "loadPlayerModel: missing asset '%s' (falling back to cube)", kPlayerModelPath);
+    if (!fs::exists(kPlayerModelPath)) {
+        gfx::logWarn("loadPlayerModel: missing asset '%s' (falling back to cube)", kPlayerModelPath);
         return;
     }
 
-    _playerModel.model = LoadModel(kPlayerModelPath);
-    if (_playerModel.model.meshCount <= 0) {
-        TraceLog(LOG_WARNING, "loadPlayerModel: failed to load '%s' (falling back to cube)", kPlayerModelPath);
+    _playerModel.handle = _engine.loadModel(kPlayerModelPath);
+    if (_playerModel.handle == gfx::NoHandle) {
+        gfx::logWarn("loadPlayerModel: failed to load '%s' (falling back to cube)", kPlayerModelPath);
         return;
     }
 
     _playerModel.loaded = true;
 
-    BoundingBox box = GetModelBoundingBox(_playerModel.model);
+    gfx::BBox box = _engine.modelBounds(_playerModel.handle);
     const float dx = box.max.x - box.min.x;
     const float dy = box.max.y - box.min.y;
     const float dz = box.max.z - box.min.z;
-    const Vector3 centre = { (box.min.x + box.max.x) * 0.5f,
-                             box.min.y,
-                             (box.min.z + box.max.z) * 0.5f };
-    _playerModel.model.transform = MatrixMultiply(_playerModel.model.transform,
-                                                  MatrixTranslate(-centre.x, -centre.y, -centre.z));
+    const gfx::Vec3 centre = { (box.min.x + box.max.x) * 0.5f,
+                               box.min.y,
+                               (box.min.z + box.max.z) * 0.5f };
+    _engine.translateModel(_playerModel.handle, { -centre.x, -centre.y, -centre.z });
 
     const float sx = std::max(dx, 0.0001f);
     const float sy = std::max(dy, 0.0001f);
@@ -229,8 +225,8 @@ void Interface::loadPlayerModel()
     const float s = std::min(kPlayerModelHeight / sy, kPlayerModelFootprint / footprint);
     _playerModel.scale = { s, s, s };
 
-    TraceLog(LOG_INFO, "PLAYERMODEL '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=%.1f",
-             kPlayerModelPath, dx, dy, dz, s);
+    gfx::logInfo("PLAYERMODEL '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=%.1f",
+                 kPlayerModelPath, dx, dy, dz, s);
 
     loadPlayerAnimations();
 }
@@ -238,24 +234,24 @@ void Interface::loadPlayerModel()
 void Interface::loadPlayerAnimations()
 {
     _clipIndex.fill(-1);
-    _playerAnims = LoadModelAnimations(kPlayerModelPath, &_playerAnimCount);
-    if (!_playerAnims || _playerAnimCount <= 0) {
-        _playerAnims     = nullptr;
+    _playerAnims = _engine.loadAnimations(kPlayerModelPath);
+    if (_playerAnims == gfx::NoHandle) {
         _playerAnimCount = 0;
-        TraceLog(LOG_WARNING, "loadPlayerAnimations: '%s' has no animations", kPlayerModelPath);
+        gfx::logWarn("loadPlayerAnimations: '%s' has no animations", kPlayerModelPath);
         return;
     }
+    _playerAnimCount = _engine.animCount(_playerAnims);
 
     // Resolve each wanted clip by its name in the .glb. Names are authored in the
     // model; a missing one leaves the slot at -1 and that state simply no-ops.
     const auto bind = [&](PlayerClip clip, const char* name) {
         for (int i = 0; i < _playerAnimCount; ++i) {
-            if (TextIsEqual(_playerAnims[i].name, name)) {
+            if (_engine.animName(_playerAnims, i) == name) {
                 _clipIndex[static_cast<std::size_t>(clip)] = i;
                 return;
             }
         }
-        TraceLog(LOG_WARNING, "player animation '%s' not found in '%s'", name, kPlayerModelPath);
+        gfx::logWarn("player animation '%s' not found in '%s'", name, kPlayerModelPath);
     };
     bind(PlayerClip::Idle,   "Idle");
     bind(PlayerClip::Walk,   "Walk");
@@ -266,22 +262,23 @@ void Interface::loadPlayerAnimations()
     bind(PlayerClip::Jump,   "Jump");
 
     for (int i = 0; i < _playerAnimCount; ++i)
-        TraceLog(LOG_INFO, "player anim[%d] '%s' frames=%d",
-                 i, _playerAnims[i].name, _playerAnims[i].keyframeCount);
+        gfx::logInfo("player anim[%d] '%s' frames=%d",
+                     i, _engine.animName(_playerAnims, i).c_str(),
+                     _engine.animFrameCount(_playerAnims, i));
 }
 
 void Interface::unloadPlayerModel()
 {
-    if (_playerAnims) {
-        UnloadModelAnimations(_playerAnims, _playerAnimCount);
-        _playerAnims     = nullptr;
+    if (_playerAnims != gfx::NoHandle) {
+        _engine.unloadAnimations(_playerAnims);
+        _playerAnims     = gfx::NoHandle;
         _playerAnimCount = 0;
     }
     _clipIndex.fill(-1);
     _playerAnimState.clear();
     _deathGhosts.clear();
     if (_playerModel.loaded)
-        UnloadModel(_playerModel.model);
+        _engine.unloadModel(_playerModel.handle);
     _playerModel = {};
 }
 
@@ -306,7 +303,7 @@ void Interface::updatePlayerAnimations()
     if (!_playerModel.loaded || _playerAnimCount <= 0)
         return;
 
-    const float dt = GetFrameTime();
+    const float dt = _engine.frameTime();
 
     // Make sure every live player has a runtime entry (new players spawn Idle).
     for (const auto& [id, player] : _state.players) {
@@ -399,7 +396,7 @@ void Interface::updatePlayerAnimations()
         }
 
         if (const int idx = _clipIndex[static_cast<std::size_t>(st.loopClip)]; idx >= 0) {
-            const int n = _playerAnims[idx].keyframeCount;
+            const int n = _engine.animFrameCount(_playerAnims, idx);
             if (n > 0) {
                 if (st.loopClip == PlayerClip::Walk) {
                     // Drive the stride straight from the glide progress so the
@@ -416,12 +413,13 @@ void Interface::updatePlayerAnimations()
 
         if (st.oneShot != PlayerClip::Count) {
             const int idx = _clipIndex[static_cast<std::size_t>(st.oneShot)];
-            if (idx < 0 || _playerAnims[idx].keyframeCount <= 0) {
+            const int n   = idx < 0 ? 0 : _engine.animFrameCount(_playerAnims, idx);
+            if (n <= 0) {
                 st.oneShot = PlayerClip::Count;
             } else {
                 const float speed = st.oneShot == PlayerClip::Pickup ? kPickupSpeed : 1.0f;
-                st.oneShotFrame += dt * _playerAnims[idx].keyframeCount / kClipSeconds * speed;
-                if (st.oneShotFrame >= _playerAnims[idx].keyframeCount)
+                st.oneShotFrame += dt * n / kClipSeconds * speed;
+                if (st.oneShotFrame >= n)
                     st.oneShot = PlayerClip::Count; // played once; fall back to the loop clip
             }
         }
@@ -430,15 +428,15 @@ void Interface::updatePlayerAnimations()
 
     // Advance and retire death ghosts once their clip has played through.
     const int didx = _clipIndex[static_cast<std::size_t>(PlayerClip::Death)];
-    if (didx < 0 || _playerAnims[didx].keyframeCount <= 0) {
+    const int dn   = didx < 0 ? 0 : _engine.animFrameCount(_playerAnims, didx);
+    if (dn <= 0) {
         _deathGhosts.clear();
     } else {
-        const int n = _playerAnims[didx].keyframeCount;
         for (auto& g : _deathGhosts)
-            g.frame += dt * n / kClipSeconds;
+            g.frame += dt * dn / kClipSeconds;
         _deathGhosts.erase(
             std::remove_if(_deathGhosts.begin(), _deathGhosts.end(),
-                           [n](const DeathGhost& g) { return g.frame >= n; }),
+                           [dn](const DeathGhost& g) { return g.frame >= dn; }),
             _deathGhosts.end());
     }
 }
@@ -457,92 +455,26 @@ void Interface::applyPlayerPose(std::uint32_t id)
     const int        idx     = _clipIndex[static_cast<std::size_t>(clip)];
     if (idx < 0)
         return;
-    UpdateModelAnimation(_playerModel.model, _playerAnims[idx], frame);
+    _engine.applyPose(_playerModel.handle, _playerAnims, idx, frame);
 }
 
 void Interface::loadTileTextures()
 {
-    _darkTileTexture = LoadTexture("assets/sol_dark.png");
-    if (_darkTileTexture.id == 0)
-        TraceLog(LOG_WARNING, "loadTileTextures: failed to load assets/sol_dark.png");
+    _darkTileTexture = _engine.loadTexture("assets/sol_dark.png");
+    if (_darkTileTexture == gfx::NoHandle)
+        gfx::logWarn("loadTileTextures: failed to load assets/sol_dark.png");
 
-    _orangeTileTexture = LoadTexture("assets/sol_blanc.png");
-    if (_orangeTileTexture.id == 0)
-        TraceLog(LOG_WARNING, "loadTileTextures: failed to load assets/sol_blanc.png");
+    _orangeTileTexture = _engine.loadTexture("assets/sol_blanc.png");
+    if (_orangeTileTexture == gfx::NoHandle)
+        gfx::logWarn("loadTileTextures: failed to load assets/sol_blanc.png");
 }
 
 void Interface::unloadTileTextures()
 {
-    if (_darkTileTexture.id != 0)
-        UnloadTexture(_darkTileTexture);
-    if (_orangeTileTexture.id != 0)
-        UnloadTexture(_orangeTileTexture);
-}
-
-void Interface::loadSkybox()
-{
-    // Equirectangular 360 panorama (2:1). Swap this file to change the sky.
-    const char* path = "assets/Background.png";
-    const char* vs   = "assets/shaders/skybox.vs";
-    const char* fs   = "assets/shaders/skybox.fs";
-    if (!FileExists(path)) {
-        TraceLog(LOG_WARNING, "loadSkybox: missing '%s' — no background", path);
-        return;
-    }
-    if (!FileExists(vs) || !FileExists(fs)) {
-        TraceLog(LOG_WARNING, "loadSkybox: missing shader files — no background");
-        return;
-    }
-    _skyboxTex = LoadTexture(path);
-    if (_skyboxTex.id == 0) {
-        TraceLog(LOG_WARNING, "loadSkybox: failed to load '%s'", path);
-        return;
-    }
-    SetTextureFilter(_skyboxTex, TEXTURE_FILTER_BILINEAR);
-
-    _skyShader = LoadShader(vs, fs);
-    if (_skyShader.id == 0) {
-        TraceLog(LOG_WARNING, "loadSkybox: shader failed to compile — no background");
-        UnloadTexture(_skyboxTex);
-        _skyboxTex = {};
-        return;
-    }
-
-    // A unit cube: the fragment shader turns each cube-local position into a
-    // view ray and samples the panorama equirectangularly. raylib binds the
-    // diffuse map to the shader's texture0 sampler.
-    _skybox = LoadModelFromMesh(GenMeshCube(1.0f, 1.0f, 1.0f));
-    _skybox.materials[0].shader = _skyShader;
-    _skybox.materials[0].maps[MATERIAL_MAP_DIFFUSE].texture = _skyboxTex;
-    _skyboxLoaded = true;
-    TraceLog(LOG_INFO, "loadSkybox: '%s' ready", path);
-}
-
-void Interface::unloadSkybox()
-{
-    if (_skyboxLoaded) {
-        UnloadModel(_skybox); // does not free the texture map we assigned
-        UnloadShader(_skyShader);
-    }
-    if (_skyboxTex.id != 0)
-        UnloadTexture(_skyboxTex);
-    _skyboxLoaded = false;
-}
-
-void Interface::drawSkybox()
-{
-    if (!_skyboxLoaded)
-        return;
-    // Draw first, with depth test/write and backface culling off: the box is
-    // centred on the eye (translation dropped in the shader) and fills the view
-    // by direction, so the rest of the scene paints over it.
-    rlDisableBackfaceCulling();
-    rlDisableDepthMask();
-    rlDisableDepthTest();
-    DrawModel(_skybox, Vector3{ 0.0f, 0.0f, 0.0f }, 1.0f, WHITE);
-    rlEnableDepthTest();
-    rlEnableDepthMask();
-    rlEnableBackfaceCulling();
+    if (_darkTileTexture != gfx::NoHandle)
+        _engine.unloadTexture(_darkTileTexture);
+    if (_orangeTileTexture != gfx::NoHandle)
+        _engine.unloadTexture(_orangeTileTexture);
 }
 
 void Interface::initCamera()
@@ -555,7 +487,6 @@ void Interface::initCamera()
 
     _camera.up         = { 0.0f, 1.0f, 0.0f };
     _camera.fovy       = 60.0f; // a touch wider feels better for a free cam
-    _camera.projection = CAMERA_PERSPECTIVE;
 
     _camera.position = { centerX, span * 0.9f, centerZ + span * 0.9f };
     _flySpeed        = span * 0.6f; // units/sec; tuned to the map scale
@@ -565,9 +496,9 @@ void Interface::initCamera()
     updateCameraTarget();
 }
 
-void Interface::lookAt(Vector3 worldTarget)
+void Interface::lookAt(gfx::Vec3 worldTarget)
 {
-    Vector3 dir = Vector3Subtract(worldTarget, _camera.position);
+    gfx::Vec3 dir = gfx::sub(worldTarget, _camera.position);
     float   horiz = std::sqrt(dir.x * dir.x + dir.z * dir.z);
     _camYaw   = std::atan2(dir.x, dir.z);
     _camPitch = std::atan2(dir.y, horiz);
@@ -577,51 +508,49 @@ void Interface::updateCameraTarget()
 {
     // Forward from yaw/pitch; the look target is just eye + forward.
     const float cp = std::cos(_camPitch);
-    const Vector3 forward = {
+    const gfx::Vec3 forward = {
         cp * std::sin(_camYaw),
         std::sin(_camPitch),
         cp * std::cos(_camYaw),
     };
-    _camera.target = Vector3Add(_camera.position, forward);
+    _camera.target = gfx::add(_camera.position, forward);
 }
 
 void Interface::loadBackgroundMusic()
 {
-    InitAudioDevice();
-    if (!IsAudioDeviceReady()) {
-        TraceLog(LOG_WARNING, "loadBackgroundMusic: audio device failed to initialize");
-        return;
-    }
-    _audioReady = true;
-
-    if (!FileExists(kMusicPath)) {
-        TraceLog(LOG_WARNING, "loadBackgroundMusic: missing asset '%s'", kMusicPath);
+    _audioReady = _engine.initAudio();
+    if (!_audioReady) {
+        gfx::logWarn("loadBackgroundMusic: audio device failed to initialize");
         return;
     }
 
-    _backgroundMusic = LoadMusicStream(kMusicPath);
-    if (_backgroundMusic.stream.buffer == nullptr) {
-        TraceLog(LOG_WARNING, "loadBackgroundMusic: failed to load '%s'", kMusicPath);
+    if (!fs::exists(kMusicPath)) {
+        gfx::logWarn("loadBackgroundMusic: missing asset '%s'", kMusicPath);
         return;
     }
 
-    _backgroundMusic.looping = true;
-    SetMusicVolume(_backgroundMusic, kMusicVolume);
+    _backgroundMusic = _engine.loadMusic(kMusicPath);
+    if (_backgroundMusic == gfx::NoHandle) {
+        gfx::logWarn("loadBackgroundMusic: failed to load '%s'", kMusicPath);
+        return;
+    }
+
+    _engine.setMusicVolume(_backgroundMusic, kMusicVolume);
     _musicLoaded = true;
     _musicEnabled = true;
-    PlayMusicStream(_backgroundMusic);
-    TraceLog(LOG_INFO, "loadBackgroundMusic: playing '%s'", kMusicPath);
+    _engine.playMusic(_backgroundMusic);
+    gfx::logInfo("loadBackgroundMusic: playing '%s'", kMusicPath);
 }
 
 void Interface::unloadBackgroundMusic()
 {
     if (_musicLoaded) {
-        StopMusicStream(_backgroundMusic);
-        UnloadMusicStream(_backgroundMusic);
+        _engine.stopMusic(_backgroundMusic);
+        _engine.unloadMusic(_backgroundMusic);
         _musicLoaded = false;
     }
     if (_audioReady) {
-        CloseAudioDevice();
+        _engine.closeAudio();
         _audioReady = false;
     }
 }
@@ -633,10 +562,10 @@ void Interface::toggleMusic()
 
     _musicEnabled = !_musicEnabled;
     if (_musicEnabled)
-        ResumeMusicStream(_backgroundMusic);
+        _engine.resumeMusic(_backgroundMusic);
     else
-        PauseMusicStream(_backgroundMusic);
-    TraceLog(LOG_INFO, "toggleMusic: music %s", _musicEnabled ? "ON" : "OFF");
+        _engine.pauseMusic(_backgroundMusic);
+    gfx::logInfo("toggleMusic: music %s", _musicEnabled ? "ON" : "OFF");
 }
 
 // ---------------------------------------------------------------------------
@@ -644,10 +573,10 @@ void Interface::toggleMusic()
 // ---------------------------------------------------------------------------
 void Interface::handleInput()
 {
-    const float dt = GetFrameTime();
+    const float dt = _engine.frameTime();
 
     // ---- Free look: the captured mouse turns the head (yaw/pitch).
-    Vector2 md = GetMouseDelta();
+    gfx::Vec2 md = _engine.mouseDelta();
     _camYaw   -= md.x * 0.0030f;
     _camPitch -= md.y * 0.0030f;
     // Clamp pitch just shy of straight up/down so the view never flips.
@@ -657,27 +586,27 @@ void Interface::handleInput()
 
     // ---- Movement basis from the current heading.
     const float cp = std::cos(_camPitch);
-    const Vector3 forward = { cp * std::sin(_camYaw), std::sin(_camPitch), cp * std::cos(_camYaw) };
-    const Vector3 rightH  = { -std::cos(_camYaw), 0.0f, std::sin(_camYaw) }; // strafe stays level
+    const gfx::Vec3 forward = { cp * std::sin(_camYaw), std::sin(_camPitch), cp * std::cos(_camYaw) };
+    const gfx::Vec3 rightH  = { -std::cos(_camYaw), 0.0f, std::sin(_camYaw) }; // strafe stays level
 
-    const float boost = (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) ? 3.0f : 1.0f;
+    const float boost = (_engine.keyDown(gfx::Key::LeftShift) || _engine.keyDown(gfx::Key::RightShift)) ? 3.0f : 1.0f;
     const float step  = _flySpeed * dt * boost;
-    Vector3 move{ 0.0f, 0.0f, 0.0f };
+    gfx::Vec3 move{ 0.0f, 0.0f, 0.0f };
 
-    if (IsKeyDown(KEY_W) || IsKeyDown(KEY_UP))    move = Vector3Add(move, forward);
-    if (IsKeyDown(KEY_S) || IsKeyDown(KEY_DOWN))  move = Vector3Subtract(move, forward);
-    if (IsKeyDown(KEY_D) || IsKeyDown(KEY_RIGHT)) move = Vector3Add(move, rightH);
-    if (IsKeyDown(KEY_A) || IsKeyDown(KEY_LEFT))  move = Vector3Subtract(move, rightH);
-    if (IsKeyDown(KEY_SPACE))                     move.y += 1.0f; // ascend
-    if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_C)) move.y -= 1.0f; // descend
+    if (_engine.keyDown(gfx::Key::W) || _engine.keyDown(gfx::Key::Up))    move = gfx::add(move, forward);
+    if (_engine.keyDown(gfx::Key::S) || _engine.keyDown(gfx::Key::Down))  move = gfx::sub(move, forward);
+    if (_engine.keyDown(gfx::Key::D) || _engine.keyDown(gfx::Key::Right)) move = gfx::add(move, rightH);
+    if (_engine.keyDown(gfx::Key::A) || _engine.keyDown(gfx::Key::Left))  move = gfx::sub(move, rightH);
+    if (_engine.keyDown(gfx::Key::Space))                                 move.y += 1.0f; // ascend
+    if (_engine.keyDown(gfx::Key::LeftControl) || _engine.keyDown(gfx::Key::C)) move.y -= 1.0f; // descend
 
     if (move.x != 0.0f || move.y != 0.0f || move.z != 0.0f) {
-        move = Vector3Scale(Vector3Normalize(move), step);
-        _camera.position = Vector3Add(_camera.position, move);
+        move = gfx::scale(gfx::normalize(move), step);
+        _camera.position = gfx::add(_camera.position, move);
     }
 
     // ---- Wheel sets the fly speed (not zoom — there's no pivot to zoom to).
-    float wheel = GetMouseWheelMove();
+    float wheel = _engine.mouseWheel();
     if (wheel != 0.0f) {
         _flySpeed *= (1.0f + wheel * 0.12f);
         const float span = std::max(_map.getWidth(), _map.getHeight()) * TILE_SIZE;
@@ -687,13 +616,13 @@ void Interface::handleInput()
     }
 
     // ---- R: snap back to the overview (also drops follow).
-    if (IsKeyPressed(KEY_R)) {
+    if (_engine.keyPressed(gfx::Key::R)) {
         _followedPlayer = -1;
         initCamera();
     }
 
     // ---- F: toggle riding along with the selected player.
-    if (IsKeyPressed(KEY_F)) {
+    if (_engine.keyPressed(gfx::Key::F)) {
         if (_followedPlayer >= 0) {
             _followedPlayer = -1;
         } else if (_selectedX >= 0 && _selectedY >= 0) {
@@ -707,26 +636,26 @@ void Interface::handleInput()
     }
 
     // ---- Simulation speed: +/- request a new time unit from the server (sst).
-    if (IsKeyPressed(KEY_EQUAL) || IsKeyPressed(KEY_KP_ADD))
+    if (_engine.keyPressed(gfx::Key::Equal) || _engine.keyPressed(gfx::Key::KpAdd))
         requestTimeUnit(_desiredFreq + (_desiredFreq < 10 ? 1 : 10));
-    if (IsKeyPressed(KEY_MINUS) || IsKeyPressed(KEY_KP_SUBTRACT))
+    if (_engine.keyPressed(gfx::Key::Minus) || _engine.keyPressed(gfx::Key::KpSubtract))
         requestTimeUnit(_desiredFreq - (_desiredFreq <= 10 ? 1 : 10));
 
     // ---- Timeline: pause, scrub back/forward through recorded history, go live.
-    if (IsKeyPressed(KEY_P))         togglePause();
-    if (IsKeyPressed(KEY_PAGE_DOWN)) scrubBy(-1.0f); // back in time
-    if (IsKeyPressed(KEY_PAGE_UP))   scrubBy(+1.0f); // forward in time
-    if (IsKeyPressed(KEY_END))       goLive();
+    if (_engine.keyPressed(gfx::Key::P))        togglePause();
+    if (_engine.keyPressed(gfx::Key::PageDown)) scrubBy(-1.0f); // back in time
+    if (_engine.keyPressed(gfx::Key::PageUp))   scrubBy(+1.0f); // forward in time
+    if (_engine.keyPressed(gfx::Key::End))      goLive();
 
     // ---- Panels / music.
-    if (IsKeyPressed(KEY_TAB))                     _showStats = !_showStats;
-    if (IsKeyPressed(KEY_H) || IsKeyPressed(KEY_F1)) _showHelp = !_showHelp;
-    if (isMusicTogglePressed())                    toggleMusic();
+    if (_engine.keyPressed(gfx::Key::Tab))                                 _showStats = !_showStats;
+    if (_engine.keyPressed(gfx::Key::H) || _engine.keyPressed(gfx::Key::F1)) _showHelp = !_showHelp;
+    if (isMusicTogglePressed(_engine))                                     toggleMusic();
 
     // ---- Left-click (crosshair): select the aimed tile; double-click focuses.
-    if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
+    if (_engine.mousePressed(gfx::MouseBtn::Left)) {
         pickTile();
-        const double now = GetTime();
+        const double now = _engine.time();
         if (_lastClickTime >= 0.0 && (now - _lastClickTime) < 0.30 &&
             _selectedX >= 0 && _selectedY >= 0) {
             focusOnTile(_selectedX, _selectedY);
@@ -741,8 +670,8 @@ void Interface::focusOnTile(int tx, int ty)
 {
     // Fly to a fixed vantage above/south of the tile and aim down at it.
     _followedPlayer = -1;
-    const Vector3 centre = { tx * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f,
-                             ty * TILE_SIZE + TILE_SIZE / 2.0f };
+    const gfx::Vec3 centre = { tx * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f,
+                               ty * TILE_SIZE + TILE_SIZE / 2.0f };
     _camera.position = { centre.x, TILE_SIZE * 5.0f, centre.z + TILE_SIZE * 5.0f };
     lookAt(centre);
     updateCameraTarget();
@@ -833,9 +762,9 @@ void Interface::goLive()
 void Interface::update()
 {
     if (_musicLoaded)
-        UpdateMusicStream(_backgroundMusic);
+        _engine.updateMusic(_backgroundMusic);
 
-    _elapsed += GetFrameTime();
+    _elapsed += _engine.frameTime();
 
     // Record whatever the server pushed since last frame; in live mode it is
     // also folded into the world right away. Scrubbing replays from _history.
@@ -866,9 +795,9 @@ void Interface::update()
                 fx = ait->second.dispX;
                 fy = ait->second.dispY;
             }
-            const Vector3 now = { fx * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f,
-                                  fy * TILE_SIZE + TILE_SIZE / 2.0f };
-            _camera.position = Vector3Add(_camera.position, Vector3Subtract(now, _followAnchor));
+            const gfx::Vec3 now = { fx * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f,
+                                    fy * TILE_SIZE + TILE_SIZE / 2.0f };
+            _camera.position = gfx::add(_camera.position, gfx::sub(now, _followAnchor));
             _followAnchor    = now;
             updateCameraTarget();
         }
@@ -890,62 +819,17 @@ namespace {
     constexpr int kMaxVisiblePlayers = 4;
     constexpr float kPlayerSpacing = TILE_SIZE * 0.28f;
 
-    struct CountLabel { Vector3 worldPos; int count; Color color; };
+    struct CountLabel { gfx::Vec3 worldPos; int count; gfx::Color color; };
 
-    // Draw every tile of one checkerboard colour in a single batch. One
-    // rlSetTexture per call (2 total for the floor) instead of one per tile, so
-    // the GPU isn't forced to flush the batch 2500x/frame on a 50x50 map.
-    // Chunked under the rlgl batch buffer so it stays correct on huge maps.
-    void drawFloorBatched(Texture2D tex, bool wantDark, int w, int h)
-    {
-        if (tex.id == 0)
-            return;
-
-        const float size = TILE_SIZE - kTileMargin;
-        const float half = size * 0.5f;
-        const float y    = kTileTopY;
-        const int   kQuadsPerBatch = 1500; // 4 verts each, well under the 8192 buffer
-
-        rlSetTexture(tex.id);
-        rlBegin(RL_QUADS);
-        rlColor4ub(255, 255, 255, 255);
-        rlNormal3f(0.0f, 1.0f, 0.0f);
-
-        int emitted = 0;
-        for (int ty = 0; ty < h; ++ty) {
-            for (int tx = 0; tx < w; ++tx) {
-                if (((tx + ty) % 2 == 0) != wantDark)
-                    continue;
-                if (emitted >= kQuadsPerBatch) {
-                    rlEnd(); // flush, then resume (texture stays bound across this)
-                    rlBegin(RL_QUADS);
-                    rlColor4ub(255, 255, 255, 255);
-                    rlNormal3f(0.0f, 1.0f, 0.0f);
-                    emitted = 0;
-                }
-                float wx = tx * TILE_SIZE + TILE_SIZE / 2.0f;
-                float wz = ty * TILE_SIZE + TILE_SIZE / 2.0f;
-                rlTexCoord2f(0.0f, 1.0f); rlVertex3f(wx - half, y, wz - half);
-                rlTexCoord2f(0.0f, 0.0f); rlVertex3f(wx - half, y, wz + half);
-                rlTexCoord2f(1.0f, 0.0f); rlVertex3f(wx + half, y, wz + half);
-                rlTexCoord2f(1.0f, 1.0f); rlVertex3f(wx + half, y, wz - half);
-                ++emitted;
-            }
-        }
-
-        rlEnd();
-        rlSetTexture(0);
-    }
-
-    void drawTileOutline(float worldX, float worldZ, float size)
+    void drawTileOutline(RaylibEngine& engine, float worldX, float worldZ, float size)
     {
         const float half = size * 0.5f;
         const float y = kTileTopY + 0.02f;
 
-        DrawLine3D({ worldX - half, y, worldZ - half }, { worldX + half, y, worldZ - half }, BLACK);
-        DrawLine3D({ worldX + half, y, worldZ - half }, { worldX + half, y, worldZ + half }, BLACK);
-        DrawLine3D({ worldX + half, y, worldZ + half }, { worldX - half, y, worldZ + half }, BLACK);
-        DrawLine3D({ worldX - half, y, worldZ + half }, { worldX - half, y, worldZ - half }, BLACK);
+        engine.drawLine3D({ worldX - half, y, worldZ - half }, { worldX + half, y, worldZ - half }, gfx::BLACK);
+        engine.drawLine3D({ worldX + half, y, worldZ - half }, { worldX + half, y, worldZ + half }, gfx::BLACK);
+        engine.drawLine3D({ worldX + half, y, worldZ + half }, { worldX - half, y, worldZ + half }, gfx::BLACK);
+        engine.drawLine3D({ worldX - half, y, worldZ + half }, { worldX - half, y, worldZ - half }, gfx::BLACK);
     }
 
     float playerOrientationAngle(Orientation orientation)
@@ -965,31 +849,32 @@ void Interface::render()
 {
     std::vector<CountLabel> labels;
 
-    BeginMode3D(_camera);
+    _engine.beginMode3D(_camera);
 
     // 360 background first, so the rest of the scene draws in front of it.
-    drawSkybox();
+    _engine.drawSkybox();
 
     // Floor: two batched draws (dark + orange) instead of one per tile.
-    const bool floorTextured = _darkTileTexture.id != 0 || _orangeTileTexture.id != 0;
+    const bool floorTextured = _darkTileTexture != gfx::NoHandle || _orangeTileTexture != gfx::NoHandle;
     if (floorTextured) {
-        drawFloorBatched(_darkTileTexture,   true,  _map.getWidth(), _map.getHeight());
-        drawFloorBatched(_orangeTileTexture, false, _map.getWidth(), _map.getHeight());
+        _engine.drawCheckerFloor(_darkTileTexture, _orangeTileTexture,
+                                 _map.getWidth(), _map.getHeight(),
+                                 TILE_SIZE, TILE_SIZE - kTileMargin, kTileTopY);
     }
 
     // Frustum cull: skip the expensive per-tile content (outlines, players,
     // resource models) for tiles whose centre projects off-screen. The batched
     // floor above stays fully drawn — it's cheap and avoids holes at the edges.
-    const Vector3 camFwd = Vector3Normalize(Vector3Subtract(_camera.target, _camera.position));
-    const float   screenW    = static_cast<float>(GetScreenWidth());
-    const float   screenH    = static_cast<float>(GetScreenHeight());
+    const gfx::Vec3 camFwd = gfx::normalize(gfx::sub(_camera.target, _camera.position));
+    const float   screenW    = static_cast<float>(_engine.screenWidth());
+    const float   screenH    = static_cast<float>(_engine.screenHeight());
     const float   cullMargin = 160.0f; // px slack so partly-visible edge tiles still draw
     auto tileVisible = [&](float wx, float wz) {
-        Vector3 c{ wx, kTileTopY, wz };
-        Vector3 d{ c.x - _camera.position.x, c.y - _camera.position.y, c.z - _camera.position.z };
-        if (d.x * camFwd.x + d.y * camFwd.y + d.z * camFwd.z <= 0.0f)
+        gfx::Vec3 c{ wx, kTileTopY, wz };
+        gfx::Vec3 d = gfx::sub(c, _camera.position);
+        if (gfx::dot(d, camFwd) <= 0.0f)
             return false; // behind the camera
-        Vector2 sp = GetWorldToScreen(c, _camera);
+        gfx::Vec2 sp = _engine.worldToScreen(_camera, c);
         return sp.x >= -cullMargin && sp.x <= screenW + cullMargin
             && sp.y >= -cullMargin && sp.y <= screenH + cullMargin;
     };
@@ -1006,9 +891,9 @@ void Interface::render()
 
             // Untextured fallback only (textured floor was drawn batched above).
             if (!floorTextured)
-                DrawPlane({ worldX, kTileTopY, worldZ },
-                          { TILE_SIZE - kTileMargin, TILE_SIZE - kTileMargin }, WHITE);
-            drawTileOutline(worldX, worldZ, TILE_SIZE - kTileMargin);
+                _engine.drawPlane({ worldX, kTileTopY, worldZ },
+                                  { TILE_SIZE - kTileMargin, TILE_SIZE - kTileMargin }, gfx::WHITE);
+            drawTileOutline(_engine, worldX, worldZ, TILE_SIZE - kTileMargin);
 
             // Players: draw up to four robots side by side, then show a count label.
             const int playerCount = static_cast<int>(tile.players.size());
@@ -1040,16 +925,16 @@ void Interface::render()
                         // Upload this player's own clip+frame before drawing it, so
                         // each robot shows its own animation despite sharing one model.
                         applyPlayerPose(player.getId());
-                        DrawModelEx(_playerModel.model, { px, kTileTopY, pz },
-                                    { 0.0f, 1.0f, 0.0f }, playerOrientationAngle(player.getOrientation()),
-                                    _playerModel.scale, WHITE);
+                        _engine.drawModelEx(_playerModel.handle, { px, kTileTopY, pz },
+                                            { 0.0f, 1.0f, 0.0f }, playerOrientationAngle(player.getOrientation()),
+                                            _playerModel.scale, gfx::WHITE);
                     } else {
-                        DrawCube({ px, kPlayerY, pz },
-                                  kPlayerBaseSize, kPlayerHeight, kPlayerBaseSize, YELLOW);
+                        _engine.drawCube({ px, kPlayerY, pz },
+                                         kPlayerBaseSize, kPlayerHeight, kPlayerBaseSize, gfx::YELLOW);
                     }
                 }
                 if (playerCount > kMaxVisiblePlayers)
-                    labels.push_back({ { worldX, kPlayerY + kPlayerHeight, worldZ }, playerCount, YELLOW });
+                    labels.push_back({ { worldX, kPlayerY + kPlayerHeight, worldZ }, playerCount, gfx::YELLOW });
             }
 
             // Resources render only on empty tiles; occupied tiles show the player model alone.
@@ -1085,11 +970,11 @@ void Interface::render()
 
                         if (hasModel) {
                             const ResourceModel& rm = _resourceModels[i];
-                            DrawModelEx(rm.model, { cx, kTileTopY, cz }, { 0.0f, 1.0f, 0.0f }, angle,
-                                        rm.scale, WHITE);
+                            _engine.drawModelEx(rm.handle, { cx, kTileTopY, cz }, { 0.0f, 1.0f, 0.0f }, angle,
+                                                rm.scale, gfx::WHITE);
                         } else {
                             const float s = kItemWidth;
-                            DrawCube({ cx, kTileTopY + s / 2.0f, cz }, s, s, s, RED);
+                            _engine.drawCube({ cx, kTileTopY + s / 2.0f, cz }, s, s, s, gfx::RED);
                         }
                     }
                 }
@@ -1106,7 +991,7 @@ void Interface::render()
         float ez = egg.y * TILE_SIZE + TILE_SIZE / 2.0f;
         if (!tileVisible(ex, ez))
             continue;
-        DrawSphere({ ex, kTileTopY + TILE_SIZE * 0.08f, ez }, TILE_SIZE * 0.08f, BEIGE);
+        _engine.drawSphere({ ex, kTileTopY + TILE_SIZE * 0.08f, ez }, TILE_SIZE * 0.08f, gfx::BEIGE);
     }
 
     // Death ghosts: players already erased from the world, replaying the Death clip
@@ -1117,29 +1002,29 @@ void Interface::render()
             for (const auto& g : _deathGhosts) {
                 if (!tileVisible(g.x, g.y))
                     continue;
-                UpdateModelAnimation(_playerModel.model, _playerAnims[didx], g.frame);
-                DrawModelEx(_playerModel.model, { g.x, kTileTopY, g.y },
-                            { 0.0f, 1.0f, 0.0f }, playerOrientationAngle(g.orientation),
-                            _playerModel.scale, WHITE);
+                _engine.applyPose(_playerModel.handle, _playerAnims, didx, g.frame);
+                _engine.drawModelEx(_playerModel.handle, { g.x, kTileTopY, g.y },
+                                    { 0.0f, 1.0f, 0.0f }, playerOrientationAngle(g.orientation),
+                                    _playerModel.scale, gfx::WHITE);
             }
         }
     }
 
     drawSelectionHighlight();
 
-    EndMode3D();
+    _engine.endMode3D();
 
     // Player head-count labels, projected to screen space now that we're out
     // of 3D mode. Resources are always drawn in full, so they need no label.
     for (const auto& label : labels) {
-        Vector2 screenPos = GetWorldToScreen(label.worldPos, _camera);
-        DrawText(TextFormat("x%d", label.count),
-                 static_cast<int>(screenPos.x), static_cast<int>(screenPos.y), 14, label.color);
+        gfx::Vec2 screenPos = _engine.worldToScreen(_camera, label.worldPos);
+        _engine.drawText(gfx::fmt("x%d", label.count),
+                         static_cast<int>(screenPos.x), static_cast<int>(screenPos.y), 14, label.color);
     }
 
     if (_state.hasWinner)
-        DrawText(TextFormat("WINNER: %s", _state.winner.c_str()),
-                 GetScreenWidth() / 2 - 140, GetScreenHeight() / 2 - 20, 40, GOLD);
+        _engine.drawText(gfx::fmt("WINNER: %s", _state.winner.c_str()),
+                         _engine.screenWidth() / 2 - 140, _engine.screenHeight() / 2 - 20, 40, gfx::GOLD);
 
     drawHud();
     drawTimeline();
@@ -1149,7 +1034,7 @@ void Interface::render()
     if (_showHelp)
         drawHelpOverlay();
 
-    DrawFPS(GetScreenWidth() - 90, 10);
+    _engine.drawFps(_engine.screenWidth() - 90, 10);
 }
 
 // ---------------------------------------------------------------------------
@@ -1159,8 +1044,8 @@ void Interface::pickTile()
 {
     // The cursor is captured (centred) in free-cam, so aim from the crosshair
     // at the middle of the screen rather than the frozen mouse position.
-    Vector2 centre = { GetScreenWidth() / 2.0f, GetScreenHeight() / 2.0f };
-    Ray ray = GetScreenToWorldRay(centre, _camera);
+    gfx::Vec2 centre = { _engine.screenWidth() / 2.0f, _engine.screenHeight() / 2.0f };
+    gfx::Ray ray = _engine.screenToWorldRay(_camera, centre);
     if (std::fabs(ray.direction.y) < 1e-6f)
         return; // ray parallel to the ground, no hit
 
@@ -1195,17 +1080,17 @@ void Interface::drawSelectionHighlight()
     float half = size * 0.5f;
 
     // Translucent overlay + bright gold border just above the tile surface.
-    DrawCube({ wx, kTileTopY + 0.15f, wz }, size, 0.3f, size, Color{ 255, 230, 0, 70 });
+    _engine.drawCube({ wx, kTileTopY + 0.15f, wz }, size, 0.3f, size, gfx::Color{ 255, 230, 0, 70 });
 
     float    y = kTileTopY + 0.35f;
-    Vector3  a = { wx - half, y, wz - half };
-    Vector3  b = { wx + half, y, wz - half };
-    Vector3  c = { wx + half, y, wz + half };
-    Vector3  d = { wx - half, y, wz + half };
-    DrawLine3D(a, b, GOLD);
-    DrawLine3D(b, c, GOLD);
-    DrawLine3D(c, d, GOLD);
-    DrawLine3D(d, a, GOLD);
+    gfx::Vec3 a = { wx - half, y, wz - half };
+    gfx::Vec3 b = { wx + half, y, wz - half };
+    gfx::Vec3 c = { wx + half, y, wz + half };
+    gfx::Vec3 d = { wx - half, y, wz + half };
+    _engine.drawLine3D(a, b, gfx::GOLD);
+    _engine.drawLine3D(b, c, gfx::GOLD);
+    _engine.drawLine3D(c, d, gfx::GOLD);
+    _engine.drawLine3D(d, a, gfx::GOLD);
 }
 
 void Interface::drawTileInfoPanel()
@@ -1216,24 +1101,24 @@ void Interface::drawTileInfoPanel()
     const MapTile& tile = _map.getTile(_selectedX, _selectedY);
 
     // Build the lines first so the panel can size itself.
-    std::vector<std::pair<std::string, Color>> lines;
-    lines.push_back({ TextFormat("Tile (%d, %d)", _selectedX, _selectedY), GOLD });
+    std::vector<std::pair<std::string, gfx::Color>> lines;
+    lines.push_back({ gfx::fmt("Tile (%d, %d)", _selectedX, _selectedY), gfx::GOLD });
 
     int totalRes = 0;
     for (int i = 0; i < MAP_RESOURCE_COUNT; ++i) {
         int q = tile.resources[i];
         totalRes += q;
         if (q > 0)
-            lines.push_back({ TextFormat("%-9s %d", std::string(MAP_RESOURCE_NAMES[i]).c_str(), q), RAYWHITE });
+            lines.push_back({ gfx::fmt("%-9s %d", std::string(MAP_RESOURCE_NAMES[i]).c_str(), q), gfx::RAYWHITE });
     }
     if (totalRes == 0)
-        lines.push_back({ "(no resources)", GRAY });
+        lines.push_back({ "(no resources)", gfx::GRAY });
 
     // Players standing on the tile, enriched with level/team from the registry.
-    lines.push_back({ TextFormat("Players: %d", static_cast<int>(tile.players.size())), SKYBLUE });
+    lines.push_back({ gfx::fmt("Players: %d", static_cast<int>(tile.players.size())), gfx::SKYBLUE });
     for (const aiPlayer& player : tile.players) {
-        lines.push_back({ TextFormat("  #%u  lvl %d  %s", player.getId(), player.getLevel(),
-                                     player.getTeam().c_str()), LIGHTGRAY });
+        lines.push_back({ gfx::fmt("  #%u  lvl %d  %s", player.getId(), player.getLevel(),
+                                   player.getTeam().c_str()), gfx::LIGHTGRAY });
     }
 
     // Eggs on this tile.
@@ -1244,22 +1129,22 @@ void Interface::drawTileInfoPanel()
             ++eggs;
     }
     if (eggs > 0)
-        lines.push_back({ TextFormat("Eggs: %d", eggs), BEIGE });
+        lines.push_back({ gfx::fmt("Eggs: %d", eggs), gfx::BEIGE });
 
     // Panel geometry: top-right.
     const int pad    = 10;
     const int lineH  = 18;
     const int width  = 220;
     const int height = pad * 2 + static_cast<int>(lines.size()) * lineH;
-    const int px     = GetScreenWidth() - width - 10;
+    const int px     = _engine.screenWidth() - width - 10;
     const int py     = 120;
 
-    DrawRectangle(px, py, width, height, Color{ 0, 0, 0, 180 });
-    DrawRectangleLines(px, py, width, height, GOLD);
+    _engine.drawRect(px, py, width, height, gfx::Color{ 0, 0, 0, 180 });
+    _engine.drawRectLines(px, py, width, height, gfx::GOLD);
 
     int ty = py + pad;
     for (const auto& [text, color] : lines) {
-        DrawText(text.c_str(), px + pad, ty, 14, color);
+        _engine.drawText(text, px + pad, ty, 14, color);
         ty += lineH;
     }
 }
@@ -1270,36 +1155,36 @@ void Interface::drawTileInfoPanel()
 void Interface::drawHud()
 {
     // Compact always-on status, top-left.
-    DrawText(TextFormat("Map %dx%d   Teams %d   Players %d   Eggs %d",
-                        _map.getWidth(), _map.getHeight(),
-                        static_cast<int>(_state.teams.size()),
-                        static_cast<int>(_state.players.size()),
-                        static_cast<int>(_state.eggs.size())),
-             10, 10, 18, RAYWHITE);
+    _engine.drawText(gfx::fmt("Map %dx%d   Teams %d   Players %d   Eggs %d",
+                              _map.getWidth(), _map.getHeight(),
+                              static_cast<int>(_state.teams.size()),
+                              static_cast<int>(_state.players.size()),
+                              static_cast<int>(_state.eggs.size())),
+                     10, 10, 18, gfx::RAYWHITE);
 
     const int mm = static_cast<int>(_elapsed) / 60;
     const int ss = static_cast<int>(_elapsed) % 60;
-    DrawText(TextFormat("Speed (time unit): %d  [+/- to change]   Elapsed %02d:%02d",
-                        _state.frequency, mm, ss),
-             10, 32, 16, SKYBLUE);
+    _engine.drawText(gfx::fmt("Speed (time unit): %d  [+/- to change]   Elapsed %02d:%02d",
+                              _state.frequency, mm, ss),
+                     10, 32, 16, gfx::SKYBLUE);
 
     if (_followedPlayer >= 0)
-        DrawText(TextFormat("Following player #%lld  (F to release)",
-                            static_cast<long long>(_followedPlayer)),
-                 10, 52, 16, GOLD);
+        _engine.drawText(gfx::fmt("Following player #%lld  (F to release)",
+                                  static_cast<long long>(_followedPlayer)),
+                         10, 52, 16, gfx::GOLD);
 
     // One-line control reminder; the full list is on H / F1.
-    DrawText("ZQSD: fly   Mouse: look   Space/Ctrl: up/down   Wheel: speed   LMB: select   "
-             "R: reset   F: follow   P: pause   Tab: stats   H: help",
-             10, GetScreenHeight() - 24, 15, LIGHTGRAY);
+    _engine.drawText("ZQSD: fly   Mouse: look   Space/Ctrl: up/down   Wheel: speed   LMB: select   "
+                     "R: reset   F: follow   P: pause   Tab: stats   H: help",
+                     10, _engine.screenHeight() - 24, 15, gfx::LIGHTGRAY);
 
     if (_net && _net->closed())
-        DrawText("DISCONNECTED", GetScreenWidth() / 2 - 70, 10, 20, RED);
+        _engine.drawText("DISCONNECTED", _engine.screenWidth() / 2 - 70, 10, 20, gfx::RED);
 
     // Crosshair: marks what a left click will select.
-    const int cx = GetScreenWidth() / 2, cy = GetScreenHeight() / 2;
-    DrawLine(cx - 8, cy, cx + 8, cy, Color{ 255, 255, 255, 160 });
-    DrawLine(cx, cy - 8, cx, cy + 8, Color{ 255, 255, 255, 160 });
+    const int cx = _engine.screenWidth() / 2, cy = _engine.screenHeight() / 2;
+    _engine.drawLine(cx - 8, cy, cx + 8, cy, gfx::Color{ 255, 255, 255, 160 });
+    _engine.drawLine(cx, cy - 8, cx, cy + 8, gfx::Color{ 255, 255, 255, 160 });
 }
 
 void Interface::drawStatsPanel()
@@ -1322,18 +1207,18 @@ void Interface::drawStatsPanel()
     }
 
     // Build the lines first so the panel can size itself.
-    std::vector<std::pair<std::string, Color>> lines;
-    lines.push_back({ "GLOBAL STATS  (Tab)", GOLD });
-    lines.push_back({ "Resources on map:", SKYBLUE });
+    std::vector<std::pair<std::string, gfx::Color>> lines;
+    lines.push_back({ "GLOBAL STATS  (Tab)", gfx::GOLD });
+    lines.push_back({ "Resources on map:", gfx::SKYBLUE });
     long grand = 0;
     for (int i = 0; i < MAP_RESOURCE_COUNT; ++i) {
         grand += resTotals[i];
-        lines.push_back({ TextFormat("  %-9s %ld", std::string(MAP_RESOURCE_NAMES[i]).c_str(),
-                                     resTotals[i]), RAYWHITE });
+        lines.push_back({ gfx::fmt("  %-9s %ld", std::string(MAP_RESOURCE_NAMES[i]).c_str(),
+                                   resTotals[i]), gfx::RAYWHITE });
     }
-    lines.push_back({ TextFormat("  %-9s %ld", "TOTAL", grand), LIGHTGRAY });
+    lines.push_back({ gfx::fmt("  %-9s %ld", "TOTAL", grand), gfx::LIGHTGRAY });
 
-    lines.push_back({ "Players per team:", SKYBLUE });
+    lines.push_back({ "Players per team:", gfx::SKYBLUE });
     for (const auto& team : _state.teams) {
         int alive = 0, top = 0;
         for (const auto& [id, p] : _state.players) {
@@ -1343,23 +1228,23 @@ void Interface::drawStatsPanel()
                 if (p.getLevel() > top) top = p.getLevel();
             }
         }
-        lines.push_back({ TextFormat("  %-10s %d  (max lvl %d)", team.c_str(), alive, top),
-                          RAYWHITE });
+        lines.push_back({ gfx::fmt("  %-10s %d  (max lvl %d)", team.c_str(), alive, top),
+                          gfx::RAYWHITE });
     }
 
-    lines.push_back({ "Players per level:", SKYBLUE });
+    lines.push_back({ "Players per level:", gfx::SKYBLUE });
     std::string lvlLine = "  ";
     for (int l = 0; l < 8; ++l)
-        lvlLine += TextFormat("L%d:%d  ", l + 1, levelCounts[static_cast<size_t>(l)]);
-    lines.push_back({ lvlLine, RAYWHITE });
+        lvlLine += gfx::fmt("L%d:%d  ", l + 1, levelCounts[static_cast<size_t>(l)]);
+    lines.push_back({ lvlLine, gfx::RAYWHITE });
 
-    lines.push_back({ TextFormat("Eggs: %d        Incantations: %d",
-                                 static_cast<int>(_state.eggs.size()),
-                                 static_cast<int>(_state.incanting.size())), BEIGE });
-    lines.push_back({ TextFormat("Time unit: %d   Elapsed: %02d:%02d",
-                                 _state.frequency,
-                                 static_cast<int>(_elapsed) / 60,
-                                 static_cast<int>(_elapsed) % 60), LIGHTGRAY });
+    lines.push_back({ gfx::fmt("Eggs: %d        Incantations: %d",
+                               static_cast<int>(_state.eggs.size()),
+                               static_cast<int>(_state.incanting.size())), gfx::BEIGE });
+    lines.push_back({ gfx::fmt("Time unit: %d   Elapsed: %02d:%02d",
+                               _state.frequency,
+                               static_cast<int>(_elapsed) / 60,
+                               static_cast<int>(_elapsed) % 60), gfx::LIGHTGRAY });
 
     // Panel geometry: left side, under the HUD.
     const int pad    = 12;
@@ -1369,12 +1254,12 @@ void Interface::drawStatsPanel()
     const int px     = 10;
     const int py     = 80;
 
-    DrawRectangle(px, py, width, height, Color{ 0, 0, 0, 190 });
-    DrawRectangleLines(px, py, width, height, GOLD);
+    _engine.drawRect(px, py, width, height, gfx::Color{ 0, 0, 0, 190 });
+    _engine.drawRectLines(px, py, width, height, gfx::GOLD);
 
     int ty = py + pad;
     for (const auto& [text, color] : lines) {
-        DrawText(text.c_str(), px + pad, ty, 14, color);
+        _engine.drawText(text, px + pad, ty, 14, color);
         ty += lineH;
     }
 }
@@ -1404,44 +1289,44 @@ void Interface::drawHelpOverlay()
     const int lineH = 22;
     const int width = 460;
     const int height = pad * 2 + static_cast<int>(kHelp.size()) * lineH;
-    const int px = GetScreenWidth() / 2 - width / 2;
-    const int py = GetScreenHeight() / 2 - height / 2;
+    const int px = _engine.screenWidth() / 2 - width / 2;
+    const int py = _engine.screenHeight() / 2 - height / 2;
 
-    DrawRectangle(px, py, width, height, Color{ 0, 0, 0, 210 });
-    DrawRectangleLines(px, py, width, height, GOLD);
+    _engine.drawRect(px, py, width, height, gfx::Color{ 0, 0, 0, 210 });
+    _engine.drawRectLines(px, py, width, height, gfx::GOLD);
 
     int ty = py + pad;
     for (size_t i = 0; i < kHelp.size(); ++i) {
-        DrawText(kHelp[i], px + pad, ty, i == 0 ? 20 : 16, i == 0 ? GOLD : RAYWHITE);
+        _engine.drawText(kHelp[i], px + pad, ty, i == 0 ? 20 : 16, i == 0 ? gfx::GOLD : gfx::RAYWHITE);
         ty += lineH;
     }
 }
 
 void Interface::drawTimeline()
 {
-    const int   sw    = GetScreenWidth();
+    const int   sw    = _engine.screenWidth();
     const float last  = latestTime();
     const float frac  = last > 0.0f ? (_playT / last) : 1.0f;
 
     const int barW = sw / 2;
     const int barH = 8;
     const int x0   = (sw - barW) / 2;
-    const int y0   = GetScreenHeight() - 52;
+    const int y0   = _engine.screenHeight() - 52;
 
     // Mode label above the bar.
     if (_live) {
-        DrawText("LIVE", x0, y0 - 20, 16, GREEN);
+        _engine.drawText("LIVE", x0, y0 - 20, 16, gfx::GREEN);
     } else {
-        DrawText(TextFormat("PAUSED  %.1fs / %.1fs  (PageUp/Down scrub, End: live)",
-                            _playT, last),
-                 x0, y0 - 20, 16, GOLD);
+        _engine.drawText(gfx::fmt("PAUSED  %.1fs / %.1fs  (PageUp/Down scrub, End: live)",
+                                  _playT, last),
+                         x0, y0 - 20, 16, gfx::GOLD);
     }
 
     // Track + filled portion + cursor knob.
-    DrawRectangle(x0, y0, barW, barH, Color{ 0, 0, 0, 160 });
-    DrawRectangle(x0, y0, static_cast<int>(barW * frac), barH,
-                  _live ? Color{ 60, 200, 90, 200 } : Color{ 230, 190, 40, 220 });
-    DrawRectangleLines(x0, y0, barW, barH, Color{ 255, 255, 255, 90 });
+    _engine.drawRect(x0, y0, barW, barH, gfx::Color{ 0, 0, 0, 160 });
+    _engine.drawRect(x0, y0, static_cast<int>(barW * frac), barH,
+                     _live ? gfx::Color{ 60, 200, 90, 200 } : gfx::Color{ 230, 190, 40, 220 });
+    _engine.drawRectLines(x0, y0, barW, barH, gfx::Color{ 255, 255, 255, 90 });
     const int knobX = x0 + static_cast<int>(barW * frac);
-    DrawCircle(knobX, y0 + barH / 2, 5.0f, _live ? GREEN : GOLD);
+    _engine.drawCircle(knobX, y0 + barH / 2, 5.0f, _live ? gfx::GREEN : gfx::GOLD);
 }
