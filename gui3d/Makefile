@@ -19,8 +19,8 @@ LDFLAGS     =   -lraylib -lGL -lm -lpthread -ldl -lrt -lX11
 # ---- demo knobs — override on the command line -------------------------------
 #   make demo PORT=4242 MAP_W=20 MAP_H=20 BOTS=6 FREQ=100
 PORT        ?=  4242
-MAP_W       ?=  8
-MAP_H       ?=  8
+MAP_W       ?=  20
+MAP_H       ?=  20
 TEAMS       ?=  red
 CLIENTS     ?=  100
 FREQ        ?=  1000
