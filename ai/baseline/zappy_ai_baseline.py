@@ -61,7 +61,12 @@ class Memory:
 
 
 class AI:
-    def __init__(self, host: str, port: int, team: str, frequency: Optional[int]):
+    def __init__(self, host: str, port: int, team: str, frequency: Optional[int],
+                 verbose: bool = False):
+        # Per-action stderr logging costs milliseconds/action (file-write
+        # syscalls), which at high f exceeds the 7/f s budget per action and
+        # starves the bot. Off by default; -v re-enables for debugging.
+        self.verbose = verbose
         self.host = host
         self.port = port
         self.team = team
@@ -70,8 +75,13 @@ class AI:
         self.sock: Optional[socket.socket] = None
         self.recv_buffer = ""
         self.blocking_buffer: List[str] = []
-        self.pending_cmd: Optional[str] = None
-        self.pending_at = 0.0
+        # Outstanding commands awaiting a reply, FIFO (server answers in order).
+        # The server buffers up to MAX_COMMAND_QUEUE=10 per client and silently
+        # drops the overflow, so we cap below that. Pipelining deterministic
+        # command sequences (movement plans) keeps the server's action queue full
+        # instead of going idle for a round-trip between every action.
+        self.pending: List[Tuple[str, float]] = []
+        self.max_pending = 8
         self.memory = Memory()
         self.state = State.LOOK
         self.running = True
@@ -81,11 +91,22 @@ class AI:
         self.preparing_incantation = False
         self.waiting_incantation = False
 
+        # NOTE: level-scaled survival was tried (survive_per_level=6) and REGRESSED
+        # (0 L4, more deaths): the food economy is the binding constraint, so a
+        # higher floor just makes high-level bots farm endlessly and never reach
+        # the food to start a gather. Kept flat. The scaling hook stays at 0 in
+        # case a richer map / food strategy later makes it viable.
         self.survive_food = 8
-        self.gather_start_food = 24
-        self.gather_abort_food = 10
+        self.survive_per_level = 0
         self.fork_food = 25
-        self.max_forks = 6
+        # Fork discipline: fewer mouths on a food-scarce map. Each bot forks at
+        # most this many times, and only while low-level (see should_fork) — a
+        # swarm of starving babies drains the shared food the valuable high-level
+        # bots need. This lean setting (3 forks, level<=2 only) is the LOW-death
+        # config that reached level 8 (game win) in ~16 min at f=1000: low
+        # attrition lets the cohort persist and climb. Looser settings churned
+        # more bots and starved the high-level pool.
+        self.max_forks = 3
         self.max_plan_length = 2 if self.frequency >= 100 else 3
 
         self.must_fork_after_gather_fail = False
@@ -106,10 +127,56 @@ class AI:
         self.pending_ack_level = 0
         self.pending_ack_leader: Optional[int] = None
 
+        # Level-verified physical arrival. Look shows "player" with NO level, so a
+        # leader can't tell a same-level teammate from a passing level-1 baby. A
+        # follower instead knows it's on the leader's exact tile when the leader's
+        # broadcast arrives as bearing 0 (server-authoritative), and announces
+        # ARRIVED. The leader counts distinct same-level ARRIVED senders and only
+        # incants on THAT count — never the level-blind on-tile player count.
+        self.arrived_at_leader: set = set()
+
         self.following_req: Optional[str] = None
         self.following_leader: Optional[int] = None
         self.following_until = 0.0
         self.pending_follow_direction: Optional[int] = None
+
+        # Freeze-on-tile handshake: a leader with enough players broadcasts HOLD,
+        # teammates freeze in place through its Set+Incantation ritual instead of
+        # wandering off (which drops the count below the requirement -> ko).
+        self.arrived_hold_until = 0.0
+        self.incant_hold_broadcasts = 0
+
+        # Manifest blitz strategy — the DEFAULT (set ZAPPY_NO_MANIFEST to fall back
+        # to the old incremental play). Every bot races to collect the FULL stone
+        # set for L2->L8 (sum of all levels' requirements). The first to complete
+        # becomes the anchor, the team banks food, synchronises, converges on full
+        # tanks, drops all stones at once, and incants straight up L2->L8 (each
+        # ritual consumes only its level's stones; all 6 players level each time).
+        # Measured: ~30s to L8 and 4/4 win rate (vs ~14min / 1-in-3 for incremental),
+        # robust across 10x10..40x40 maps at reserve~200. Needs ~6 reachable mates;
+        # with fewer it waits out manifest_timeout then falls back to normal play.
+        self.manifest_mode = os.environ.get("ZAPPY_NO_MANIFEST") is None
+        self.blitzing = False           # anchor mid-blitz (incant repeatedly)
+        self.manifest_gave_up = False    # fell back to normal play (no anchor emerged)
+        self.manifest_started_at = time.time()
+        # Phased rendezvous: collect -> bank -> ready -> converge -> blitz. Bots
+        # bank food to a reserve BEFORE converging and only launch once all are
+        # ready, so the whole cohort makes the trek on full tanks (the fix for the
+        # food-vs-convergence wall).
+        self.manifest_phase = "collect"  # collect|bank|ready|converge (anchor: +blitz)
+        self.manifest_is_anchor = False
+        self.manifest_anchor = None      # id of the anchor a member is rallying to
+        self.ready_too: set = set()      # anchor: members who signalled READY_TOO
+        # Bank a big food reserve before converging so the cohort can outlast the
+        # slow oscillating rally — this is the load-bearing tuning. At ~8 food/sec
+        # drain, reserve/8 ≈ seconds of hold time, so 200 ≈ 25s, enough for 6 to
+        # assemble. 200 is near-optimal across map sizes; higher just wastes
+        # foraging time (40x40 @400 was slower for no gain). Tune via ZAPPY_RESERVE.
+        self.food_reserve = int(os.environ.get("ZAPPY_RESERVE", "200"))
+        self.food_abort = max(12, self.food_reserve // 3)  # re-bank below this
+        self.manifest_food_floor = max(20, self.food_reserve // 2)  # collector top-up
+        self.last_focus_bcast = 0.0
+        self.last_ready_bcast = 0.0
 
     def connect(self) -> None:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -124,13 +191,29 @@ class AI:
         self.sock.sendall(line.encode())
 
     def send_cmd(self, cmd: str) -> bool:
-        if self.pending_cmd is not None:
+        if len(self.pending) >= self.max_pending:
             return False
         self.send_raw(cmd)
-        self.pending_cmd = cmd
-        self.pending_at = time.time()
-        print(f"[AI -> SERVER] {cmd}", file=sys.stderr)
+        self.pending.append((cmd, time.time()))
+        self.log(f"[AI -> SERVER] {cmd}")
         return True
+
+    def log(self, msg: str) -> None:
+        # Hot-path logging, gated: silent unless -v. Lifecycle markers
+        # (level-ups, death, fork) use print() directly so they always show.
+        if self.verbose:
+            print(msg, file=sys.stderr)
+
+    def has_pending(self) -> bool:
+        return len(self.pending) > 0
+
+    def front_pending(self) -> Optional[str]:
+        # The command the next server reply will answer (oldest unanswered).
+        return self.pending[0][0] if self.pending else None
+
+    def pop_pending(self) -> Optional[str]:
+        # Consume the oldest outstanding command (a reply just arrived for it).
+        return self.pending.pop(0)[0] if self.pending else None
 
     def read_available(self) -> List[str]:
         if not self.sock:
@@ -217,11 +300,10 @@ class AI:
 
         self.max_plan_length = 2 if self.frequency >= 100 else 3
 
-        print(
+        self.log(
             f"[AI] Connected team={self.team} bot_id={self.bot_id} "
             f"slots={self.memory.free_slots} map={self.memory.width}x{self.memory.height} "
             f"freq={self.frequency}",
-            file=sys.stderr,
         )
 
         self.send_cmd("Inventory")
@@ -338,12 +420,23 @@ class AI:
         self.handshake()
 
         while self.running:
+            # Block until the socket has data instead of busy-polling on a fixed
+            # 2ms sleep. A server reply wakes us instantly (sub-ms), so the
+            # reactive feed cycle (Look -> Take) no longer eats a 2ms latency tax
+            # per command — that tax is what capped survival at high frequency.
+            # The 50ms cap is just a floor so time-based logic (rebroadcast
+            # intervals, fork cooldowns, gather timers) still ticks when idle.
+            if self.sock is not None:
+                try:
+                    select.select([self.sock], [], [], 0.05)
+                except (OSError, ValueError):
+                    pass
+
             for line in self.read_available():
                 if line:
                     self.handle_line(line)
 
             self.tick()
-            time.sleep(0.002)
 
         if self.sock:
             self.sock.close()
@@ -354,12 +447,25 @@ class AI:
         if not self.running or self.state == State.DEAD:
             return
 
-        if self.pending_cmd is not None:
-            if time.time() - self.pending_at > self.cmd_timeout(self.pending_cmd):
-                print(f"[AI] command timeout: {self.pending_cmd}", file=sys.stderr)
-                self.pending_cmd = None
-            else:
-                return
+        # Drop a wedged front command (no reply within its timeout) so the
+        # pipeline can't stall forever on a lost response.
+        if self.pending:
+            cmd, at = self.pending[0]
+            if time.time() - at > self.cmd_timeout(cmd):
+                self.log(f"[AI] command timeout: {cmd}")
+                self.pending.pop(0)
+
+        # Keep the pipeline topped up with committed plan steps. Safe even while
+        # other replies are outstanding — it's a deterministic path, not a
+        # state-dependent decision.
+        if self.send_next_plan_cmd():
+            return
+
+        # Everything below is a reactive decision that must see fresh world state,
+        # so only act once the pipeline has drained (preserves single-pending
+        # semantics for Look/Inventory/Take/Incantation/etc.).
+        if self.has_pending():
+            return
 
         self.prune_answered_reqs()
 
@@ -379,9 +485,6 @@ class AI:
             if self.send_next_plan_cmd():
                 return
 
-        if self.send_next_plan_cmd():
-            return
-
         if self.should_refresh_inventory():
             self.send_cmd("Inventory")
             return
@@ -390,9 +493,10 @@ class AI:
         self.run_state()
 
     def handle_line(self, line: str) -> None:
-        print(f"[SERVER -> AI] {line}", file=sys.stderr)
+        self.log(f"[SERVER -> AI] {line}")
 
         if line == "dead":
+            print("[AI] DEAD", file=sys.stderr)  # always: survival metric
             self.state = State.DEAD
             self.running = False
             return
@@ -415,24 +519,40 @@ class AI:
             except ValueError:
                 pass
 
-            self.pending_cmd = None
+            print(f"[AI] LEVELUP {self.memory.level}", file=sys.stderr)  # always: metric
+            self.pop_pending()
+
+            # Manifest blitz: the stones for the NEXT level are already on the tile
+            # and the 6 frozen players are still here -> fire the next Incantation
+            # immediately, no Set, no re-gather. Ride straight to L8.
+            if self.blitzing and self.memory.level < 8:
+                self.broadcast_hold()      # keep the frozen mates frozen
+                self.send_cmd("Incantation")
+                self.waiting_incantation = True
+                return
+
+            was_frozen = time.time() < self.arrived_hold_until
+            self.blitzing = False
             self.after_incantation_done()
             self.must_fork_after_gather_fail = False
             self.abort_gather("level changed", False)
             self.clear_following()
+            # A frozen participant in someone's blitz: keep holding so we stay on
+            # the tile for the next ritual instead of wandering after leveling.
+            if was_frozen and self.manifest_mode:
+                self.arrived_hold_until = time.time() + self.incant_hold_window()
             return
 
         if line == "Elevation underway":
             return
 
-        if line.lstrip("-").isdigit() and self.pending_cmd == "Connect_nbr":
+        if line.lstrip("-").isdigit() and self.front_pending() == "Connect_nbr":
             self.memory.free_slots = int(line)
-            self.pending_cmd = None
+            self.pop_pending()
             return
 
         if line in ("ok", "ko"):
-            cmd = self.pending_cmd or ""
-            self.pending_cmd = None
+            cmd = self.pop_pending() or ""
             self.count_action(cmd)
 
             if line == "ok":
@@ -451,6 +571,9 @@ class AI:
                 )
 
             if cmd == "Incantation":
+                # A failed ritual (e.g. a blitz mate left) ends the blitz; the
+                # bot drops back to normal manifest decisions next tick.
+                self.blitzing = False
                 self.after_incantation_done()
 
             if line == "ko":
@@ -469,31 +592,37 @@ class AI:
                 self.memory.inventory_dirty = False
                 self.memory.last_inventory_at = time.time()
                 self.memory.actions_since_inventory = 0
-                self.pending_cmd = None
+                self.pop_pending()
 
-                print(
+                self.log(
                     "[AI] inventory updated: "
-                    + " ".join(f"{r}={self.memory.inventory.get(r, 0)}" for r in RESOURCES),
-                    file=sys.stderr,
+                    + " ".join(f"{r}={self.memory.inventory.get(r, 0)}" for r in RESOURCES)
                 )
             else:
                 self.memory.visible_tiles = self.parse_look(line)
                 self.memory.last_look_at = time.time()
                 self.memory.moves_since_look = 0
                 self.memory.force_look = False
-                self.pending_cmd = None
+                self.pop_pending()
 
             return
 
-        print(f"[AI] ignored: {line}", file=sys.stderr)
+        self.log(f"[AI] ignored: {line}")
 
     def choose_state(self) -> None:
         food = self.food()
 
-        if food <= self.survive_food:
+        if food <= self.survive_min():
             self.abort_gather("low food", False)
             self.clear_following()
             self.state = State.SURVIVE
+            return
+
+        # Frozen for a teammate's incantation ritual (HOLD): hold position. Survival
+        # above still overrides, so we never freeze into starvation.
+        if time.time() < self.arrived_hold_until and not self.preparing_incantation:
+            self.plan.clear()
+            self.state = State.LOOK  # LOOK doesn't move us; we just wait on-tile
             return
 
         if self.preparing_incantation:
@@ -502,6 +631,12 @@ class AI:
 
         if self.needs_look():
             self.state = State.LOOK
+            return
+
+        # Manifest mode kicks in at L2: do the quick solo L1->L2 normally first,
+        # then collect the L2->L8 manifest and blitz.
+        if self.manifest_mode and not self.manifest_gave_up and self.memory.level >= 2:
+            self.manifest_choose()
             return
 
         if self.has_required_stones():
@@ -527,7 +662,7 @@ class AI:
                 self.state = State.REPRODUCE if self.should_fork() else State.FARM_FOOD
                 return
 
-            if food < self.gather_start_food:
+            if food < self.gather_start_min():
                 self.state = State.REPRODUCE if self.should_fork() else State.FARM_FOOD
                 return
 
@@ -545,11 +680,10 @@ class AI:
             self.state = State.EXPLORE
 
     def run_state(self) -> None:
-        print(
+        self.log(
             f"[AI] state={self.state.value} level={self.memory.level} food={self.food()} "
             f"actions_since_inventory={self.memory.actions_since_inventory} "
-            f"moves_since_look={self.memory.moves_since_look}",
-            file=sys.stderr,
+            f"moves_since_look={self.memory.moves_since_look}"
         )
 
         if self.state == State.SURVIVE:
@@ -581,6 +715,73 @@ class AI:
     def gather_arrival_timeout(self) -> float:
         return max(8.0, 300.0 / self.frequency)
 
+    def incant_hold_window(self) -> float:
+        # Seconds a teammate freezes after a HOLD, covering the leader's
+        # Set+Incantation cycles so the on-tile player count holds.
+        return max(3.0, 150.0 / self.frequency)
+
+    # ---- Manifest phased-rendezvous broadcasts ---------------------------------
+    def broadcast_focus_food(self) -> None:
+        self.last_focus_bcast = time.time()
+        self.send_cmd(f"Broadcast {self.team}:MFOOD:level={self.memory.level}:from={self.bot_id}")
+
+    def broadcast_ready(self) -> None:
+        self.last_ready_bcast = time.time()
+        self.send_cmd(f"Broadcast {self.team}:MRDY:level={self.memory.level}:from={self.bot_id}")
+
+    def broadcast_ready_too(self) -> None:
+        self.last_ready_bcast = time.time()
+        self.send_cmd(f"Broadcast {self.team}:MRDY2:level={self.memory.level}:from={self.bot_id}")
+
+    def broadcast_come_now(self) -> None:
+        self.send_cmd(f"Broadcast {self.team}:MCOME:level={self.memory.level}:from={self.bot_id}")
+
+    def manifest_demote_to(self, anchor_id: int) -> None:
+        # A lower-id anchor exists -> stop being an anchor, rally to it instead.
+        self.manifest_is_anchor = False
+        self.manifest_anchor = anchor_id
+        self.ready_too.clear()
+        self.abort_gather("defer to lower-id manifest anchor", False)
+        if self.manifest_phase in ("collect", "bank", "ready", "converge"):
+            if self.manifest_phase == "collect":
+                self.manifest_phase = "bank"
+
+    def handle_mfood(self, fields: Dict[str, str], sender: int) -> None:
+        if self.get_int(fields, "level") != self.memory.level:
+            return
+        if self.manifest_is_anchor:
+            if sender < self.bot_id:
+                self.manifest_demote_to(sender)
+            return
+        # Member: stop collecting, rally to this anchor, start banking food.
+        self.manifest_anchor = sender
+        if self.manifest_phase == "collect":
+            self.manifest_phase = "bank"
+
+    def handle_mrdy(self, fields: Dict[str, str], sender: int) -> None:
+        # Anchor announcing it's fed + ready (also gives us its bearing).
+        if self.get_int(fields, "level") != self.memory.level:
+            return
+        if self.manifest_is_anchor:
+            if sender < self.bot_id:
+                self.manifest_demote_to(sender)
+            return
+        self.manifest_anchor = sender
+
+    def handle_mrdy2(self, fields: Dict[str, str], sender: int) -> None:
+        # A member reports it's fed + ready.
+        if self.manifest_is_anchor and self.get_int(fields, "level") == self.memory.level:
+            self.ready_too.add(sender)
+
+    def handle_mcome(self, fields: Dict[str, str], sender: int) -> None:
+        # Launch: converge on the anchor (its GATHER drives the actual follow).
+        if self.manifest_is_anchor:
+            return
+        if self.get_int(fields, "level") != self.memory.level:
+            return
+        self.manifest_anchor = sender
+        self.manifest_phase = "converge"
+
     def gather_cooldown(self) -> float:
         return max(4.0, 180.0 / self.frequency)
 
@@ -600,14 +801,14 @@ class AI:
         self.active_level = self.memory.level
         self.active_need = need
         self.active_acks.clear()
+        self.arrived_at_leader.clear()
         self.gather_started_at = time.time()
         self.gather_last_broadcast_at = 0
         self.gather_arrival_started_at = 0
         self.clear_following()
 
-        print(
+        self.log(
             f"[AI] new gather req={self.active_req} need={need} attempt={self.gather_attempts}",
-            file=sys.stderr,
         )
 
         self.broadcast_gather()
@@ -630,11 +831,16 @@ class AI:
 
         return False
 
+    def broadcast_hold(self) -> bool:
+        # "Everyone of my level on my tile: freeze, I'm about to incant."
+        msg = f"{self.team}:HOLD:level={self.memory.level}:from={self.bot_id}"
+        return self.send_cmd(f"Broadcast {msg}")
+
     def abort_gather(self, reason: str, giveup: bool) -> None:
         if not self.active_req:
             return
 
-        print(f"[AI] abort gather req={self.active_req}: {reason}", file=sys.stderr)
+        self.log(f"[AI] abort gather req={self.active_req}: {reason}")
 
         self.active_req = None
         self.active_level = 0
@@ -651,13 +857,20 @@ class AI:
 
             if self.need_more_mates():
                 self.must_fork_after_gather_fail = True
-                print("[AI] gather failed -> switch objective to FARM_FOOD/FORK", file=sys.stderr)
+                self.log("[AI] gather failed -> switch objective to FARM_FOOD/FORK")
 
     def call_teammates(self) -> None:
         now = time.time()
         need = REQ[self.memory.level]["players"]
+        # Manifest anchor wants a full 6-stack so one drop+blitz rides L2->L8.
+        manifest_anchor = self.manifest_mode and self.has_full_manifest()
+        if manifest_anchor:
+            need = 6
 
-        if self.food() <= self.gather_abort_food:
+        # The manifest anchor holds the rally on its banked reserve — it must NOT
+        # bail at gather_abort_min (that was the 813-abort thrash). It rides down to
+        # survive_min (choose_state's survival preempt), eating any tile food first.
+        if self.food() <= self.gather_abort_min() and not manifest_anchor:
             self.abort_gather("food too low while waiting teammates", True)
             self.state = State.SURVIVE
             self.survive()
@@ -667,9 +880,28 @@ class AI:
             self.send_cmd("Take food")
             return
 
-        if self.players_on_tile() >= need:
-            self.abort_gather("enough players on tile", False)
-            self.prepare_incantation()
+        # Count only same-level teammates that announced ARRIVED (physically on my
+        # tile, server-verified via bearing 0) — NOT players_on_tile(), which is
+        # level-blind and fires on passing level-1 babies -> guaranteed ko.
+        present = 1 + len(self.arrived_at_leader)
+
+        if present < need:
+            self.incant_hold_broadcasts = 0
+
+        if present >= need:
+            # Freeze teammates BEFORE the multi-step ritual, else they wander off
+            # mid-Set/Incantation and the count drops below need -> ko. Broadcast
+            # HOLD a couple times so everyone latches a freeze, then incant.
+            if self.incant_hold_broadcasts < 2:
+                if self.broadcast_hold():
+                    self.incant_hold_broadcasts += 1
+                return
+            self.incant_hold_broadcasts = 0
+            self.abort_gather("enough ARRIVED on tile", False)
+            if manifest_anchor:
+                self.start_manifest_blitz()
+            else:
+                self.prepare_incantation()
             return
 
         if not self.active_req:
@@ -677,22 +909,41 @@ class AI:
             self.start_gather(need)
             return
 
+        if manifest_anchor:
+            # Persistent rally: convergence is tracked by ARRIVED (physical, set in
+            # handle_arrived), which only accumulates if we DON'T reset the gather.
+            # So NEVER restart/abort on ACK count here (that wiped the count, the
+            # 997-abort thrash). Just keep the bearing alive and wait for bodies.
+            if now - self.gather_last_broadcast_at > self.gather_rebroadcast_interval():
+                self.broadcast_gather()
+                return
+            if now - self.gather_started_at > max(90.0, 90000.0 / self.frequency):
+                self.abort_gather("manifest rally timed out", True)
+                self.manifest_gave_up = True
+                self.state = State.EXPLORE
+                return
+            self.send_cmd("Look")
+            return
+
         confirmed = self.confirmed_players()
 
         if confirmed >= need:
             if self.gather_arrival_started_at <= 0:
                 self.gather_arrival_started_at = now
-                print(
+                self.log(
                     f"[AI] enough ACK for req={self.active_req} confirmed={confirmed}/{need}; "
                     f"locked leader, waiting on tile",
-                    file=sys.stderr,
                 )
 
             if now - self.gather_last_broadcast_at > self.gather_rebroadcast_interval():
                 self.broadcast_gather()
                 return
 
-            if now - self.gather_arrival_started_at > self.gather_arrival_timeout():
+            # The manifest anchor must assemble 6 scattered collectors — give it
+            # far more patience than a normal 2-player gather, and keep waiting
+            # (eating on tile) rather than scattering to farm/fork.
+            arrival_timeout = self.gather_arrival_timeout() * (8 if manifest_anchor else 1)
+            if now - self.gather_arrival_started_at > arrival_timeout:
                 self.abort_gather("mates did not arrive on tile", True)
                 self.state = State.REPRODUCE if self.should_fork() else State.FARM_FOOD
                 self.run_state()
@@ -731,6 +982,44 @@ class AI:
             self.handle_gather(direction, fields, sender)
         elif kind == "GATHER_ACK":
             self.handle_ack(fields, sender)
+        elif kind == "HOLD":
+            self.handle_hold(fields, sender)
+        elif kind == "ARRIVED":
+            self.handle_arrived(fields, sender)
+        elif kind == "MFOOD":
+            self.handle_mfood(fields, sender)
+        elif kind == "MRDY":
+            self.handle_mrdy(fields, sender)
+        elif kind == "MRDY2":
+            self.handle_mrdy2(fields, sender)
+        elif kind == "MCOME":
+            self.handle_mcome(fields, sender)
+
+    def handle_arrived(self, fields: Dict[str, str], sender: int) -> None:
+        # A same-level teammate reports it's physically on my gather tile.
+        req_id = fields.get("req", "")
+        level = self.get_int(fields, "level")
+        if self.active_req and req_id == self.active_req and level == self.memory.level:
+            if sender not in self.arrived_at_leader:
+                self.log(
+                    f"[AI] ARRIVED req={req_id} from={sender} "
+                    f"present={1 + len(self.arrived_at_leader) + 1}/{self.active_need}",
+                )
+            self.arrived_at_leader.add(sender)
+
+    def handle_hold(self, fields: Dict[str, str], sender: int) -> None:
+        level = self.get_int(fields, "level")
+        if level != self.memory.level:
+            return
+        if self.preparing_incantation or self.waiting_incantation:
+            return
+        if self.food() <= self.survive_min():
+            return  # too hungry to wait; survival wins
+        # Only freeze if we're actually converging on THIS leader — otherwise a
+        # map-wide broadcast would freeze distant non-participants and starve them.
+        if not (self.is_following() and self.following_leader == sender):
+            return
+        self.arrived_hold_until = time.time() + self.incant_hold_window()
 
     def parse_team_payload(self, text: str) -> Tuple[str, Dict[str, str]]:
         parts = text.split(":")
@@ -762,11 +1051,10 @@ class AI:
         self.memory.last_gather_at = time.time()
 
         if self.locked_leader():
-            print(
+            self.log(
                 f"[AI] locked gather leader req={self.active_req} "
                 f"confirmed={self.confirmed_players()}/{self.active_need}; "
                 f"ignore gather from={sender}",
-                file=sys.stderr,
             )
             return
 
@@ -788,16 +1076,23 @@ class AI:
         self.queue_ack(req_id, level, sender)
         self.pending_follow_direction = direction
 
+        # Bearing 0 from our leader = we are physically on its exact tile. Announce
+        # ARRIVED so it can count us as a confirmed same-level body. Re-announced on
+        # every direction-0 rebroadcast (self-throttled), so a lost one self-heals.
+        if direction == 0:
+            self.send_cmd(
+                f"Broadcast {self.team}:ARRIVED:req={req_id}:level={level}:from={self.bot_id}"
+            )
+
     def handle_ack(self, fields: Dict[str, str], sender: int) -> None:
         req_id = fields.get("req", "")
         level = self.get_int(fields, "level")
 
         if self.active_req and req_id == self.active_req and level == self.memory.level:
             if sender not in self.active_acks:
-                print(
+                self.log(
                     f"[AI] GATHER_ACK req={req_id} from={sender} "
                     f"confirmed={1 + len(self.active_acks) + 1}/{self.active_need}",
-                    file=sys.stderr,
                 )
 
             self.active_acks[sender] = time.time()
@@ -808,7 +1103,7 @@ class AI:
             and level == self.memory.level
             and not self.preparing_incantation
             and not self.waiting_incantation
-            and self.food() > self.survive_food
+            and self.food() > self.survive_min()
         )
 
     def queue_ack(self, req_id: str, level: int, leader: int) -> None:
@@ -819,13 +1114,13 @@ class AI:
         self.pending_ack_level = level
         self.pending_ack_leader = leader
 
-        print(f"[AI] queued GATHER_ACK req={req_id} leader={leader}", file=sys.stderr)
+        self.log(f"[AI] queued GATHER_ACK req={req_id} leader={leader}")
 
     def send_pending_ack(self) -> bool:
         if not self.pending_ack_req:
             return False
 
-        if self.food() <= self.survive_food or self.preparing_incantation or self.waiting_incantation:
+        if self.food() <= self.survive_min() or self.preparing_incantation or self.waiting_incantation:
             self.pending_ack_req = None
             return False
 
@@ -880,7 +1175,7 @@ class AI:
         if tile == 0:
             self.send_cmd("Take food")
         elif tile is not None:
-            self.move_to_tile(tile, True)
+            self.move_to_tile(tile, True, "Take food")
         else:
             self.send_cmd("Forward")
 
@@ -910,7 +1205,7 @@ class AI:
         tile = self.best_food_tile()
 
         if tile is not None:
-            self.move_to_tile(tile, True)
+            self.move_to_tile(tile, True, "Take food")
         elif self.memory.moves_since_look >= 1:
             self.send_cmd("Look")
         else:
@@ -972,6 +1267,21 @@ class AI:
     def food(self) -> int:
         return self.memory.inventory.get("food", 0)
 
+    def survive_min(self) -> int:
+        # Level-scaled survival floor: bail to eat well before starving, more so
+        # the higher (more valuable) the bot is.
+        return self.survive_food + (self.memory.level - 1) * self.survive_per_level
+
+    def gather_abort_min(self) -> int:
+        # Abort a gather to forage a couple food above the pure-survival floor,
+        # so coordinating never tips a high-level bot into starvation.
+        return self.survive_min() + 2
+
+    def gather_start_min(self) -> int:
+        # Only START a gather with a healthy cushion above the survival floor.
+        # (+16 over the flat floor of 8 = 24, the original tuned value.)
+        return self.survive_min() + 16
+
     def should_refresh_inventory(self) -> bool:
         if self.preparing_incantation:
             return False
@@ -1028,11 +1338,135 @@ class AI:
             if self.memory.inventory.get(stone, 0) < requirements.get(stone, 0):
                 return False
 
-        print(f"[AI] has stones for lvl {self.memory.level}, ready to incant", file=sys.stderr)
+        self.log(f"[AI] has stones for lvl {self.memory.level}, ready to incant")
         return True
 
     def need_stone(self, stone: str) -> bool:
+        if self.manifest_mode and not self.manifest_gave_up:
+            return self.memory.inventory.get(stone, 0) < self.manifest_target(stone)
         return self.memory.inventory.get(stone, 0) < REQ.get(self.memory.level, {}).get(stone, 0)
+
+    # ---- Manifest blitz helpers ------------------------------------------------
+    def manifest_target(self, stone: str) -> int:
+        # Total of this stone needed to ritual from our current level all the way
+        # to L8 (one ritual per level; each elevates all 6 players).
+        return sum(REQ[lvl].get(stone, 0) for lvl in range(self.memory.level, 8))
+
+    def has_full_manifest(self) -> bool:
+        return all(self.memory.inventory.get(s, 0) >= self.manifest_target(s) for s in STONES)
+
+    def manifest_drop_list(self) -> List[str]:
+        out: List[str] = []
+        for s in STONES:
+            out += [s] * self.manifest_target(s)
+        return out
+
+    def manifest_visible(self) -> bool:
+        return any(
+            item in STONES and self.need_stone(item)
+            for tile in self.memory.visible_tiles
+            for item in tile
+        )
+
+    def manifest_timeout(self) -> float:
+        # If no anchor emerges (e.g. no thystame on the map) within this, give up
+        # the strategy and play normally so the team isn't stuck forever.
+        return max(300.0, 200000.0 / self.frequency)
+
+    def manifest_choose(self) -> None:
+        # Phased rendezvous. choose_state already handled survival/HOLD/preparing.
+        now = time.time()
+        phase = self.manifest_phase
+
+        # ---- COLLECT: race to complete the full L2->L8 stone set -------------
+        if phase == "collect":
+            if self.has_full_manifest():
+                # First to complete becomes the anchor: tell the team to stop
+                # collecting and bank food, then bank ourselves.
+                self.manifest_is_anchor = True
+                self.manifest_phase = "bank"
+                self.broadcast_focus_food()
+                self.state = State.FARM_FOOD
+                return
+            # keep a fat food buffer while collecting (collection is cheap)
+            if self.food() < self.manifest_food_floor:
+                self.state = State.FARM_FOOD
+                return
+            if time.time() - self.manifest_started_at > self.manifest_timeout():
+                self.manifest_gave_up = True  # no anchor ever emerged -> normal play
+                self.state = State.EXPLORE
+                return
+            self.state = State.COLLECT if self.manifest_visible() else State.EXPLORE
+            return
+
+        # ---- BANK: everyone fills food to a reserve before converging --------
+        if phase == "bank":
+            if self.food() < self.food_reserve:
+                self.state = State.FARM_FOOD
+                return
+            self.manifest_phase = "ready"   # banked -> signal readiness
+            self.state = State.LOOK
+            return
+
+        # ---- READY: fed and waiting; anchor synchronises the launch ----------
+        if phase == "ready":
+            if self.manifest_is_anchor:
+                # Re-bank if our reserve ran down while waiting for stragglers.
+                if self.food() < self.food_abort:
+                    self.manifest_phase = "bank"
+                    self.ready_too.clear()
+                    self.state = State.FARM_FOOD
+                    return
+                if len(self.ready_too) + 1 >= 6:
+                    # All 6 fed and ready -> launch: COME_NOW + open the gather.
+                    self.broadcast_come_now()
+                    self.manifest_phase = "converge"
+                    self.start_gather(6)
+                    self.state = State.CALL_TEAMMATES
+                    return
+                # Keep broadcasting READY (gives members our bearing) + eat in
+                # place: FARM_FOOD only Takes food already under us (no move) when
+                # the tile has it, so we stay put as the rendezvous beacon.
+                if now - self.last_ready_bcast > self.gather_rebroadcast_interval():
+                    self.broadcast_ready()
+                tile0 = self.memory.visible_tiles[0] if self.memory.visible_tiles else []
+                self.state = State.FARM_FOOD if "food" in tile0 else State.LOOK
+                return
+            # Member: announce READY_TOO, then hold fed until COME_NOW arrives.
+            if now - self.last_ready_bcast > self.gather_rebroadcast_interval():
+                self.broadcast_ready_too()
+            if self.food() < self.manifest_food_floor:
+                self.state = State.FARM_FOOD
+                return
+            self.state = State.LOOK
+            return
+
+        # ---- CONVERGE: full tanks, walk to the anchor, then blitz ------------
+        # Anchor drives the gather (ARRIVED count -> drop+blitz). Members follow
+        # the anchor's gather bearing (full food survives the trek).
+        if self.manifest_is_anchor:
+            if not self.active_req:
+                self.start_gather(6)
+            self.state = State.CALL_TEAMMATES
+            return
+        if self.is_following():
+            self.state = State.LOOK
+            return
+        # member told to come but no bearing yet (anchor not heard) -> wait fed
+        if self.food() < 12:
+            self.state = State.FARM_FOOD
+            return
+        self.state = State.LOOK
+
+    def start_manifest_blitz(self) -> None:
+        # Anchor has 6 mates on its tile: drop the whole stone pile, then incant
+        # straight up. The Set sequence runs via PREPARE_INCANTATION; on each
+        # level-up the Current-level handler fires the next Incantation (stones for
+        # the next level are already on the tile).
+        self.abort_gather("manifest blitz", False)
+        self.preparing_incantation = True
+        self.blitzing = True
+        self.stones_to_drop = self.manifest_drop_list()
 
     def visible_useful_resource(self) -> bool:
         return any(
@@ -1119,7 +1553,10 @@ class AI:
         if self.food() < self.fork_food:
             return False
 
-        if self.memory.level > 3 and not self.need_more_mates():
+        # Only low-level bots reproduce. A level-3+ bot is valuable and food-bound;
+        # forking costs it ~6 food (42 t.u.) AND adds a competitor for scarce food,
+        # while the level-1 baby won't reach its level in time to be a teammate.
+        if self.memory.level > 2:
             return False
 
         return time.time() - self.memory.last_fork_at >= max(3.0, 150.0 / self.frequency)
@@ -1127,7 +1564,7 @@ class AI:
     def need_more_mates(self) -> bool:
         return REQ.get(self.memory.level, {}).get("players", 1) > 1 and self.has_required_stones()
 
-    def move_to_tile(self, idx: int, full: bool) -> None:
+    def move_to_tile(self, idx: int, full: bool, terminal: Optional[str] = None) -> None:
         plan = self.plan_to_tile(idx)
 
         if not full:
@@ -1136,23 +1573,33 @@ class AI:
         if not plan:
             return
 
+        # Fold the action at the destination (e.g. "Take food") into the SAME
+        # pipelined burst, so we don't stall on a separate Look+Take round-trip
+        # after arriving. We only append it when the whole path fits (full plan);
+        # a truncated path doesn't reach the tile yet. If the item moved/was taken
+        # meanwhile the Take just ko's — cheap.
+        if terminal and full:
+            plan.append(terminal)
+
         first = plan.pop(0)
         self.plan = plan
 
-        print(f"[AI] moving toward tile={idx} plan={[first] + plan}", file=sys.stderr)
+        self.log(f"[AI] moving toward tile={idx} plan={[first] + plan}")
         self.send_cmd(first)
 
     def send_next_plan_cmd(self) -> bool:
-        if not self.plan:
-            return False
-
-        cmd = self.plan.pop(0)
-        self.send_cmd(cmd)
-
-        if not self.plan:
-            self.memory.force_look = True
-
-        return True
+        # A movement plan is a committed, deterministic sequence, so it is safe to
+        # pipeline: push as many steps as the pipeline allows in one tick instead
+        # of one per round-trip. The server runs them back-to-back with no idle gap.
+        sent = False
+        while self.plan and len(self.pending) < self.max_pending:
+            cmd = self.plan.pop(0)
+            if not self.send_cmd(cmd):
+                break
+            sent = True
+            if not self.plan:
+                self.memory.force_look = True
+        return sent
 
     def tile_pos(self, idx: int) -> Tuple[int, int]:
         dist = int(idx ** 0.5)
@@ -1183,7 +1630,19 @@ class AI:
         return ["Right"] + ["Forward"] * abs(off) + ["Left"] + ["Forward"] * dist
 
     def set_follow_plan(self, direction: int) -> None:
-        if self.waiting_incantation or self.preparing_incantation or self.food() <= self.survive_food:
+        if self.waiting_incantation or self.preparing_incantation or self.food() <= self.survive_min():
+            return
+
+        # Frozen for a ritual: stay put, don't chase.
+        if time.time() < self.arrived_hold_until:
+            return
+
+        # Bearing 0 = we're on the leader's tile. Latch a freeze so we hold here
+        # for the ritual even after the leader stops broadcasting to run it.
+        if direction == 0:
+            self.arrived_hold_until = max(
+                self.arrived_hold_until, time.time() + self.incant_hold_window()
+            )
             return
 
         if self.plan:
@@ -1192,22 +1651,24 @@ class AI:
         plan = self.broadcast_plan(direction)[: self.max_plan_length]
 
         if plan:
-            print(f"[AI] following broadcast direction={direction} plan={plan}", file=sys.stderr)
+            self.log(f"[AI] following broadcast direction={direction} plan={plan}")
             self.plan = plan
 
     def broadcast_plan(self, direction: int) -> List[str]:
+        # K is the server's sound bearing in our own frame: 0 = same tile, 1 =
+        # straight ahead, then CLOCKWISE to 8 (server broadcast_direction /
+        # test_game_rules). So 3 = our right, 5 = behind, 7 = our left. Step so the
+        # source moves toward our front; the leader rebroadcasts and we re-aim.
         if direction == 0:
             return ["Look"]
-        if direction == 1:
+        if direction in (1, 2, 8):       # ahead or ahead-diagonal -> advance
             return ["Forward"]
-        if direction in (2, 3):
-            return ["Left", "Forward"]
-        if direction in (4, 5):
-            return ["Left", "Left", "Forward"]
-        if direction == 6:
-            return ["Right", "Right", "Forward"]
-        if direction in (7, 8):
+        if direction in (3, 4):           # on our right -> face right, advance
             return ["Right", "Forward"]
+        if direction == 5:                # directly behind -> turn around
+            return ["Right", "Right", "Forward"]
+        if direction in (6, 7):           # on our left -> face left, advance
+            return ["Left", "Forward"]
         return []
 
 
@@ -1217,6 +1678,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-n", dest="name")
     parser.add_argument("-h", dest="host", default="localhost")
     parser.add_argument("-f", dest="frequency", type=int, default=None)
+    parser.add_argument("-v", "--verbose", action="store_true",
+                        help="log every command/response (slow; off by default)")
     parser.add_argument("--help", action="store_true")
 
     args, unknown = parser.parse_known_args()
@@ -1235,7 +1698,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     try:
         args = parse_args()
-        return AI(args.host, args.port, args.name, args.frequency).run()
+        return AI(args.host, args.port, args.name, args.frequency, args.verbose).run()
     except KeyboardInterrupt:
         print("[AI] Interrupted", file=sys.stderr)
         return 130

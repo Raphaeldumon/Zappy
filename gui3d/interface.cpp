@@ -466,9 +466,9 @@ void Interface::loadTileTextures()
     if (_darkTileTexture.id == 0)
         TraceLog(LOG_WARNING, "loadTileTextures: failed to load assets/sol_dark.png");
 
-    _orangeTileTexture = LoadTexture("assets/sol_orange.png");
+    _orangeTileTexture = LoadTexture("assets/sol_blanc.png");
     if (_orangeTileTexture.id == 0)
-        TraceLog(LOG_WARNING, "loadTileTextures: failed to load assets/sol_orange.png");
+        TraceLog(LOG_WARNING, "loadTileTextures: failed to load assets/sol_blanc.png");
 }
 
 void Interface::unloadTileTextures()

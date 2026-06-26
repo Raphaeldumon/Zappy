@@ -19,13 +19,18 @@ LDFLAGS     =   -lraylib -lGL -lm -lpthread -ldl -lrt -lX11
 # ---- demo knobs — override on the command line -------------------------------
 #   make demo PORT=4242 MAP_W=20 MAP_H=20 BOTS=6 FREQ=100
 PORT        ?=  4242
-MAP_W       ?=  20
-MAP_H       ?=  20
+MAP_W       ?=  8
+MAP_H       ?=  8
 TEAMS       ?=  red
 CLIENTS     ?=  100
 FREQ        ?=  1000
 BOTS        ?=  8
 HOST        ?=  127.0.0.1
+
+# ---- AI study test knobs (make test-ai) --------------------------------------
+#   make test-ai GAMES=4 BOTS=8 DUR=900 FREQ=1000
+GAMES       ?=  3       # parallel independent games (keep <=4: more cause CPU contention)
+DUR         ?=  900     # seconds per run
 
 all: $(NAME)
 
@@ -65,4 +70,14 @@ demo: all
 	sleep 0.3; \
 	./$(NAME) -p $(PORT) -h $(HOST)
 
-.PHONY: all clean fclean re demo
+## Run the AI study harness: GAMES independent games in parallel for DUR seconds,
+## writing a report (time-to-each-level, deaths, forks, population-over-time) to
+## ../ai/test_logs/run_<timestamp>/report.txt. No GUI; headless stats only.
+##   make test-ai
+##   make test-ai GAMES=4 DUR=600 FREQ=1000 BOTS=8 MAP_W=20 MAP_H=20
+test-ai:
+	@$(MAKE) -C .. build >/dev/null
+	@N=$(GAMES) BOTS=$(BOTS) DUR=$(DUR) FREQ=$(FREQ) MAPW=$(MAP_W) MAPH=$(MAP_H) \
+		../ai/run_ai_test.sh
+
+.PHONY: all clean fclean re demo test-ai
