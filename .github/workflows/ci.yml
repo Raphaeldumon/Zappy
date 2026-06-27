@@ -30,6 +30,11 @@ jobs:
       - name: Build
         run: make re
 
+      # `make re` only builds the deliverable targets (zappy_server/gui/ai).
+      # Build the rest of the tree so the *_tests executables exist for ctest.
+      - name: Build tests
+        run: cmake --build build -j"$(nproc)"
+
       - name: C++ / Python format check
         run: ./tools/format_all.sh --check
 
