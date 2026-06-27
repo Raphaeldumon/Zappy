@@ -1,40 +1,65 @@
-## Zappy — Epitech-compliant wrapper around CMake.
-## Produces zappy_server at the repository root. The AI is pure Python (ai/).
+## Zappy — Epitech root Makefile.
+## `make` builds the three mandatory binaries AT THE REPOSITORY ROOT:
+##   zappy_server  — C++ / CMake          (server/, via build/)
+##   zappy_gui     — C++ / raylib         (gui/, via build/)
+##   zappy_ai      — Python               (ai/)
+## server and gui are both CMake targets, so their object files live under
+## build/ and never clutter the source tree.
 
 BUILD_DIR    ?= build
 BUILD_TYPE   ?= Release
 JOBS         ?= $(shell nproc 2>/dev/null || echo 4)
 CMAKE        ?= cmake
 
-BINARIES     := zappy_server
+# Root deliverables (subject-mandated names) and the one non-CMake source bin.
+SERVER_BIN   := zappy_server
+GUI_BIN      := zappy_gui
+AI_BIN       := zappy_ai
+AI_SRC_BIN   := ai/zappy_ai
+BINARIES     := $(SERVER_BIN) $(GUI_BIN) $(AI_BIN)
 
 # ---- demo knobs — override on the command line -------------------------------
-#   make demo PORT=4242 MAP_W=20 MAP_H=20 BOTS=5 FREQ=100
+#   make demo PORT=4242 MAP_W=20 MAP_H=20 BOTS=4 FREQ=100 TEAMS="red blue"
 PORT         ?= 4242
-MAP_W        ?= 10
-MAP_H        ?= 10
-TEAMS        ?= red blue
-CLIENTS      ?= 5
-FREQ         ?= 100
-BOTS         ?= 3
-DELAY        ?= 0.3
+MAP_W        ?= 20
+MAP_H        ?= 20
+TEAMS        ?= 1 2 3 4 5 6 7 8
+CLIENTS      ?= 50
+FREQ         ?= 1000
+BOTS         ?= 8
+HOST         ?= 127.0.0.1
 
-# Mandatory Epitech rules: all, clean, fclean, re
-.PHONY: all build clean fclean re tests_run config coverage format help demo
+# Mandatory Epitech rules: all, clean, fclean, re — plus the subject-mandated
+# per-binary rules zappy_server / zappy_gui / zappy_ai (eponymous to the bins).
+.PHONY: all build zappy_server zappy_gui zappy_ai clean fclean re \
+        tests_run config coverage format help demo
 
-all: build
+all: zappy_server zappy_gui zappy_ai
 
+# ---- CMake configure (server + gui live in one build tree) -------------------
 config:
 	$(CMAKE) -S . -B $(BUILD_DIR) -DCMAKE_BUILD_TYPE=$(BUILD_TYPE)
 
-build: config
-	$(CMAKE) --build $(BUILD_DIR) -j $(JOBS)
-	@for b in $(BINARIES); do \
-		if [ -f "$(BUILD_DIR)/bin/$$b" ]; then \
-			cp -f "$(BUILD_DIR)/bin/$$b" "./$$b"; \
-			echo "  -> ./$$b"; \
-		fi; \
-	done
+# ---- zappy_server (C++ / CMake) ----------------------------------------------
+zappy_server: config
+	$(CMAKE) --build $(BUILD_DIR) --target zappy_server -j $(JOBS)
+	@cp -f "$(BUILD_DIR)/bin/$(SERVER_BIN)" "./$(SERVER_BIN)"
+	@echo "  -> ./$(SERVER_BIN)"
+
+# Back-compat alias: old habits / scripts invoke `make build` for the server.
+build: zappy_server
+
+# ---- zappy_gui (C++ / raylib, gui/) ----------------------------------------
+zappy_gui: config
+	$(CMAKE) --build $(BUILD_DIR) --target zappy_gui -j $(JOBS)
+	@cp -f "$(BUILD_DIR)/bin/$(GUI_BIN)" "./$(GUI_BIN)"
+	@echo "  -> ./$(GUI_BIN)"
+
+# ---- zappy_ai (Python, ai/) --------------------------------------------------
+zappy_ai:
+	$(MAKE) -C ai
+	@cp -f "$(AI_SRC_BIN)" "./$(AI_BIN)"
+	@echo "  -> ./$(AI_BIN)"
 
 ## Run the full CTest suite.
 tests_run: config
@@ -52,31 +77,42 @@ coverage:
 		--exclude '.*/tests/.*' --exclude '.*/external/.*' -s \
 		|| echo "install gcovr for a report"
 
-## Launch the server + fake AI bots for a quick smoke run (Ctrl+C stops both).
+## Launch server + real AI bots + the GUI together (Ctrl+C / closing the window
+## stops all three). The GUI is run from gui/ so its CWD-relative assets load.
 ##   make demo
-##   make demo MAP_W=20 MAP_H=20 BOTS=6 FREQ=200
-demo: build
-	@echo "demo: server :$(PORT) | map $(MAP_W)x$(MAP_H) | teams '$(TEAMS)' | $(BOTS) bot(s) | freq $(FREQ)"
+##   make demo MAP_W=30 MAP_H=30 BOTS=6 FREQ=100 TEAMS="red blue"
+demo: all
+	@echo "demo: server :$(PORT) | map $(MAP_W)x$(MAP_H) | teams '$(TEAMS)' | $(BOTS) AI/team | freq $(FREQ)"
 	@set -e; \
-	"$(BUILD_DIR)/bin/zappy_server" -p $(PORT) -x $(MAP_W) -y $(MAP_H) -n $(TEAMS) -c $(CLIENTS) -f $(FREQ) & \
-	SRV=$$!; \
-	trap 'kill $$SRV 2>/dev/null' EXIT INT TERM; \
-	sleep 0.5; \
-	python3 tools/fake_ai.py -p $(PORT) -n $(firstword $(TEAMS)) --bots $(BOTS) --delay $(DELAY)
+	./$(SERVER_BIN) -p $(PORT) -x $(MAP_W) -y $(MAP_H) -n $(TEAMS) -c $(CLIENTS) -f $(FREQ) & \
+	SRV=$$!; PIDS="$$SRV"; \
+	trap 'kill $$PIDS 2>/dev/null' EXIT INT TERM; \
+	sleep 0.6; \
+	for t in $(TEAMS); do \
+		for i in $$(seq 1 $(BOTS)); do \
+			./$(AI_BIN) -p $(PORT) -n $$t -h $(HOST) -f $(FREQ) & \
+			PIDS="$$PIDS $$!"; \
+		done; \
+	done; \
+	sleep 0.3; \
+	( cd gui && exec ../$(GUI_BIN) -p $(PORT) -h $(HOST) )
 
 format:
 	@bash tools/format_all.sh
 
 clean:
 	@[ -d $(BUILD_DIR) ] && $(CMAKE) --build $(BUILD_DIR) --target clean || true
+	@$(MAKE) -C ai clean
 
 fclean:
 	$(RM) -r $(BUILD_DIR)
 	$(RM) $(BINARIES)
+	@$(MAKE) -C ai fclean
 
 re: fclean all
 
 help:
-	@echo "Targets: all build demo tests_run coverage format clean fclean re"
+	@echo "Targets: all zappy_server zappy_gui zappy_ai build demo tests_run coverage format clean fclean re"
+	@echo "Builds : ./zappy_server  ./zappy_gui  ./zappy_ai"
 	@echo "Vars   : BUILD_TYPE=$(BUILD_TYPE) JOBS=$(JOBS) BUILD_DIR=$(BUILD_DIR)"
-	@echo "demo   : PORT=$(PORT) MAP_W=$(MAP_W) MAP_H=$(MAP_H) TEAMS='$(TEAMS)' CLIENTS=$(CLIENTS) FREQ=$(FREQ) BOTS=$(BOTS) DELAY=$(DELAY)"
+	@echo "demo   : PORT=$(PORT) MAP_W=$(MAP_W) MAP_H=$(MAP_H) TEAMS='$(TEAMS)' CLIENTS=$(CLIENTS) FREQ=$(FREQ) BOTS=$(BOTS) HOST=$(HOST)"

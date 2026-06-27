@@ -45,7 +45,6 @@ nav:
       - Server: 01_architecture/02_server.md
       - GUI (raylib): 01_architecture/03_gui_raylib.md
       - GUI (Vulkan): 01_architecture/03_gui_vulkan.md
-      - AI (RL): 01_architecture/04_ai_rl.md
       - Simulator: 01_architecture/05_simulator.md
       - Protocols: 01_architecture/06_protocols.md
       - Monorepo structure: 01_architecture/07_monorepo_structure.md

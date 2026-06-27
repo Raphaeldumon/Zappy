@@ -80,8 +80,28 @@ class AI:
         # drops the overflow, so we cap below that. Pipelining deterministic
         # command sequences (movement plans) keeps the server's action queue full
         # instead of going idle for a round-trip between every action.
-        self.pending: List[Tuple[str, float]] = []
+        # (cmd, sent_at, queue_depth_at_send). queue_depth lets us discard
+        # samples taken behind a backed-up pipeline (their latency includes the
+        # wait for earlier commands, not just their own execution).
+        self.pending: List[Tuple[str, float, int]] = []
         self.max_pending = 8
+
+        # Passive frequency tracking. The server time unit can change mid-game
+        # (the GUI lets an operator retune it), and every timeout/cooldown here
+        # is scaled by self.frequency -- a stale value silently breaks command
+        # wedge detection and gather/incant timers. Instead of re-running the
+        # active probe (8 round trips + real Forwards that move the bot), we
+        # infer freq from the latency of commands we already send: freq in
+        # ticks/s ~= tick_cost / real_elapsed. EMA-smoothed, override wins.
+        self.cmd_tick_cost = {
+            "Forward": 7, "Right": 7, "Left": 7, "Look": 7,
+            "Inventory": 1, "Connect_nbr": 0, "Eject": 7,
+            "Fork": 42, "Incantation": 300,
+        }
+        self.freq_ema: Optional[float] = None
+        # Set when a command is wedge-dropped (reply<->command FIFO broken),
+        # cleared once the pipeline drains empty. Pauses freq sampling meanwhile.
+        self.pipeline_desynced = False
         self.memory = Memory()
         self.state = State.LOOK
         self.running = True
@@ -146,16 +166,15 @@ class AI:
         self.arrived_hold_until = 0.0
         self.incant_hold_broadcasts = 0
 
-        # Manifest blitz strategy — the DEFAULT (set ZAPPY_NO_MANIFEST to fall back
-        # to the old incremental play). Every bot races to collect the FULL stone
-        # set for L2->L8 (sum of all levels' requirements). The first to complete
-        # becomes the anchor, the team banks food, synchronises, converges on full
-        # tanks, drops all stones at once, and incants straight up L2->L8 (each
-        # ritual consumes only its level's stones; all 6 players level each time).
-        # Measured: ~30s to L8 and 4/4 win rate (vs ~14min / 1-in-3 for incremental),
-        # robust across 10x10..40x40 maps at reserve~200. Needs ~6 reachable mates;
-        # with fewer it waits out manifest_timeout then falls back to normal play.
-        self.manifest_mode = os.environ.get("ZAPPY_NO_MANIFEST") is None
+        # Manifest blitz strategy — the ONLY strategy. Every bot races to collect
+        # the FULL stone set for L2->L8 (sum of all levels' requirements). The first
+        # to complete becomes the anchor, the team banks food, synchronises,
+        # converges on full tanks, drops all stones at once, and incants straight up
+        # L2->L8 (each ritual consumes only its level's stones; all 6 players level
+        # each time). Measured: ~30s to L8 and 4/4 win rate, robust across
+        # 10x10..40x40 maps at reserve~200. Needs ~6 reachable mates; with fewer it
+        # waits out manifest_timeout then sets manifest_gave_up and plays the simple
+        # per-level gather as a last-resort safety (NOT a user-selectable mode).
         self.blitzing = False           # anchor mid-blitz (incant repeatedly)
         self.manifest_gave_up = False    # fell back to normal play (no anchor emerged)
         self.manifest_started_at = time.time()
@@ -178,6 +197,30 @@ class AI:
         self.last_focus_bcast = 0.0
         self.last_ready_bcast = 0.0
 
+        # ---- Opening census + fork election --------------------------------
+        # The blitz needs >= census_target reachable mates, but a bot can't ask
+        # the server its team size. So each bot announces presence once it boots
+        # (HELLO:from=id) and everyone unions the ids into team_members. The
+        # lowest known id is the elected forker: ONLY it forks, past the normal
+        # per-bot cap, until the union reaches the quorum. The observed member
+        # count is the global limiter -> total forks ~= quorum - initial bots.
+        # Forked children (and late siblings) HELLO on boot and join the union;
+        # their ids are time-seeded and larger, so they never win the election.
+        self.team_members = {self.bot_id}
+        self.census_target = int(os.environ.get("ZAPPY_TEAM_TARGET", "6"))
+        self.census_timeout = float(os.environ.get("ZAPPY_CENSUS_TIMEOUT", "30"))
+        # Settle window: wait for existing members' HELLOs to land before acting
+        # as forker, so a freshly booted bot doesn't fork while it still thinks
+        # it's alone (a singleton is always its own min).
+        self.census_settle = float(os.environ.get("ZAPPY_CENSUS_SETTLE", "3"))
+        # How long to wait for a forked child to announce before forking again
+        # (a deadbeat child shouldn't stall the census).
+        self.census_child_timeout = float(os.environ.get("ZAPPY_CENSUS_CHILD", "4"))
+        self.census_deadline: Optional[float] = None
+        self.census_settle_until: Optional[float] = None
+        self.census_fork_deadline = 0.0
+        self.last_hello_at = 0.0
+
     def connect(self) -> None:
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((self.host, self.port))
@@ -193,8 +236,9 @@ class AI:
     def send_cmd(self, cmd: str) -> bool:
         if len(self.pending) >= self.max_pending:
             return False
+        qdepth = len(self.pending)
         self.send_raw(cmd)
-        self.pending.append((cmd, time.time()))
+        self.pending.append((cmd, time.time(), qdepth))
         self.log(f"[AI -> SERVER] {cmd}")
         return True
 
@@ -213,7 +257,52 @@ class AI:
 
     def pop_pending(self) -> Optional[str]:
         # Consume the oldest outstanding command (a reply just arrived for it).
-        return self.pending.pop(0)[0] if self.pending else None
+        if not self.pending:
+            return None
+        cmd, sent_at, qdepth = self.pending.pop(0)
+        self.observe_frequency(cmd, sent_at, qdepth)
+        return cmd
+
+    def observe_frequency(self, cmd: str, sent_at: float, qdepth: int) -> None:
+        # Refine self.frequency from this reply's real latency. Free: no extra
+        # commands, no movement -- piggybacks on traffic we already generate.
+        if self.frequency_override is not None:
+            return
+        # After a wedge-drop the FIFO reply<->command mapping is broken: the
+        # server's late reply now lands on the wrong pending entry, so its
+        # measured latency is garbage (often near zero -> a huge bogus sample
+        # that would yank the estimate up and trigger MORE false timeouts).
+        # Refuse to sample until the pipeline drains and resyncs.
+        if self.pipeline_desynced:
+            return
+        # Behind a queue -> latency includes earlier commands' execution, so the
+        # sample is inflated. Skip; plenty of clean (qdepth==0) samples arrive.
+        if qdepth != 0:
+            return
+        cost = self.cmd_tick_cost.get(cmd, 0)
+        if cost <= 0:                       # instant or unknown -> no signal
+            return
+        elapsed = time.time() - sent_at
+        if elapsed <= 0:
+            return
+        sample = cost / elapsed             # ticks per second
+        # Discard (don't smooth) implausible samples instead of clamping them in:
+        # a clamped extreme still poisons the EMA. The server caps well under 1e4.
+        if not (1.0 <= sample <= 10000.0):
+            return
+        if self.freq_ema is None:
+            self.freq_ema = sample
+        # A sustained >3x gap means the operator retuned the time unit; crawling
+        # there via EMA strands the bot on stale timeouts for dozens of samples.
+        # Snap straight to the new sample instead.
+        elif sample > 3 * self.freq_ema or sample * 3 < self.freq_ema:
+            self.freq_ema = sample
+        else:
+            self.freq_ema = 0.3 * sample + 0.7 * self.freq_ema
+        new_freq = max(1, round(self.freq_ema))
+        if new_freq != self.frequency:
+            self.frequency = new_freq
+            self.max_plan_length = 2 if self.frequency >= 100 else 3
 
     def read_available(self) -> List[str]:
         if not self.sock:
@@ -450,10 +539,19 @@ class AI:
         # Drop a wedged front command (no reply within its timeout) so the
         # pipeline can't stall forever on a lost response.
         if self.pending:
-            cmd, at = self.pending[0]
+            cmd, at, _ = self.pending[0]
             if time.time() - at > self.cmd_timeout(cmd):
                 self.log(f"[AI] command timeout: {cmd}")
                 self.pending.pop(0)
+                # The lost reply may still arrive and shift onto the wrong entry;
+                # stop trusting latency samples until the queue resyncs (empties).
+                self.pipeline_desynced = True
+        elif self.pipeline_desynced:
+            # Queue drained with no outstanding commands -> FIFO is back in sync.
+            self.pipeline_desynced = False
+
+        # Opening team census: announce presence so everyone can size the team.
+        self.census_maintain()
 
         # Keep the pipeline topped up with committed plan steps. Safe even while
         # other replies are outstanding — it's a deterministic path, not a
@@ -539,7 +637,7 @@ class AI:
             self.clear_following()
             # A frozen participant in someone's blitz: keep holding so we stay on
             # the tile for the next ritual instead of wandering after leveling.
-            if was_frozen and self.manifest_mode:
+            if was_frozen:
                 self.arrived_hold_until = time.time() + self.incant_hold_window()
             return
 
@@ -562,6 +660,10 @@ class AI:
                 self.memory.forks_done += 1
                 self.memory.last_fork_at = time.time()
                 self.must_fork_after_gather_fail = False
+                # Hold the next census fork until this child announces (HELLO
+                # clears it), or until the deadline if it never boots.
+                if self.census_active():
+                    self.census_fork_deadline = time.time() + self.census_child_timeout
                 # Egg laid: launch the client that will hatch from it.
                 self.spawn_child_for_egg()
                 print(
@@ -633,9 +735,16 @@ class AI:
             self.state = State.LOOK
             return
 
-        # Manifest mode kicks in at L2: do the quick solo L1->L2 normally first,
-        # then collect the L2->L8 manifest and blitz.
-        if self.manifest_mode and not self.manifest_gave_up and self.memory.level >= 2:
+        # Opening census: the elected forker builds the team to the blitz quorum
+        # before anyone settles into the manifest collect (which never forks).
+        # Bounded to the census window, so it stops the moment quorum is met.
+        if self.census_active() and self.should_fork():
+            self.state = State.REPRODUCE
+            return
+
+        # The blitz kicks in at L2: do the quick solo L1->L2 normally first, then
+        # collect the L2->L8 manifest and blitz.
+        if not self.manifest_gave_up and self.memory.level >= 2:
             self.manifest_choose()
             return
 
@@ -863,7 +972,7 @@ class AI:
         now = time.time()
         need = REQ[self.memory.level]["players"]
         # Manifest anchor wants a full 6-stack so one drop+blitz rides L2->L8.
-        manifest_anchor = self.manifest_mode and self.has_full_manifest()
+        manifest_anchor = self.has_full_manifest()
         if manifest_anchor:
             need = 6
 
@@ -978,7 +1087,9 @@ class AI:
         if sender is None or sender == self.bot_id:
             return
 
-        if kind == "GATHER":
+        if kind == "HELLO":
+            self.handle_hello(sender)
+        elif kind == "GATHER":
             self.handle_gather(direction, fields, sender)
         elif kind == "GATHER_ACK":
             self.handle_ack(fields, sender)
@@ -1342,7 +1453,7 @@ class AI:
         return True
 
     def need_stone(self, stone: str) -> bool:
-        if self.manifest_mode and not self.manifest_gave_up:
+        if not self.manifest_gave_up:
             return self.memory.inventory.get(stone, 0) < self.manifest_target(stone)
         return self.memory.inventory.get(stone, 0) < REQ.get(self.memory.level, {}).get(stone, 0)
 
@@ -1543,11 +1654,52 @@ class AI:
 
         return self.memory.visible_tiles[0].count("player")
 
+    # ---- Opening team census ---------------------------------------------------
+    def hello_interval(self) -> float:
+        return max(1.0, 60.0 / self.frequency)
+
+    def broadcast_hello(self) -> None:
+        self.last_hello_at = time.time()
+        self.send_cmd(f"Broadcast {self.team}:HELLO:from={self.bot_id}")
+
+    def handle_hello(self, sender: int) -> None:
+        if sender in self.team_members:
+            return
+        self.team_members.add(sender)
+        # A new body showed up -> the fork we were waiting on (or a sibling)
+        # landed; release the in-flight hold so the forker can continue.
+        self.census_fork_deadline = 0.0
+        self.log(f"[AI] census +{sender} -> {len(self.team_members)}/{self.census_target}")
+        # Echo once so the newcomer learns about us too. Bounded: only on the
+        # first sighting of a given id, never on repeat HELLOs.
+        self.broadcast_hello()
+
+    def census_active(self) -> bool:
+        if self.manifest_gave_up or self.census_deadline is None:
+            return False
+        if len(self.team_members) >= self.census_target:
+            return False
+        return time.time() < self.census_deadline
+
+    def is_census_forker(self) -> bool:
+        # Lowest known id is elected. Recomputed each call, so a lower id that
+        # appears late takes over automatically.
+        return self.bot_id == min(self.team_members)
+
+    def census_maintain(self) -> None:
+        now = time.time()
+        if self.census_deadline is None:               # first tick: start clocks
+            self.census_deadline = now + self.census_timeout
+            self.census_settle_until = now + self.census_settle
+            self.broadcast_hello()
+            return
+        if not self.census_active():
+            return
+        if now - self.last_hello_at >= self.hello_interval():
+            self.broadcast_hello()
+
     def should_fork(self) -> bool:
         if self.active_req or self.is_following() or self.preparing_incantation or self.waiting_incantation:
-            return False
-
-        if self.memory.forks_done >= self.max_forks:
             return False
 
         if self.food() < self.fork_food:
@@ -1559,7 +1711,23 @@ class AI:
         if self.memory.level > 2:
             return False
 
-        return time.time() - self.memory.last_fork_at >= max(3.0, 150.0 / self.frequency)
+        if time.time() - self.memory.last_fork_at < max(3.0, 150.0 / self.frequency):
+            return False
+
+        # Fallback (no quorum ever formed): original per-bot cap behaviour.
+        if self.manifest_gave_up:
+            return self.memory.forks_done < self.max_forks
+
+        # Census mode: the team is sized to the blitz quorum, not a per-bot cap.
+        if len(self.team_members) >= self.census_target:
+            return False                                # quorum met -> nobody forks
+        if not self.census_active():
+            return False                                # window closed; wait for fallback
+        if self.census_settle_until and time.time() < self.census_settle_until:
+            return False                                # let initial HELLOs land first
+        if time.time() < self.census_fork_deadline:
+            return False                                # a forked child hasn't announced yet
+        return self.is_census_forker()
 
     def need_more_mates(self) -> bool:
         return REQ.get(self.memory.level, {}).get("players", 1) > 1 and self.has_required_stones()

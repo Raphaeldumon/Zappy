@@ -827,37 +827,29 @@ namespace {
 
     struct CountLabel { gfx::Vec3 worldPos; int count; gfx::Color color; };
 
-    gfx::Color colorForTeam(const std::string& team)
+    // Eight fixed team colours, indexed by team slot (server `tna` order). The
+    // game caps at 8 teams, so every team gets its own distinct hue regardless
+    // of the team name.
+    constexpr std::array<gfx::Color, 8> kTeamPalette{{
+        { 230,  60,  70, 255 }, // 0 red
+        {  70, 155, 255, 255 }, // 1 blue
+        {  60, 210, 120, 255 }, // 2 green
+        { 255, 210,  55, 255 }, // 3 yellow
+        { 180, 105, 255, 255 }, // 4 purple
+        { 255, 145,  55, 255 }, // 5 orange
+        {  60, 220, 220, 255 }, // 6 cyan
+        { 255, 105, 180, 255 }, // 7 pink
+    }};
+
+    // Lighten a team colour toward white so a model tinted with it keeps its
+    // texture detail and merely picks up a coloured sheen (a subtle glow),
+    // instead of being flatly repainted.
+    gfx::Color glowTint(gfx::Color c)
     {
-        std::string lower;
-        lower.reserve(team.size());
-        for (unsigned char c : team)
-            lower.push_back(static_cast<char>(std::tolower(c)));
-
-        if (lower.find("red") != std::string::npos)
-            return gfx::Color{ 230, 60, 70, 255 };
-        if (lower.find("blue") != std::string::npos)
-            return gfx::Color{ 70, 155, 255, 255 };
-        if (lower.find("green") != std::string::npos)
-            return gfx::Color{ 60, 210, 120, 255 };
-        if (lower.find("yellow") != std::string::npos)
-            return gfx::Color{ 255, 210, 55, 255 };
-        if (lower.find("purple") != std::string::npos || lower.find("violet") != std::string::npos)
-            return gfx::Color{ 180, 105, 255, 255 };
-        if (lower.find("orange") != std::string::npos)
-            return gfx::Color{ 255, 145, 55, 255 };
-
-        std::uint32_t h = 2166136261u;
-        for (unsigned char c : team) {
-            h ^= c;
-            h *= 16777619u;
-        }
-        return gfx::Color{
-            static_cast<std::uint8_t>(80 + (h & 0x7f)),
-            static_cast<std::uint8_t>(90 + ((h >> 8) & 0x7f)),
-            static_cast<std::uint8_t>(110 + ((h >> 16) & 0x7f)),
-            255
+        auto mix = [](std::uint8_t v) {
+            return static_cast<std::uint8_t>(v + (255 - v) * 0.45f);
         };
+        return gfx::Color{ mix(c.r), mix(c.g), mix(c.b), 255 };
     }
 
     const char* orientationLabel(Orientation orientation)
@@ -971,16 +963,20 @@ void Interface::render()
                         pz += (ait->second.dispY - static_cast<float>(y)) * TILE_SIZE;
                     }
 
+                    // Tint each robot with its team's colour (lightened to a sheen)
+                    // so teams are tellable apart at a glance.
+                    const gfx::Color teamGlow = glowTint(teamColor(player.getTeam()));
                     if (_playerModel.loaded) {
                         // Upload this player's own clip+frame before drawing it, so
                         // each robot shows its own animation despite sharing one model.
                         applyPlayerPose(player.getId());
                         _engine.drawModelEx(_playerModel.handle, { px, kTileTopY, pz },
                                             { 0.0f, 1.0f, 0.0f }, playerOrientationAngle(player.getOrientation()),
-                                            _playerModel.scale, gfx::WHITE);
+                                            _playerModel.scale, teamGlow);
                     } else {
                         _engine.drawCube({ px, kPlayerY, pz },
-                                         kPlayerBaseSize, kPlayerHeight, kPlayerBaseSize, gfx::YELLOW);
+                                         kPlayerBaseSize, kPlayerHeight, kPlayerBaseSize,
+                                         teamColor(player.getTeam()));
                     }
                 }
                 if (playerCount > kMaxVisiblePlayers)
@@ -1277,7 +1273,7 @@ void Interface::drawStatsPanel()
             }
         }
         lines.push_back({ gfx::fmt("  %-10s %d  (max lvl %d)", team.c_str(), alive, top),
-                          gfx::RAYWHITE });
+                          teamColor(team) });
     }
 
     lines.push_back({ "Players per level:", gfx::SKYBLUE });
@@ -1312,6 +1308,15 @@ void Interface::drawStatsPanel()
     }
 }
 
+gfx::Color Interface::teamColor(const std::string& team) const
+{
+    const auto it = std::find(_state.teams.begin(), _state.teams.end(), team);
+    const std::size_t idx = (it != _state.teams.end())
+        ? static_cast<std::size_t>(std::distance(_state.teams.begin(), it))
+        : 0;
+    return kTeamPalette[idx % kTeamPalette.size()];
+}
+
 void Interface::drawEndScreen()
 {
     struct TeamStats {
@@ -1340,7 +1345,7 @@ void Interface::drawEndScreen()
     std::sort(alivePlayers.begin(), alivePlayers.end(),
               [](const aiPlayer* a, const aiPlayer* b) { return a->getId() < b->getId(); });
 
-    const gfx::Color winnerColor = colorForTeam(_state.winner);
+    const gfx::Color winnerColor = teamColor(_state.winner);
     const int sw = _engine.screenWidth();
     const int sh = _engine.screenHeight();
     const int width  = std::min(920, std::max(620, sw - 80));
@@ -1373,7 +1378,7 @@ void Interface::drawEndScreen()
     int ty = statsY + 60;
     for (const auto& [team, stats] : teamStats) {
         const bool winner = team == _state.winner;
-        const gfx::Color color = winner ? winnerColor : gfx::RAYWHITE;
+        const gfx::Color color = teamColor(team);
         const float avg = stats.alive > 0 ? static_cast<float>(stats.totalLevel) / static_cast<float>(stats.alive) : 0.0f;
         _engine.drawText(gfx::fmt("%s%s", winner ? "> " : "  ", team.c_str()), px + pad, ty, 16, color);
         _engine.drawText(gfx::fmt("%d", stats.alive), px + pad + teamNameW, ty, 16, color);

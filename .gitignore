@@ -1,6 +1,10 @@
 # Prerequisites
 *.d
 
+# Python
+__pycache__/
+*.pyc
+
 # Compiled Object files
 *.slo
 *.lo
@@ -75,6 +79,7 @@ doxygen_output/
 zappy_ai
 zappy_gui
 zappy_server
+gui3d/zappy_gui3d
 test
 .ruff_cache/
 

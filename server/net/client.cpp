@@ -52,22 +52,32 @@ int Client::fill_recv()
 
 int Client::flush_writes()
 {
-    if (send_queue.empty())
-        return 0;
-    const std::string &front = send_queue.front();
-    ssize_t n = write(fd, front.data(), front.size());
-    if (n <= 0)
-        return static_cast<int>(n);
-    if (static_cast<std::size_t>(n) >= front.size())
+    // Drain as many queued messages as the socket will take in one pass. Writing
+    // only send_queue.front() per call relies on the event loop spinning many
+    // more times to clear a burst — which fails when the loop stops the same
+    // iteration a burst is enqueued (e.g. the end-of-game seg + plv batch), so
+    // only the first message reaches the GUI before the fd is closed. Keep going
+    // until the queue empties or the (non-blocking) socket reports EWOULDBLOCK.
+    int total = 0;
+    while (!send_queue.empty())
     {
-        send_queue.pop_front();
+        const std::string &front = send_queue.front();
+        ssize_t n = write(fd, front.data(), front.size());
+        if (n <= 0)
+            return total > 0 ? total : static_cast<int>(n);
+        total += static_cast<int>(n);
+        if (static_cast<std::size_t>(n) >= front.size())
+        {
+            send_queue.pop_front();
+        }
+        else
+        {
+            // Partial write: keep the remainder, retry on the next POLLOUT.
+            send_queue.front() = front.substr(static_cast<std::size_t>(n));
+            break;
+        }
     }
-    else
-    {
-        // Partial write: keep the remainder
-        send_queue.front() = front.substr(static_cast<std::size_t>(n));
-    }
-    return static_cast<int>(n);
+    return total;
 }
 
 } // namespace zappy::net

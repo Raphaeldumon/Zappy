@@ -34,10 +34,15 @@ if(ZAPPY_BUILD_TESTS)
 endif()
 
 # ---- Components ---------------------------------------------------------------
-# C++ lives in protocol/ (shared wire contract) and server/. The AI is pure
-# Python (ai/, no CMake); the GUI was removed from this branch.
+# C++ lives in protocol/ (shared wire contract), server/, and gui/ (the raylib
+# GUI -> zappy_gui). The AI is pure Python (ai/, no CMake).
+option(ZAPPY_BUILD_GUI "Build the raylib GUI (zappy_gui)" ON)
+
 add_subdirectory(protocol)
 add_subdirectory(server)
+if(ZAPPY_BUILD_GUI)
+    add_subdirectory(gui)
+endif()
 
 # ---- Integration tests (AI <-> server <-> GUI over real sockets) -------------
 # Driven by tools/run_integration.py against the built zappy_server. Tagged

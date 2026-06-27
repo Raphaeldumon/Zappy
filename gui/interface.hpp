@@ -188,6 +188,7 @@ private:
     void drawStatsPanel();          // global environment stats (Tab)
     void drawHelpOverlay();         // full controls list (H / F1)
     void drawEndScreen();           // centered winner summary after seg
+    gfx::Color teamColor(const std::string& team) const; // palette by team slot (max 8)
 
     // --- Timeline helpers ---
     void recordIncoming();          // drain socket into _history (+apply if live)
