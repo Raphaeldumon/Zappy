@@ -20,31 +20,38 @@ void sig_handler(int sig)
 int main(int argc, char **argv)
 {
     std::optional<zappy::runtime::ServerArgs> parsed;
-    try {
+    try
+    {
         parsed = zappy::runtime::parse_args(argc, argv);
     }
-    catch (const std::exception &e) {
+    catch (const std::exception &e)
+    {
         std::cerr << "zappy_server: " << e.what() << "\n\n" << zappy::runtime::usage(argv[0]);
         return EXIT_ERR;
     }
 
-    if (!parsed) {
+    if (!parsed)
+    {
         std::cout << zappy::runtime::usage(argv[0]);
         return EXIT_SUCCESS;
     }
 
-    struct sigaction sa {};
+    struct sigaction sa
+    {
+    };
     sa.sa_handler = sig_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0; // no SA_RESTART: poll() returns EINTR immediately on Ctrl+C
     sigaction(SIGINT, &sa, nullptr);
     sigaction(SIGTERM, &sa, nullptr);
 
-    try {
+    try
+    {
         zappy::runtime::Server server(*parsed);
         server.run();
     }
-    catch (const std::exception &e){
+    catch (const std::exception &e)
+    {
         std::cerr << "fatal: " << e.what() << '\n';
         return EXIT_ERR;
     }
