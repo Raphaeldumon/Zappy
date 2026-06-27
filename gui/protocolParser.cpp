@@ -9,17 +9,18 @@
 #include <string>
 #include <vector>
 
-namespace {
+namespace
+{
 
 // "#3" -> 3, "3" -> 3. Returns false on garbage.
-bool parseId(const std::string& tok, std::uint32_t& out)
+bool parseId(const std::string &tok, std::uint32_t &out)
 {
-    const char* s = tok.c_str();
+    const char *s = tok.c_str();
     if (*s == '#')
         ++s;
     if (*s == '\0')
         return false;
-    char* end = nullptr;
+    char *end = nullptr;
     unsigned long v = std::strtoul(s, &end, 10);
     if (end == s || *end != '\0')
         return false;
@@ -27,25 +28,25 @@ bool parseId(const std::string& tok, std::uint32_t& out)
     return true;
 }
 
-bool inBounds(const GameMap& map, int x, int y)
+bool inBounds(const GameMap &map, int x, int y)
 {
     return x >= 0 && y >= 0 && x < map.getWidth() && y < map.getHeight();
 }
 
-long long tileKey(const GameMap& map, int x, int y)
+long long tileKey(const GameMap &map, int x, int y)
 {
     return static_cast<long long>(y) * map.getWidth() + x;
 }
 
 // Drop a player from whatever tile the registry says it's on.
-void unmirror(GameMap& map, GuiState& state, std::uint32_t id)
+void unmirror(GameMap &map, GuiState &state, std::uint32_t id)
 {
     auto it = state.players.find(id);
     if (it != state.players.end() && inBounds(map, it->second.getX(), it->second.getY()))
         map.removePlayerFromTile(it->second.getX(), it->second.getY(), it->second);
 }
 
-void setWinnerIfLevel8(const aiPlayer& player, GuiState& state)
+void setWinnerIfLevel8(const aiPlayer &player, GuiState &state)
 {
     if (state.hasWinner || player.getLevel() < 8)
         return;
@@ -55,18 +56,20 @@ void setWinnerIfLevel8(const aiPlayer& player, GuiState& state)
 
 } // namespace
 
-void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& state)
+void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &state)
 {
     std::istringstream iss(line);
-    std::string        tag;
+    std::string tag;
     if (!(iss >> tag))
         return;
 
-    if (tag == "bct") {
+    if (tag == "bct")
+    {
         int x, y;
         if (!(iss >> x >> y) || !inBounds(map, x, y))
             return;
-        for (int i = 0; i < MAP_RESOURCE_COUNT; ++i) {
+        for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
+        {
             int q = 0;
             if (!(iss >> q))
                 break;
@@ -75,32 +78,35 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         return;
     }
 
-    if (tag == "tna") {
+    if (tag == "tna")
+    {
         std::string name;
         if (iss >> name)
             state.teams.push_back(name);
         return;
     }
 
-    if (tag == "sgt" || tag == "sst") {
+    if (tag == "sgt" || tag == "sst")
+    {
         int f;
         if (iss >> f)
             state.frequency = f;
         return;
     }
 
-    if (tag == "pnw") {
+    if (tag == "pnw")
+    {
         std::string idtok, team;
-        int         x, y, o, l;
+        int x, y, o, l;
         std::uint32_t id;
         if (!(iss >> idtok >> x >> y >> o >> l >> team) || !parseId(idtok, id))
             return;
         unmirror(map, state, id); // in case of a stale entry
         // aiPlayer has const id/team and no assignment, so replace by erase+emplace.
         state.players.erase(id);
-        auto [it, ok] = state.players.emplace(
-            id, aiPlayer(id, team, x, y, static_cast<Orientation>(o)));
-        if (ok) {
+        auto [it, ok] = state.players.emplace(id, aiPlayer(id, team, x, y, static_cast<Orientation>(o)));
+        if (ok)
+        {
             it->second.setLevel(l);
             setWinnerIfLevel8(it->second, state);
         }
@@ -109,9 +115,10 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         return;
     }
 
-    if (tag == "ppo") {
+    if (tag == "ppo")
+    {
         std::string idtok;
-        int         x, y, o;
+        int x, y, o;
         std::uint32_t id;
         if (!(iss >> idtok >> x >> y >> o) || !parseId(idtok, id))
             return;
@@ -126,17 +133,20 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         return;
     }
 
-    if (tag == "plv") {
+    if (tag == "plv")
+    {
         std::string idtok;
-        int         l;
+        int l;
         std::uint32_t id;
         if (!(iss >> idtok >> l) || !parseId(idtok, id))
             return;
         auto it = state.players.find(id);
-        if (it != state.players.end()) {
+        if (it != state.players.end())
+        {
             it->second.setLevel(l);
             setWinnerIfLevel8(it->second, state);
-            if (inBounds(map, it->second.getX(), it->second.getY())) {
+            if (inBounds(map, it->second.getX(), it->second.getY()))
+            {
                 map.removePlayerFromTile(it->second.getX(), it->second.getY(), it->second);
                 map.addPlayerToTile(it->second.getX(), it->second.getY(), it->second);
             }
@@ -144,7 +154,8 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         return;
     }
 
-    if (tag == "pdi") {
+    if (tag == "pdi")
+    {
         std::string idtok;
         std::uint32_t id;
         if (!(iss >> idtok) || !parseId(idtok, id))
@@ -153,8 +164,8 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         // animation at the spot the player vanished from (it is gone after this).
         auto it = state.players.find(id);
         if (it != state.players.end())
-            state.animEvents.push_back({id, PlayerAnimEventKind::Death,
-                it->second.getX(), it->second.getY(), it->second.getOrientation()});
+            state.animEvents.push_back(
+                {id, PlayerAnimEventKind::Death, it->second.getX(), it->second.getY(), it->second.getOrientation()});
         unmirror(map, state, id);
         state.players.erase(id);
         return;
@@ -162,7 +173,8 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
 
     // Action packets the model already reflects via bct/ppo, but which we surface
     // as one-shot animations: eject (pex), broadcast (pbc), collect (pgt).
-    if (tag == "pex" || tag == "pbc" || tag == "pgt") {
+    if (tag == "pex" || tag == "pbc" || tag == "pgt")
+    {
         std::string idtok;
         std::uint32_t id;
         if (!(iss >> idtok) || !parseId(idtok, id))
@@ -170,18 +182,17 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         auto it = state.players.find(id);
         if (it == state.players.end())
             return;
-        const PlayerAnimEventKind kind =
-            tag == "pex" ? PlayerAnimEventKind::Kick
-          : tag == "pbc" ? PlayerAnimEventKind::Jump
-                         : PlayerAnimEventKind::Pickup;
-        state.animEvents.push_back({id, kind,
-            it->second.getX(), it->second.getY(), it->second.getOrientation()});
+        const PlayerAnimEventKind kind = tag == "pex"   ? PlayerAnimEventKind::Kick
+                                         : tag == "pbc" ? PlayerAnimEventKind::Jump
+                                                        : PlayerAnimEventKind::Pickup;
+        state.animEvents.push_back({id, kind, it->second.getX(), it->second.getY(), it->second.getOrientation()});
         return;
     }
 
-    if (tag == "enw") {
+    if (tag == "enw")
+    {
         std::string eggtok, layertok;
-        int         x, y;
+        int x, y;
         std::uint32_t egg;
         if (!(iss >> eggtok >> layertok >> x >> y) || !parseId(eggtok, egg))
             return;
@@ -189,7 +200,8 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         return;
     }
 
-    if (tag == "ebo" || tag == "edi") {
+    if (tag == "ebo" || tag == "edi")
+    {
         std::string eggtok;
         std::uint32_t egg;
         if (!(iss >> eggtok) || !parseId(eggtok, egg))
@@ -198,7 +210,8 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         return;
     }
 
-    if (tag == "pic") {
+    if (tag == "pic")
+    {
         int x, y, l;
         if (!(iss >> x >> y >> l) || !inBounds(map, x, y))
             return;
@@ -206,7 +219,8 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         return;
     }
 
-    if (tag == "pie") {
+    if (tag == "pie")
+    {
         int x, y;
         if (!(iss >> x >> y) || !inBounds(map, x, y))
             return;
@@ -214,11 +228,13 @@ void ProtocolParser::apply(const std::string& line, GameMap& map, GuiState& stat
         return;
     }
 
-    if (tag == "seg") {
+    if (tag == "seg")
+    {
         std::string name;
-        if (iss >> name) {
+        if (iss >> name)
+        {
             state.hasWinner = true;
-            state.winner    = name;
+            state.winner = name;
         }
         return;
     }

@@ -2,31 +2,39 @@
 #include <algorithm> // For std::remove
 #include <stdexcept> // For std::invalid_argument, std::out_of_range
 
-GameMap::GameMap(int width, int height) : _width(width), _height(height) {
-    if (width <= 0 || height <= 0) {
+GameMap::GameMap(int width, int height) : _width(width), _height(height)
+{
+    if (width <= 0 || height <= 0)
+    {
         throw std::invalid_argument("Map width and height must be positive.");
     }
     _tiles.resize(static_cast<size_t>(width) * height);
 }
 
-int GameMap::getWidth() const {
+int GameMap::getWidth() const
+{
     return _width;
 }
 
-int GameMap::getHeight() const {
+int GameMap::getHeight() const
+{
     return _height;
 }
 
-bool GameMap::isValidCoordinate(int x, int y) const {
+bool GameMap::isValidCoordinate(int x, int y) const
+{
     return x >= 0 && x < _width && y >= 0 && y < _height;
 }
 
-size_t GameMap::getIndex(int x, int y) const {
+size_t GameMap::getIndex(int x, int y) const
+{
     return static_cast<size_t>(y) * _width + x;
 }
 
-MapTile& GameMap::getTile(int x, int y) {
-    if (!isValidCoordinate(x, y)) {
+MapTile &GameMap::getTile(int x, int y)
+{
+    if (!isValidCoordinate(x, y))
+    {
         throw std::out_of_range("Tile coordinates (" + std::to_string(x) + ", " + std::to_string(y) +
                                 ") are out of map bounds [0," + std::to_string(_width - 1) + "],[0," +
                                 std::to_string(_height - 1) + "].");
@@ -34,8 +42,10 @@ MapTile& GameMap::getTile(int x, int y) {
     return _tiles[getIndex(x, y)];
 }
 
-const MapTile& GameMap::getTile(int x, int y) const {
-    if (!isValidCoordinate(x, y)) {
+const MapTile &GameMap::getTile(int x, int y) const
+{
+    if (!isValidCoordinate(x, y))
+    {
         throw std::out_of_range("Tile coordinates (" + std::to_string(x) + ", " + std::to_string(y) +
                                 ") are out of map bounds [0," + std::to_string(_width - 1) + "],[0," +
                                 std::to_string(_height - 1) + "].");
@@ -43,48 +53,57 @@ const MapTile& GameMap::getTile(int x, int y) const {
     return _tiles[getIndex(x, y)];
 }
 
-void GameMap::setResource(int x, int y, int resource_type_index, int count) {
-    MapTile& tile = getTile(x, y); // Will throw if invalid coords
-    if (resource_type_index < 0 || resource_type_index >= MAP_RESOURCE_COUNT) {
+void GameMap::setResource(int x, int y, int resource_type_index, int count)
+{
+    MapTile &tile = getTile(x, y); // Will throw if invalid coords
+    if (resource_type_index < 0 || resource_type_index >= MAP_RESOURCE_COUNT)
+    {
         throw std::invalid_argument("Invalid resource type index.");
     }
     tile.resources[resource_type_index] = std::max(0, count);
 }
 
-void GameMap::addResource(int x, int y, int resource_type_index, int amount) {
-    MapTile& tile = getTile(x, y); // Will throw if invalid coords
-    if (resource_type_index < 0 || resource_type_index >= MAP_RESOURCE_COUNT) {
+void GameMap::addResource(int x, int y, int resource_type_index, int amount)
+{
+    MapTile &tile = getTile(x, y); // Will throw if invalid coords
+    if (resource_type_index < 0 || resource_type_index >= MAP_RESOURCE_COUNT)
+    {
         throw std::invalid_argument("Invalid resource type index.");
     }
     tile.resources[resource_type_index] += amount;
 }
 
-void GameMap::removeResource(int x, int y, int resource_type_index, int amount) {
-    MapTile& tile = getTile(x, y); // Will throw if invalid coords
-    if (resource_type_index < 0 || resource_type_index >= MAP_RESOURCE_COUNT) {
+void GameMap::removeResource(int x, int y, int resource_type_index, int amount)
+{
+    MapTile &tile = getTile(x, y); // Will throw if invalid coords
+    if (resource_type_index < 0 || resource_type_index >= MAP_RESOURCE_COUNT)
+    {
         throw std::invalid_argument("Invalid resource type index.");
     }
     tile.resources[resource_type_index] = std::max(0, tile.resources[resource_type_index] - amount);
 }
 
-void GameMap::addPlayerToTile(int x, int y, const aiPlayer& player) {
-    MapTile& tile = getTile(x, y); // Will throw if invalid coords
-    auto playerIt = std::find_if(tile.players.begin(), tile.players.end(),
-        [&player](const aiPlayer& tilePlayer) {
-            return tilePlayer.getId() == player.getId();
-        });
+void GameMap::addPlayerToTile(int x, int y, const aiPlayer &player)
+{
+    MapTile &tile = getTile(x, y); // Will throw if invalid coords
+    auto playerIt = std::find_if(tile.players.begin(), tile.players.end(), [&player](const aiPlayer &tilePlayer) {
+        return tilePlayer.getId() == player.getId();
+    });
 
-    if (playerIt == tile.players.end()) {
+    if (playerIt == tile.players.end())
+    {
         tile.players.push_back(player);
     }
 }
 
-void GameMap::removePlayerFromTile(int x, int y, const aiPlayer& player) {
-    MapTile& tile = getTile(x, y); // Will throw if invalid coords
+void GameMap::removePlayerFromTile(int x, int y, const aiPlayer &player)
+{
+    MapTile &tile = getTile(x, y); // Will throw if invalid coords
     std::vector<aiPlayer> remainingPlayers;
 
     remainingPlayers.reserve(tile.players.size());
-    for (const aiPlayer& tilePlayer : tile.players) {
+    for (const aiPlayer &tilePlayer : tile.players)
+    {
         if (tilePlayer.getId() != player.getId())
             remainingPlayers.push_back(tilePlayer);
     }
