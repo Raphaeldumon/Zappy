@@ -485,13 +485,13 @@ class AI:
         forward_times = []
 
         for _ in range(4):
-            dt = round_trip("Connect_nbr", lambda l: l.lstrip("-").isdigit())
+            dt = round_trip("Connect_nbr", lambda lamb: lamb.lstrip("-").isdigit())
             if dt is None:
                 return 100
             connect_times.append(dt)
 
         for _ in range(4):
-            dt = round_trip("Forward", lambda l: l == "ok")
+            dt = round_trip("Forward", lambda lamb: lamb == "ok")
             if dt is None:
                 return 100
             forward_times.append(dt)
