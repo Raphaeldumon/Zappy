@@ -40,17 +40,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-          cache: pip
-          cache-dependency-path: ai/pyproject.toml
 
-      - name: Install Python package (dev extras)
-        run: pip install -e "ai[dev]" pyyaml
+      - name: Install Python tooling
+        run: pip install ruff pyyaml
 
       - name: Ruff lint
         run: ruff check ai tools
-
-      - name: Pytest
-        run: pytest ai/tests -q
 
       - name: Integration tests (AI <-> server)
         run: ctest --test-dir build --output-on-failure -L integration

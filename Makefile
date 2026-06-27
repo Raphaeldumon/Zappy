@@ -51,9 +51,13 @@ build: zappy_server
 
 # ---- zappy_gui (C++ / raylib, gui/) ----------------------------------------
 zappy_gui: config
-	$(CMAKE) --build $(BUILD_DIR) --target zappy_gui -j $(JOBS)
-	@cp -f "$(BUILD_DIR)/bin/$(GUI_BIN)" "./$(GUI_BIN)"
-	@echo "  -> ./$(GUI_BIN)"
+	@if [ -d "$(BUILD_DIR)/gui" ]; then \
+		$(CMAKE) --build $(BUILD_DIR) --target zappy_gui -j $(JOBS) && \
+		cp -f "$(BUILD_DIR)/bin/$(GUI_BIN)" "./$(GUI_BIN)" && \
+		echo "  -> ./$(GUI_BIN)"; \
+	else \
+		echo "  -- zappy_gui skipped: raylib not found (server/AI built; install raylib for the GUI)"; \
+	fi
 
 # ---- zappy_ai (Python, ai/) --------------------------------------------------
 zappy_ai:

@@ -36,12 +36,18 @@ endif()
 # ---- Components ---------------------------------------------------------------
 # C++ lives in protocol/ (shared wire contract), server/, and gui/ (the raylib
 # GUI -> zappy_gui). The AI is pure Python (ai/, no CMake).
+# The GUI needs raylib. Auto-skip it when raylib isn't installed so the server
+# and AI still build (e.g. on CI runners without raylib). A machine that has
+# raylib builds it normally; force-disable with -DZAPPY_BUILD_GUI=OFF.
 option(ZAPPY_BUILD_GUI "Build the raylib GUI (zappy_gui)" ON)
+find_library(RAYLIB_LIBRARY NAMES raylib)
 
 add_subdirectory(protocol)
 add_subdirectory(server)
-if(ZAPPY_BUILD_GUI)
+if(ZAPPY_BUILD_GUI AND RAYLIB_LIBRARY)
     add_subdirectory(gui)
+elseif(ZAPPY_BUILD_GUI)
+    message(STATUS "raylib not found — skipping zappy_gui (install raylib to build the GUI)")
 endif()
 
 # ---- Integration tests (AI <-> server <-> GUI over real sockets) -------------
