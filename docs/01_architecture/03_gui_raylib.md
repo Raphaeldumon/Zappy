@@ -1,235 +1,189 @@
-# 03 — Architecture GUI Raylib
+# 03 — Architecture GUI 3D (raylib)
 
-## Périmètre fonctionnel
+## Contraintes sujet (rappel)
 
-- Visualisation 2D **planisphère** (vue rectangulaire du torus déroulé)
-- Visualisation 3D **planète torus** dans l'espace, étoiles, nebula, atmosphère
-- Bascule de vue (`Tab`) : `2D / 3D / Split 2D+3D / Top-down stratège`
-- **Caméras** : libre, follow player, top-down
-- **Speed control** : 0.25x / 0.5x / 1x / 2x / 4x / 8x / 16x + pause + step-by-step
-- **HUD raygui** : team scores, inventaire player sélectionné, timeline events, broadcasts
-- **Debug F3** : FPS, RAM usage, packets/sec, draw call count, frametime graph
-- **Replay** : load `.zrec` et rejouer hors-ligne avec timeline scrub
-- **Audio** : musique ambient + SFX
-- **Menu** principal : connect to server / load replay / settings / quit
+- Binary `zappy_gui`, **C/C++/Rust** → choisi : **C++17** (raylib glue)
+- Client **GRAPHIC** : se connecte au serveur, s'authentifie avec `GRAPHIC`, n'observe que (jamais d'action de jeu)
+- Usage : `./zappy_gui -p port [-h machine]` (host par défaut `127.0.0.1`, code d'erreur `84`)
+- Reçoit toute la vue du monde via le protocole GUI (`bct`, `ppo`, `pnw`, `seg`…), et peut piloter la vitesse serveur (`sst`)
+- Affichage **temps réel** d'une partie en cours, mode spectateur
 
-## Raylib — features utilisées
+## Vue d'ensemble
 
-| Feature | Usage |
-|---------|-------|
-| `InitWindow / BeginDrawing` | Fenêtre + boucle de rendu principale |
-| `Camera3D` | FREE_ORBIT, FOLLOW_PLAYER, TOP_DOWN via `UpdateCamera` |
-| `DrawModel / DrawModelEx` | Torus planète, trantorians, resources (OBJ/GLTF) |
-| `LoadShader / BeginShaderMode` | Post-FX GLSL : bloom, tonemap, atmosphere overlay |
-| `RenderTexture2D` | Render-to-texture pour post-processing chain |
-| `DrawSphereWires / DrawCube` | Debug primitives, resource items |
-| `raygui` | HUD panels (teams, player info, timeline, speed control) |
-| `PlaySound / PlayMusicStream` | SFX incantation/mort + musique ambient |
-| `LoadTexture / DrawTexturePro` | Planisphère 2D, textures sol, skybox cubemap |
-
-## Boucle de rendu
+Un seul client mono-fenêtre, mono-thread, organisé autour d'une classe « chef
+d'orchestre » `Interface` qui possède tous les sous-systèmes. La dépendance à
+raylib est **entièrement confinée** dans une façade (`RaylibEngine`) : le reste
+du code ne connaît que des types `gfx::` neutres, ce qui rend le renderer
+remplaçable et `interface.{hpp,cpp}` testable sans GPU.
 
 ```
-Frame begin (BeginDrawing)
-│
-├── Update (CPU)
-│   ├── GuiClient::poll() → parse protocol lines → mise à jour Scene
-│   ├── Camera update (UpdateCamera ou interpolation manuelle)
-│   └── Particle system update (positions, durée de vie)
-│
-├── 3D pass (BeginMode3D)
-│   ├── Skybox (cubemap ou shader procédural étoiles)
-│   ├── Torus planète (DrawModel + shader atmosphere)
-│   ├── Tiles / resources (DrawCube / DrawModel par tile)
-│   ├── Players / trantorians (DrawModel + orientation)
-│   ├── Eggs (DrawSphere)
-│   └── Particles (incantations, éjections — DrawBillboard)
-│
-├── Post-FX (RenderTexture → shaders GLSL chaînés)
-│   ├── Bloom (downsample + upsample via BeginShaderMode)
-│   └── Tonemap ACES + gamma 2.2
-│
-├── 2D overlay (BeginMode2D si split-screen planisphère)
-│   └── DrawTexturePro → vue rectangulaire déroulée
-│
-├── HUD (raygui)
-│   ├── Teams panel (gauche)
-│   ├── Player info panel (droite)
-│   ├── Timeline events (bas)
-│   └── Speed control bar
-│
-└── Frame end (EndDrawing)
+                  ┌─────────────────────────────────────────┐
+                  │   main(argc, argv)  (main.cpp)          │
+                  │   - parse -p / -h                       │
+                  │   - NetClient::connect + handshake      │
+                  │   - Interface(net, w, h).run()          │
+                  └──────────────────┬──────────────────────┘
+                                     │
+                  ┌──────────────────▼──────────────────────┐
+                  │            class Interface              │
+                  │  boucle: handleInput → update → render  │
+                  │ ┌─────────────┐  ┌────────────────────┐ │
+                  │ │ RaylibEngine│  │ NetClient (TCP)    │ │
+                  │ │  façade gfx │  │  poll() par frame  │ │
+                  │ │  (PIMPL)    │  └─────────┬──────────┘ │
+                  │ └─────────────┘            │            │
+                  │ ┌──────────────────────────▼─────────┐  │
+                  │ │ ProtocolParser.apply(line, …)      │  │
+                  │ └──────────┬─────────────┬───────────┘  │
+                  │      ┌─────▼─────┐  ┌────▼──────────┐    │
+                  │      │ GameMap   │  │ GuiState      │    │
+                  │      │ tiles +   │  │ players/eggs/ │    │
+                  │      │ resources │  │ teams/winner  │    │
+                  │      └───────────┘  └───────────────┘    │
+                  └─────────────────────────────────────────┘
 ```
 
-## Layout sources
+## Layout des sources
 
 ```
 gui/
-├── CMakeLists.txt
-├── include/zappy/gui/
-│   ├── app.hpp                     ← init + boucle principale
-│   ├── renderer/
-│   │   ├── raylib_app.hpp          ← run_raylib_app()
-│   │   ├── post_fx.hpp             ← chaîne post-processing (RenderTexture2D)
-│   │   ├── particle_system.hpp     ← particles CPU (incantations, éjections)
-│   │   ├── world_renderer.hpp      ← draw torus, tiles, players, eggs
-│   │   └── skybox.hpp              ← cubemap ou shader procédural étoiles
-│   ├── scene/
-│   │   ├── scene.hpp               ← TileView, PlayerView, Scene (inchangé)
-│   │   ├── camera.hpp              ← Camera3D wrapper + modes
-│   │   └── camera_modes.hpp
-│   ├── ui/
-│   │   ├── hud.hpp                 ← raygui panels
-│   │   ├── menu_main.hpp
-│   │   ├── debug_panel.hpp         ← F3 overlay
-│   │   ├── timeline.hpp
-│   │   └── speed_control.hpp
-│   ├── net/
-│   │   ├── gui_client.hpp          ← parse protocole GUI (inchangé)
-│   │   └── replay_reader.hpp
-│   ├── audio/
-│   │   └── audio_engine.hpp        ← raylib InitAudioDevice + sounds
-│   └── input/
-│       └── input_map.hpp           ← IsKeyPressed → actions
-├── src/
-│   ├── main.cpp
-│   ├── renderer/raylib_app.cpp
-│   ├── renderer/post_fx.cpp
-│   ├── renderer/particle_system.cpp
-│   ├── renderer/world_renderer.cpp
-│   ├── renderer/skybox.cpp
-│   ├── scene/camera.cpp
-│   ├── ui/hud.cpp
-│   ├── ui/menu_main.cpp
-│   ├── ui/debug_panel.cpp
-│   ├── net/gui_client.cpp
-│   └── audio/audio_engine.cpp
-├── shaders/
-│   ├── skybox.frag                 ← hash étoiles procédural + FBM nebula
-│   ├── atmosphere.frag             ← Rayleigh+Mie overlay sur le torus
-│   ├── bloom_downsample.frag
-│   ├── bloom_upsample.frag
-│   ├── tonemap.frag                ← ACES + gamma 2.2
-│   ├── overlay_2d.frag             ← planisphère mapping
-│   └── common/                     ← includes glsl partagés
-├── assets/
-│   ├── models/                     ← .obj (torus, trantorian, resources)
-│   ├── textures/                   ← .png (sol, skybox faces, resource icons)
-│   └── audio/                      ← .ogg (musique), .wav (SFX)
-└── tests/
-    ├── test_gui_protocol.cpp       ← tags protocole (inchangé)
-    └── test_scene_update.cpp       ← vérif Scene après handle_line()
+├── CMakeLists.txt            ← détecte raylib, sinon skip propre (warning)
+├── main.cpp                  ← parse args, connexion + handshake, lance Interface
+├── interface.{hpp,cpp}       ← classe Interface : boucle, caméra, rendu, HUD, timeline
+├── raylibWrapper.{hpp,cpp}   ← RaylibEngine : façade gfx (PIMPL) isolant raylib
+├── gfxTypes.hpp              ← types neutres : Vec2/3, Color, Camera, Ray, Key, handles
+├── netClient.{hpp,cpp}       ← NetClient : connexion TCP, handshake GRAPHIC, poll() ligne
+├── protocolParser.{hpp,cpp}  ← ProtocolParser : applique une ligne wire à Map + State
+├── gameMap.{hpp,cpp}         ← GameMap : grille W×H de MapTile (7 ressources + joueurs)
+├── guiState.hpp              ← GuiState : joueurs, œufs, équipes, incantations, vainqueur
+├── aiPlayer.hpp              ← aiPlayer : id, équipe, pos, orientation, niveau, vie
+└── assets/                   ← skybox (.png + shaders), modèles .glb, textures, musique
 ```
 
-## Shaders custom — détails
+## Séparation renderer / logique (façade `RaylibEngine`)
 
-### Skybox étoiles + nebula (GLSL fragment)
-- Étoiles : hash 3D → Voronoi point pattern, intensité log-distribution
-- Nebula : FBM (Fractal Brownian Motion) 3D coloré + gradient (rose/violet/cyan)
-- Rendu sur fullscreen quad via `BeginShaderMode`
+`RaylibEngine` (`raylibWrapper.{hpp,cpp}`) est une **façade PIMPL** : tout ce qui
+touche raylib — fenêtre, caméra, skybox, sol batché, dessin 2D/3D, audio, modèles,
+animations — est une méthode de cette classe. `interface.cpp` reste 100 %
+raylib-free et ne manipule que des `gfx::` :
 
-### Atmosphere overlay
-- Rayleigh + Mie scattering en ray-march fragment shader
-- Appliqué en post-pass sur la RenderTexture du pass 3D
-- Param soleil : direction, intensité, couleur transmis via `SetShaderValue`
+- **Types** (`gfxTypes.hpp`) : `Vec2`, `Vec3`, `Color`, `BBox`, `Ray`, `Camera`
+  (free-fly : position/target/up), `enum class Key`, et des handles opaques
+  (`ModelHandle`, `TextureHandle`, `MusicHandle`, `AnimSetHandle`, `NoHandle`).
+- **API gfx** : `beginDrawing/endDrawing`, `beginMode3D/endMode3D`, `keyDown/keyPressed`,
+  `mouseWheel`, `drawText/drawRect/drawModelEx/drawCube/…`, `worldToScreen`,
+  `loadModel/loadTexture/loadMusic/loadAnimations` + leurs `unload`.
 
-### Post-FX chain (RenderTexture2D)
-- **Bloom** : downsample 4 mips → upsample additif (2 shaders GLSL)
-- **Tonemap** : ACES Filmic + gamma 2.2
+Conséquence : changer de moteur (Vulkan, voir `03_gui_vulkan.md`) ne touche que la
+façade ; la logique d'affichage et le réseau ne bougent pas.
 
-### Water / lava (optionnel biomes)
-- Vertex shader via `DrawMeshInstanced` avec positions animées (gerstner waves)
-- Fragment : normal map animée + reflet simplifié (cubemap lookup)
+## Réseau et flux protocole
 
-## Caméras
+- **`NetClient`** : `connect(host, port)` bloquant au démarrage, puis `handshake()`
+  (lit `WELCOME`, envoie `GRAPHIC`, lit `msz` → taille de carte). Ensuite le socket
+  passe non-bloquant : `poll()` est appelé **chaque frame** et rend les lignes
+  `'\n'`-terminées complètes (jamais bloquant). `send()` sert les requêtes GUI.
+- **`ProtocolParser::apply(line, map, state)`** route chaque ligne wire vers `GameMap`
+  et `GuiState`. Tags gérés :
+  `bct` (contenu tuile), `tna` (nom d'équipe), `pnw`/`ppo`/`plv`/`pex`/`pdi`
+  (joueurs : new/pos/level/éjection/mort), `enw`/`ebo`/`edi` (œufs),
+  `pbc` (broadcast), `pic`/`pie` (incantation start/end), `pgt`/`sgt`/`sst`
+  (ressources/temps), `seg` (fin de partie → vainqueur).
+- **Timeline (record + scrub)** : chaque ligne modifiant l'état est enregistrée avec
+  son instant d'arrivée (`_history`). En live, application incrémentale ; en scrub,
+  le monde est reconstruit en rejouant l'historique jusqu'à `t` (`rebuildWorldTo`).
 
-```cpp
-enum class CameraMode { FREE_ORBIT, FOLLOW_PLAYER, TOP_DOWN_STRATEGE, REPLAY_CINEMATIC };
-```
+## Modèle d'état
 
-- **FREE_ORBIT** : `UpdateCamera(cam, CAMERA_ORBITAL)` ou custom ArcBall autour du torus
-- **FOLLOW_PLAYER** : cible `camera.target = lerp(target, player.pos, dt * 5)`, smoothed
-- **TOP_DOWN_STRATEGE** : `camera.projection = CAMERA_ORTHOGRAPHIC`, vue Z+ vers bas
-- **REPLAY_CINEMATIC** : interpolation keyframes via `Vector3Lerp` + `QuaternionSlerp`
+- **`GameMap`** : grille `W×H` de `MapTile` ; chaque tuile porte un tableau de 7
+  ressources (`MAP_RESOURCE_NAMES`) et la liste des joueurs présents. Accès bornés
+  (`getTile` lève `std::out_of_range`).
+- **`GuiState`** : `unordered_map<id, aiPlayer>` joueurs, `unordered_map<id, EggInfo>`
+  œufs, liste d'équipes, set des tuiles en incantation, `winner` / `hasWinner`.
+- **`aiPlayer`** : id, équipe, `x/y`, `Orientation` (N/E/S/O), niveau, unités de vie.
 
-## Speed control / time UI
+## Boucle de jeu (`Interface::run`)
 
-- `raygui` slider exposant [-1, 16] log scale, valeur ≤ 0 → pause
-- Envoi de `sst T\n` au serveur pour changer le `f`
-- Step-by-step : replay `.zrec` avance d'une entrée par appui touche
-- En mode replay : multiplicateur vitesse sur clock interne (`GetFrameTime() * speed`)
+Chaque frame enchaîne trois étapes :
 
-## HUD raygui
+1. **`handleInput()`** — caméra free-fly (souris = regard, ZQSD = vol, Space/Shift =
+   haut/bas, molette = vitesse de vol), sélection de tuile (clic = ray-pick,
+   double-clic = focus), suivi de joueur (`F`), contrôle de vitesse (`sst`), pause /
+   scrub timeline, `Enter` masque/affiche l'écran de fin.
+2. **`update()`** — `recordIncoming()` draine le socket, applique les lignes, met à
+   jour la machine d'animation des joueurs (glide cellule-à-cellule synchronisé au
+   clip Walk), les death ghosts, la musique.
+3. **`render()`** — skybox → sol batché → modèles (ressources, joueurs animés,
+   œufs, surbrillance de sélection) en `Mode3D`, puis HUD 2D par-dessus.
 
-Layout (panneaux raygui ancrés) :
-```
-┌────────────────────────────────────────────────────────────────┐
-│ Menu bar : File | View | Camera | Replay | Debug | Help        │
-├────────────┬──────────────────────────────┬────────────────────┤
-│ Teams (L)  │                              │  Player Info (R)   │
-│ - red 5p   │                              │  ID: 42            │
-│ - blue 3p  │     3D viewport / 2D map     │  Lvl: 4            │
-│ - ...      │                              │  Inv: food 12, ..  │
-│ ...        │                              │  Pos: (10,7)       │
-├────────────┴──────────────────────────────┴────────────────────┤
-│ Timeline events (bottom dock) :                                │
-│ [t=124s] red#3 elevation success lvl 3 → 4                     │
-│ [t=130s] blue#1 broadcast "help north"                         │
-├────────────────────────────────────────────────────────────────┤
-│ Speed: ◀ ‖ ▶ [—————●———] 4x      Status: connected localhost   │
-└────────────────────────────────────────────────────────────────┘
-```
+## Rendu 3D
 
-Implémentation : `GuiPanel`, `GuiLabel`, `GuiSlider`, `GuiListView` de raygui.h.
+- **Skybox** : panorama équirectangulaire 360° échantillonné par direction de vue
+  dans un shader (`assets/shaders/skybox.{vs,fs}`), dessiné sur un cube centré
+  caméra au far plane → fond infiniment lointain, sans pincement aux pôles ni
+  couture. Cube/shader/texture possédés par la façade.
+- **Sol** : damier batché (`drawCheckerFloor`) avec deux textures (sol clair / sombre).
+- **Ressources** : un `.glb` par type, chargé une fois, instancié sur chaque tuile
+  le portant ; bounding box mise en cache pour mettre à l'échelle et poser la base
+  sur la surface. Fallback cube si le `.glb` manque.
+- **Joueurs** : modèle `.glb` animé. Clips résolus par nom vers des slots fixes
+  (`Idle, Walk, Death, Kick, Dance, Pickup, Jump`). Chaque joueur porte son propre
+  clip + frame, sa pose étant uploadée juste avant son `drawModelEx` → animations
+  indépendantes. La mort (`pdi`) efface le joueur avant l'anim : un **death ghost**
+  rejoue le clip Death une fois à la dernière pose connue.
 
-## Debug panel F3 (toggle)
+## HUD et écrans 2D (dessin custom, pas de raygui)
 
-- `DrawFPS` + frametime graph (ring buffer 60 valeurs → `DrawLineStrip`)
-- RAM usage via `/proc/self/status` (Linux) ou `GetMemoryInfo` stub
-- Packets reçus/sec, bytes/sec (compteurs dans `GuiClient`)
-- Draw call count (compteur manuel incrémenté dans `world_renderer.cpp`)
+Tout le 2D passe par `RaylibEngine::drawText/drawRect/…` — aucune dépendance raygui.
 
-## Pipeline d'assets
+- **HUD compact** permanent (haut-gauche).
+- **Stats panel** global (`Tab`).
+- **Help overlay** liste des contrôles (`H` / `F1`).
+- **End screen** : résumé centré du vainqueur après `seg`, couleurs par équipe
+  (`teamColor`), scroll molette sur la liste des joueurs ; `Enter` le masque pour
+  continuer à voler dans la partie terminée.
+- **Tile info panel** (haut-droite) sur la tuile sélectionnée.
+- **Timeline bar** (bas) : position + mode live/pause/scrub.
 
-Format input (simplifié vs Vulkan) :
-- Models : `.obj` (simple) ou `.gltf` 2.0 via `LoadModel`
-- Textures : `.png` ou `.jpg` via `LoadTexture`
-- Audio : `.ogg` (musique via `LoadMusicStream`), `.wav` (SFX via `LoadSound`)
+## Contrôles
 
-Script `tools/build_assets.sh` :
-1. Convertit `.fbx/.blend` → `.obj` via Blender headless ou assimp-cli
-2. Optimise textures `.png` avec `optipng`
-3. Copie dans `gui/assets/`
-
-Pas de KTX2/Basis compression nécessaire.
+| Touche / souris        | Action                                            |
+|------------------------|---------------------------------------------------|
+| Souris                 | regarder (curseur capturé)                        |
+| ZQSD / flèches         | voler (Shift = plus rapide)                       |
+| Space / Ctrl (ou C)    | monter / descendre                                |
+| Molette                | vitesse de vol (ou scroll de l'écran de fin)      |
+| Clic gauche            | sélectionner la tuile visée (crosshair)           |
+| Double-clic            | centrer la caméra sur cette tuile                 |
+| R                      | revenir à la vue d'ensemble                       |
+| F                      | suivre / ne plus suivre le joueur sélectionné     |
+| + / -                  | vitesse de simulation (`sst`)                     |
+| P                      | pause / reprise                                   |
+| PageDown / PageUp      | reculer / avancer d'1 s dans le temps             |
+| End                    | revenir au live                                   |
+| Tab                    | stats globales                                    |
+| M                      | musique on/off                                    |
+| Enter                  | masquer / afficher l'écran de fin (après victoire)|
+| H / F1                 | aide                                              |
 
 ## Build
 
-```cmake
-# CMakeLists.txt — détection Raylib
-find_package(raylib QUIET)
-if(NOT raylib_FOUND)
-    find_package(PkgConfig QUIET)
-    pkg_check_modules(RAYLIB QUIET raylib)
-endif()
+Construit dans l'arbre CMake normal (pas de Makefile séparé), via le `make` racine.
 
-if(raylib_FOUND OR RAYLIB_FOUND)
-    # build réel
-    target_sources(zappy_gui PRIVATE src/renderer/raylib_app.cpp ...)
-    target_compile_definitions(zappy_gui PRIVATE ZAPPY_GUI_HAS_RAYLIB=1)
-    target_link_libraries(zappy_gui PRIVATE raylib)
-else()
-    # stub banner (comportement actuel inchangé)
-    message(STATUS "  gui: raylib not found -> building STUB zappy_gui")
+```cmake
+# gui/CMakeLists.txt
+find_library(RAYLIB_LIBRARY NAMES raylib)
+if(NOT RAYLIB_LIBRARY)
+    message(WARNING "raylib not found — skipping zappy_gui. …")
+    return()                       # skip propre : le reste du projet build quand même
 endif()
+add_executable(zappy_gui main.cpp interface.cpp raylibWrapper.cpp
+                         gameMap.cpp netClient.cpp protocolParser.cpp)
+target_link_libraries(zappy_gui PRIVATE ${RAYLIB_LIBRARY} GL m pthread dl rt X11)
 ```
 
-Install : `sudo apt install libraylib-dev` ou vcpkg `raylib`.
-
-## Tests
-
-- Tests parser protocole GUI (`tests/test_gui_protocol.cpp`) — inchangés, pas de rendu
-- Tests mise à jour scène (`tests/test_scene_update.cpp`) — feed `handle_line()`, vérif `Scene`
-- Tests caméras (`tests/test_camera.cpp`) — math interpolation ArcBall, frustum
-- Smoke test CI : lance GUI 3 sec en mode replay `.zrec` headless (`-headless` flag) → vérifie exit 0
-- Pas de screenshot diff (trop fragile en CI), mais frame counter vérifié > 0
+- **C++17**, `-Wall -Wextra` (la façade raylib n'est pas soumise aux options strictes
+  `-Wconversion`/`-Wpedantic` du reste du projet — ça ne vaut pas la peine sur du glue GUI).
+- Sortie dans `build/bin/zappy_gui`, copiée en `./zappy_gui` par le Makefile racine.
+- **Sans raylib installé** : la cible est sautée avec un warning, sans casser le build
+  (le serveur et l'AI se construisent quand même — utilisé par la CI).
