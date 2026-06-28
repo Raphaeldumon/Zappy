@@ -155,7 +155,7 @@ que soit l'implémentation du rendu.
 
 Un seul module fait tout le bot : [`ai/baseline/zappy_ai_baseline.py`]. `make`
 le **copie** en `ai/zappy_ai` (l'exécutable lancé). Comportement/stratégie
-détaillés dans [`ai/AI_OVERVIEW.md`](../../ai/AI_OVERVIEW.md).
+détaillés dans [`ai/AI_OVERVIEW.md`].
 
 ```mermaid
 flowchart TB
