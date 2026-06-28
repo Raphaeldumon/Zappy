@@ -71,6 +71,9 @@ vcpkg_installed/
 Testing/
 .cache/
 .vscode/
+CLAUDE.md
+graphify-out/
+.claude/
 
 # MkDocs build output
 site/

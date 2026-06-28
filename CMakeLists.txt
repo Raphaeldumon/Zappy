@@ -62,6 +62,16 @@ if(ZAPPY_BUILD_TESTS)
                     --server $<TARGET_FILE:zappy_server>
             WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
         set_tests_properties(integration_protocol PROPERTIES LABELS "integration" TIMEOUT 120)
+
+        # Connection-limit / stress test: fills a team past -c and opens 800+
+        # concurrent sockets to assert the capacity ceilings hold and the server
+        # survives. Tagged "stress;integration"; skip with ctest -LE stress.
+        add_test(
+            NAME stress_connection_limits
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/test_connection_limits.py
+                    --server $<TARGET_FILE:zappy_server>
+            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+        set_tests_properties(stress_connection_limits PROPERTIES LABELS "stress;integration" TIMEOUT 180)
     endif()
 endif()
 
