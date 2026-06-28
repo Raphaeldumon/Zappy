@@ -40,13 +40,11 @@ markdown_extensions:
           format: !!python/name:mermaid2.fence_mermaid
 
 nav:
-  - Home: 01_architecture/01_overview.md
+  - Home: server.md
   - Architecture:
-      - Server: 01_architecture/02_server.md
-      - GUI (raylib): 01_architecture/03_gui_raylib.md
-      - GUI (Vulkan): 01_architecture/03_gui_vulkan.md
-      - Simulator: 01_architecture/05_simulator.md
-      - Protocols: 01_architecture/06_protocols.md
-      - Monorepo structure: 01_architecture/07_monorepo_structure.md
-      - UML overview: 01_architecture/08_uml_overview.md
+      - Server: server.md
+      - GUI (raylib): gui_raylib.md
+      - Protocols: protocols.md
+      - UML overview: uml_overview.md
+  - Subject (PDF): G-YEP-400_zappy.pdf
   - GUI protocol (PDF): G-YEP-400_zappy_GUI_protocol.pdf
