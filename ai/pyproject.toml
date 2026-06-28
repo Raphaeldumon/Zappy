@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zappy-train"
+version = "0.1.0"
+description = "Zappy RL training pipeline (PettingZoo + RLlib)"
+readme = "README.md"
+requires-python = ">=3.10"
+# Heavy deps are optional so the package imports and tests run without a GPU stack.
+# Install the full pipeline with: pip install -e "ai_python[rl]"
+dependencies = []
+
+[project.optional-dependencies]
+rl = [
+    "torch>=2.2",
+    "ray[rllib]>=2.9",
+    "pettingzoo>=1.24",
+    "gymnasium>=0.29",
+    "numpy>=1.26",
+    "wandb>=0.16",
+]
+dev = ["pytest>=8", "ruff>=0.4", "mypy>=1.9"]
+
+[tool.setuptools.packages.find]
+include = ["zappy_train*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_unused_ignores = true
+disallow_untyped_defs = true
