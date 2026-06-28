@@ -107,6 +107,7 @@ enum class Key
     PageDown,
     End,
     Tab,
+    Enter,
     F1,
 };
 enum class MouseBtn

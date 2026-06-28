@@ -72,6 +72,8 @@ int toRlKey(gfx::Key k)
         return KEY_RIGHT;
     case gfx::Key::Space:
         return KEY_SPACE;
+    case gfx::Key::Enter:
+        return KEY_ENTER;
     case gfx::Key::LeftShift:
         return KEY_LEFT_SHIFT;
     case gfx::Key::RightShift:

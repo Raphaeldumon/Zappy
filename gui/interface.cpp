@@ -661,10 +661,16 @@ void Interface::handleInput()
         _camera.position = gfx::add(_camera.position, move);
     }
 
+    // ---- Enter dismisses (or brings back) the end screen once there's a winner,
+    // so the spectator can keep flying around the finished game normally.
+    if (_state.hasWinner && _engine.keyPressed(gfx::Key::Enter))
+        _endHidden = !_endHidden;
+
     // ---- Wheel sets the fly speed (not zoom — there's no pivot to zoom to).
-    // After the game ends, the same wheel scrolls the winner report instead.
+    // While the end screen is up, the same wheel scrolls the winner report instead.
+    const bool endScreenUp = _state.hasWinner && !_endHidden;
     float wheel = _engine.mouseWheel();
-    if (wheel != 0.0f && _state.hasWinner)
+    if (wheel != 0.0f && endScreenUp)
     {
         _endScroll -= wheel * 56.0f;
         if (_endScroll < 0.0f)
@@ -1188,7 +1194,7 @@ void Interface::render()
         drawStatsPanel();
     if (_showHelp)
         drawHelpOverlay();
-    if (_state.hasWinner)
+    if (_state.hasWinner && !_endHidden)
         drawEndScreen();
 
     _engine.drawFps(_engine.screenWidth() - 90, 10);
@@ -1482,6 +1488,7 @@ void Interface::drawEndScreen()
     _engine.drawRect(px, py, width, height, gfx::Color{0, 0, 0, 126});
     _engine.drawRectLines(px, py, width, height, winnerColor);
 
+    _engine.drawText("ENTER to dismiss", px + width - 190, py + 24, 16, gfx::LIGHTGRAY);
     _engine.drawText("VICTORY", px + pad, py + 18, 34, winnerColor);
     _engine.drawText(gfx::fmt("%s wins", _state.winner.c_str()), px + pad, py + 58, 22, gfx::RAYWHITE);
     _engine.drawText(gfx::fmt("Alive players: %d   Eggs left: %d   Time unit: %d",
@@ -1565,7 +1572,7 @@ void Interface::drawEndScreen()
 
 void Interface::drawHelpOverlay()
 {
-    static const std::array<const char *, 16> kHelp = {
+    static const std::array<const char *, 17> kHelp = {
         "CONTROLS  -  FREE CAMERA",
         "Mouse           look around freely",
         "ZQSD / Arrows   fly (Shift = faster)",
@@ -1581,6 +1588,7 @@ void Interface::drawHelpOverlay()
         "End             jump back to live",
         "Tab             toggle global stats",
         "M               toggle music",
+        "Enter           dismiss / show end screen (after a win)",
         "H / F1          this help",
     };
 
