@@ -41,11 +41,12 @@ markdown_extensions:
           format: !!python/name:mermaid2.fence_mermaid
 
 nav:
-  - Home: server.md
+  - Home: index.md
   - Architecture:
       - Server: server.md
       - GUI (raylib): gui_raylib.md
       - Protocols: protocols.md
+      - AI overview: AI_OVERVIEW.md
       - UML overview: uml_overview.md
   - Subject (PDF): G-YEP-400_zappy.pdf
   - GUI protocol (PDF): G-YEP-400_zappy_GUI_protocol.pdf
