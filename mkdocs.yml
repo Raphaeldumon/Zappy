@@ -1,5 +1,6 @@
 site_name: Zappy
 site_description: G-YEP-400 Zappy — server (C++20) + AI (Python)
+site_url: https://raphaeldumon.github.io/Zappy/
 repo_url: https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3
 edit_uri: ""
 
