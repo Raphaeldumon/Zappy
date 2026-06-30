@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <string>
@@ -8,6 +9,11 @@
 
 namespace zappy::net
 {
+
+// Largest recv_buf we tolerate before assuming a flooding/garbage client. No
+// legitimate AI/GUI line comes close; without this cap, a stream with no '\n'
+// is never drained, so recv_buf grows unbounded (memory-exhaustion DoS).
+inline constexpr std::size_t MAX_RECV_BUF = 64 * 1024;
 
 enum class ClientState
 {

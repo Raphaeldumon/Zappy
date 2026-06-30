@@ -3,6 +3,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 
 namespace zappy::net
 {
@@ -46,7 +47,17 @@ int Client::fill_recv()
     char buf[4096];
     ssize_t n = read(fd, buf, sizeof(buf));
     if (n > 0)
+    {
         recv_buf.append(buf, static_cast<std::size_t>(n));
+        // Cap an unbounded newline-less stream: past MAX_RECV_BUF the client is
+        // flooding, so force the caller's error/close path (drain_lines runs
+        // first, so any complete buffered lines are still processed).
+        if (recv_buf.size() > MAX_RECV_BUF)
+        {
+            errno = EMSGSIZE;
+            return -1;
+        }
+    }
     return static_cast<int>(n);
 }
 
