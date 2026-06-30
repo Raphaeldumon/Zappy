@@ -1,26 +1,26 @@
-# Zappy AI — Full Workflow & Design
+# IA Zappy — Workflow complet & conception
 
-A start-to-finish walkthrough of the Zappy AI bot
-([`ai/baseline/zappy_ai_baseline.py`](baseline/zappy_ai_baseline.py), mirrored to
-the gitignored `ai/zappy_ai`). It is a **100% rule-based state machine** — no
-training, no neural net. One process drives one drone; teams are many such
-processes.
+Parcours de bout en bout du bot IA Zappy
+([`ai/baseline/zappy_ai_baseline.py`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py), recopié vers
+le `ai/zappy_ai` gitignoré). C'est une **machine à états 100 % à base de règles** —
+aucun entraînement, aucun réseau de neurones. Un processus pilote un drone ; une
+équipe, c'est plusieurs de ces processus.
 
 ---
 
-## 1. The goal & the win condition
+## 1. L'objectif & la condition de victoire
 
-Each drone climbs **elevation levels 1 → 8**. The game ends the instant **6
-players of one team reach level 8** (`world_state.cpp` `check_win`:
-`count >= 6`) — the server emits `seg`, sets
-`running_ = false`, and the process exits. So winning is a **race**: get six
-drones to level 8 before anyone else.
+Chaque drone gravit les **niveaux d'élévation 1 → 8**. La partie s'arrête dès que
+**6 joueurs d'une même équipe atteignent le niveau 8** (`world_state.cpp`
+`check_win` : `count >= 6`) — le serveur émet `seg`, passe `running_ = false`, et
+le processus se termine. Gagner est donc une **course** : amener six drones au
+niveau 8 avant tout le monde.
 
-Each elevation (`Incantation`) needs **N players of the same level + a specific
-set of stones on the tile** ([`REQ`](baseline/zappy_ai_baseline.py#L19)):
+Chaque élévation (`Incantation`) exige **N joueurs du même niveau + un jeu précis
+de pierres sur la tuile** ([`REQ`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L19)) :
 
-| Level → | players | linemate | deraumere | sibur | mendiane | phiras | thystame |
-|---------|---------|----------|-----------|-------|----------|--------|----------|
+| Niveau → | joueurs | linemate | deraumere | sibur | mendiane | phiras | thystame |
+|----------|---------|----------|-----------|-------|----------|--------|----------|
 | 1→2 | 1 | 1 | – | – | – | – | – |
 | 2→3 | 2 | 1 | 1 | 1 | – | – | – |
 | 3→4 | 2 | 2 | – | 1 | – | 2 | – |
@@ -29,343 +29,368 @@ set of stones on the tile** ([`REQ`](baseline/zappy_ai_baseline.py#L19)):
 | 6→7 | 6 | 1 | 2 | 3 | – | 1 | – |
 | 7→8 | 6 | 2 | 2 | 2 | 2 | 2 | 1 |
 
-Two server facts the whole strategy leans on:
-- An incantation elevates **every same-level player on the tile** (the player
-  count is a *minimum*, not a cap).
-- A successful ritual **consumes only that level's stones** from the tile,
-  leaving the rest. (Verified server-side.)
+Deux faits serveur sur lesquels repose toute la stratégie :
+- Une incantation élève **tous les joueurs de même niveau sur la tuile** (le
+  nombre de joueurs est un *minimum*, pas un plafond).
+- Un rituel réussi **ne consomme que les pierres de ce niveau** sur la tuile, et
+  laisse le reste. (Vérifié côté serveur.)
 
 ---
 
-## 2. Talking to the server (the protocol)
+## 2. Parler au serveur (le protocole)
 
-Plain-text, line-based, one TCP socket. Commands the bot sends and what it
-expects back:
+Texte brut, ligne par ligne, une seule socket TCP. Commandes envoyées par le bot
+et ce qu'il attend en retour :
 
-| Command | Server reply | Meaning |
-|---------|--------------|---------|
-| `Forward` / `Left` / `Right` | `ok` | move / turn |
-| `Look` | `[tile0, tile1, ...]` | vision cone (see §6) |
-| `Inventory` | `[food n, linemate n, ...]` | own stock |
-| `Take <obj>` / `Set <obj>` | `ok` / `ko` | pick up / drop one item |
-| `Broadcast <text>` | `ok` | sound to **all** players (§7) |
-| `Incantation` | `Elevation underway` then `Current level: N` / `ko` | ritual |
-| `Fork` | `ok` | lay an egg + free a team slot |
-| `Connect_nbr` | `<int>` | **free** team slots (not active count) |
-| `Eject` | `ok`/`ko` | shove players off the tile |
+| Commande | Réponse serveur | Sens |
+|----------|-----------------|------|
+| `Forward` / `Left` / `Right` | `ok` | avancer / tourner |
+| `Look` | `[tile0, tile1, ...]` | cône de vision (voir §6) |
+| `Inventory` | `[food n, linemate n, ...]` | stock propre |
+| `Take <obj>` / `Set <obj>` | `ok` / `ko` | ramasser / poser un objet |
+| `Broadcast <text>` | `ok` | son vers **tous** les joueurs (§7) |
+| `Incantation` | `Elevation underway` puis `Current level: N` / `ko` | rituel |
+| `Fork` | `ok` | pond un œuf + libère un slot d'équipe |
+| `Connect_nbr` | `<int>` | slots d'équipe **libres** (pas le nombre actif) |
+| `Eject` | `ok`/`ko` | pousse les joueurs hors de la tuile |
 
-Unprompted server pushes: `message K, <text>` (a broadcast was heard),
-`eject: K` (we got shoved), `dead` (we starved). Reply parsing lives in
-[`handle_line`](baseline/zappy_ai_baseline.py#L495).
+Messages serveur non sollicités : `message K, <text>` (un broadcast a été
+entendu), `eject: K` (on s'est fait pousser), `dead` (on est mort de faim).
+Le parsing des réponses vit dans
+[`handle_line`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L495).
 
-**Key blind spots the bot must work around:**
-- **No command returns position.** The bot never knows its (x, y). All
-  navigation toward teammates is done purely by broadcast **sound bearing**.
-- **`Connect_nbr` returns free slots, not team size** — a bot cannot directly
-  ask "how many of us are alive?".
-- A received broadcast carries **no sender or team** — only `message K, <text>`.
-  Team origin is by *convention* (every message is prefixed `<team>:`), and is
-  spoofable. `K` is the only trustworthy bit (see §6).
-
----
-
-## 3. Connection & handshake
-
-[`connect`](baseline/zappy_ai_baseline.py#L181) →
-[`handshake`](baseline/zappy_ai_baseline.py#L273):
-
-1. Read `WELCOME`.
-2. Send the team name.
-3. Read free-slot count, then `X Y` map dimensions.
-4. If `-f` was not given, **measure** the server frequency empirically
-   ([`estimate_frequency`](baseline/zappy_ai_baseline.py#L311)): time
-   `Connect_nbr` vs `Forward` round-trips; the delta is one action's wall-cost,
-   and `freq ≈ 7 / delta` (an action costs `7/f` seconds of game time).
-
-The frequency drives every timeout in the bot, because the server's clock — not
-the bot's CPU — paces the game.
+**Angles morts clés que le bot doit contourner :**
+- **Aucune commande ne renvoie la position.** Le bot ne connaît jamais son
+  (x, y). Toute la navigation vers les coéquipiers se fait uniquement par
+  **relèvement sonore** des broadcasts.
+- **`Connect_nbr` renvoie les slots libres, pas la taille de l'équipe** — un bot
+  ne peut pas demander directement « combien sommes-nous en vie ? ».
+- Un broadcast reçu ne porte **ni émetteur ni équipe** — juste `message K,
+  <text>`. L'origine d'équipe est par *convention* (chaque message est préfixé
+  `<team>:`), et est falsifiable. `K` est le seul bit fiable (voir §6).
 
 ---
 
-## 4. The main loop
+## 3. Connexion & handshake
 
-[`run`](baseline/zappy_ai_baseline.py#L414) blocks on `select` (woken instantly
-by a server reply, 50 ms idle cap so timers still tick), drains all available
-lines into [`handle_line`](baseline/zappy_ai_baseline.py#L495), then calls
-[`tick`](baseline/zappy_ai_baseline.py#L446).
+[`connect`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L181) →
+[`handshake`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L273) :
 
-### Pipelining (the `pending` FIFO)
-The server buffers up to **`MAX_COMMAND_QUEUE = 10`** commands per client. The
-bot keeps a FIFO [`self.pending`](baseline/zappy_ai_baseline.py#L83) (capped at
-8) of commands awaiting a reply (the server answers **in order**). Two regimes:
+1. Lire `WELCOME`.
+2. Envoyer le nom d'équipe.
+3. Lire le nombre de slots libres, puis les dimensions `X Y` de la carte.
+4. Si `-f` n'a pas été fourni, **mesurer** la fréquence serveur empiriquement
+   ([`estimate_frequency`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L311)) : chronométrer les
+   aller-retours `Connect_nbr` vs `Forward` ; le delta est le coût mural d'une
+   action, et `freq ≈ 7 / delta` (une action coûte `7/f` secondes de temps de
+   jeu).
 
-- **Deterministic movement plans** (`Forward Forward Right …`) are pushed
-  several-at-once via [`send_next_plan_cmd`](baseline/zappy_ai_baseline.py#L1590)
-  so the server's action queue never idles between steps.
-- **Reactive decisions** (Look→Take, Inventory, Incantation) wait for the
-  pipeline to drain (`if self.has_pending(): return`) so they always see fresh
-  world state.
-
-A wedged front command is dropped after a per-command timeout
-([`cmd_timeout`](baseline/zappy_ai_baseline.py#L264)) so a lost reply can't stall
-the bot forever.
-
-### `tick` order of priority
-1. timeout-drop a stale front command,
-2. top up the movement pipeline,
-3. (drain) — bail if anything still pending,
-4. send a queued `GATHER_ACK` if owed,
-5. forced `Look` (vision invalidated),
-6. follow a broadcast bearing,
-7. refresh `Inventory` if stale,
-8. **`choose_state()` then `run_state()`** — the brain.
+La fréquence pilote chaque timeout du bot, car c'est l'horloge du serveur — pas
+le CPU du bot — qui cadence la partie.
 
 ---
 
-## 5. The world model
+## 4. La boucle principale
 
-[`Memory`](baseline/zappy_ai_baseline.py#L43) is the bot's entire belief state:
-level, inventory, last `Look` grid, free slots, plus freshness counters
-(`actions_since_inventory`, `moves_since_look`) and timestamps used to decide
-when vision/inventory have gone stale and must be re-queried. Vision and
-inventory are **cached** and only refreshed when counters/timers say they're
-stale — re-`Look`ing every action would burn the action budget.
+[`run`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L414) bloque sur `select` (réveillé
+instantanément par une réponse serveur, plafond d'inactivité de 50 ms pour que
+les timers tournent quand même), draine toutes les lignes disponibles dans
+[`handle_line`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L495), puis appelle
+[`tick`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L446).
+
+### Pipelining (la FIFO `pending`)
+Le serveur bufferise jusqu'à **`MAX_COMMAND_QUEUE = 10`** commandes par client. Le
+bot tient une FIFO [`self.pending`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L83) (plafonnée
+à 8) des commandes en attente de réponse (le serveur répond **dans l'ordre**).
+Deux régimes :
+
+- **Plans de déplacement déterministes** (`Forward Forward Right …`) poussés
+  plusieurs d'un coup via
+  [`send_next_plan_cmd`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1590), pour que la file
+  d'actions du serveur ne reste jamais oisive entre deux pas.
+- **Décisions réactives** (Look→Take, Inventory, Incantation) attendent que le
+  pipeline se vide (`if self.has_pending(): return`) pour toujours voir un état du
+  monde frais.
+
+Une commande de tête coincée est jetée après un timeout par commande
+([`cmd_timeout`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L264)) : une réponse perdue ne peut
+pas bloquer le bot pour toujours.
+
+### Ordre de priorité de `tick`
+1. jeter par timeout une commande de tête périmée,
+2. réalimenter le pipeline de déplacement,
+3. (drain) — abandonner s'il reste quoi que ce soit en attente,
+4. envoyer un `GATHER_ACK` en file si dû,
+5. `Look` forcé (vision invalidée),
+6. suivre un relèvement de broadcast,
+7. rafraîchir l'`Inventory` si périmé,
+8. **`choose_state()` puis `run_state()`** — le cerveau.
+
+---
+
+## 5. Le modèle du monde
+
+[`Memory`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L43) est tout l'état de croyance du bot :
+niveau, inventaire, dernière grille `Look`, slots libres, plus des compteurs de
+fraîcheur (`actions_since_inventory`, `moves_since_look`) et des horodatages pour
+décider quand vision/inventaire sont périmés et doivent être re-interrogés. Vision
+et inventaire sont **mis en cache** et rafraîchis seulement quand
+compteurs/timers les déclarent périmés — re-`Look`er à chaque action brûlerait le
+budget d'actions.
 
 ---
 
 ## 6. Vision & navigation
 
-`Look` returns a flattened cone of tiles, index 0 = current tile, widening
-forward. [`tile_pos`](baseline/zappy_ai_baseline.py#L1604) converts a flat index
-into `(distance_forward, lateral_offset)`;
-[`plan_to_tile`](baseline/zappy_ai_baseline.py#L1618) turns that into a
-`Left/Right/Forward` sequence. [`move_to_tile`](baseline/zappy_ai_baseline.py#L1567)
-folds the terminal action (e.g. `Take food`) into the **same** pipelined burst so
-arriving doesn't cost an extra Look+Take round-trip.
+`Look` renvoie un cône de tuiles aplati, indice 0 = tuile courante, s'élargissant
+vers l'avant. [`tile_pos`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1604) convertit un
+indice plat en `(distance_avant, décalage_latéral)` ;
+[`plan_to_tile`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1618) en fait une séquence
+`Left/Right/Forward`. [`move_to_tile`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1567) replie
+l'action terminale (p. ex. `Take food`) dans la **même** rafale pipelinée, pour
+que l'arrivée ne coûte pas un aller-retour Look+Take supplémentaire.
 
-### Sound bearing (the only way to find teammates)
-A heard broadcast comes with `K` (0–8), the direction of the source **in the
-listener's own frame**: `0` = same tile, `1` = straight ahead, then **clockwise**
-(`3` = right, `5` = behind, `7` = left).
-[`broadcast_plan`](baseline/zappy_ai_baseline.py#L1657) steps so the source moves
-toward the front; the leader keeps rebroadcasting and the follower re-aims each
-time. Because homing is coarse (8 directions) and the leader may itself move,
-convergence is **slow and oscillating** — bearing 0 (exact co-location) is rare.
-This single fact shaped the entire coordination design.
+### Relèvement sonore (la seule façon de trouver les coéquipiers)
+Un broadcast entendu vient avec `K` (0–8), la direction de la source **dans le
+repère propre de l'auditeur** : `0` = même tuile, `1` = droit devant, puis **dans
+le sens horaire** (`3` = droite, `5` = derrière, `7` = gauche).
+[`broadcast_plan`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1657) avance pour que la source
+remonte vers l'avant ; le leader rediffuse en continu et le suiveur se réoriente à
+chaque fois. Le homing étant grossier (8 directions) et le leader pouvant lui-même
+bouger, la convergence est **lente et oscillante** — le relèvement 0 (co-location
+exacte) est rare. Ce seul fait a façonné toute la conception de la coordination.
 
-**Bearing 0 is the one server-authoritative signal of physical co-location** —
-it's the backbone of the ARRIVED handshake below.
-
----
-
-## 7. The state machine
-
-[`choose_state`](baseline/zappy_ai_baseline.py#L612) picks a state by strict
-priority each tick; [`run_state`](baseline/zappy_ai_baseline.py#L682) executes it.
-
-| State | When | Does |
-|-------|------|------|
-| `SURVIVE` | food ≤ `survive_min` | drop everything, find & eat food |
-| (HOLD) | frozen for a mate's ritual | stay on tile (LOOK, no move) |
-| `PREPARE_INCANTATION` / `INCANT` | have stones, ready | `Set` each stone, then `Incantation` |
-| `LOOK` | vision stale | refresh the cone |
-| `CALL_TEAMMATES` | have stones, need ≥2 players | run the gather protocol (§8) |
-| `COLLECT` | a needed stone is visible | walk to it, `Take` |
-| `FARM_FOOD` | need food cushion | walk to food, `Take` |
-| `REPRODUCE` | low-level & fed | `Fork` + spawn a child (§9) |
-| `EXPLORE` | nothing useful visible | wander (biased forward) |
-| `DEAD` | got `dead` | stop |
-
-**Survival always preempts everything** — the bot never freezes or coordinates
-itself into starvation.
-
-### Food economy (the binding constraint)
-`STARTING_FOOD = 10`, and food drains continuously (~8 food/sec at f=1000). A
-stationary bot starves in roughly `food × 0.126` seconds. Survival is flat
-(`survive_food = 8`, `survive_per_level = 0`): level-scaled survival was tried
-and *regressed* — raising the floor just makes valuable high-level bots farm
-forever and never coordinate. Food, not stones, is what's scarce.
+**Le relèvement 0 est le seul signal serveur faisant autorité sur la
+co-location physique** — c'est l'épine dorsale du handshake ARRIVED ci-dessous.
 
 ---
 
-## 8. Coordination handshakes (how bots find each other)
+## 7. La machine à états
 
-Getting N same-level bots onto one tile, position-blind, is the hard part. Four
-broadcast handshakes solve it. They are the convergence primitives the blitz
-(§10) drives, and also back the last-resort per-level fallback (§10):
+[`choose_state`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L612) choisit un état par priorité
+stricte à chaque tick ; [`run_state`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L682)
+l'exécute.
 
-- **GATHER / GATHER_ACK** — a leader with the stones opens a request
-  (`start_gather`), broadcasting `GATHER:req=…:level=…:need=…`. Same-level,
-  fed teammates reply `GATHER_ACK` and start homing on the bearing. Lowest
-  `bot_id` wins if two leaders collide
-  ([`handle_gather`](baseline/zappy_ai_baseline.py#L1044)).
-- **ARRIVED (the big unlock)** — `Look` shows `"player"` with **no level**, so a
-  leader can't tell a real same-level teammate from a passing level-1 baby, and
-  firing on the wrong count guarantees a `ko`. Instead, when the leader's
-  broadcast reaches a follower as **bearing 0**, the follower *knows* it's on the
-  exact tile and announces `ARRIVED`. The leader counts **distinct same-level
-  ARRIVED senders** and incants only on that count
-  ([`present = 1 + len(self.arrived_at_leader)`](baseline/zappy_ai_baseline.py#L886)).
-  This took ritual success from ~14% to ~92%.
-- **HOLD** — before its multi-step `Set…Set…Incantation`, the leader broadcasts
-  `HOLD` so assembled teammates **freeze on-tile** instead of wandering off and
-  dropping the count below `need`. Only bots actually following *this* leader
-  freeze ([`handle_hold`](baseline/zappy_ai_baseline.py#L1010)), else a map-wide
-  broadcast would freeze and starve non-participants.
+| État | Quand | Fait |
+|------|-------|------|
+| `SURVIVE` | food ≤ `survive_min` | tout lâcher, trouver & manger de la nourriture |
+| (HOLD) | gelé pour le rituel d'un coéquipier | rester sur la tuile (LOOK, pas de move) |
+| `PREPARE_INCANTATION` / `INCANT` | pierres en main, prêt | `Set` chaque pierre, puis `Incantation` |
+| `LOOK` | vision périmée | rafraîchir le cône |
+| `CALL_TEAMMATES` | pierres en main, besoin de ≥2 joueurs | lancer le protocole de rassemblement (§8) |
+| `COLLECT` | une pierre nécessaire est visible | marcher dessus, `Take` |
+| `FARM_FOOD` | besoin de réserve de food | marcher vers la food, `Take` |
+| `REPRODUCE` | bas niveau & nourri | `Fork` + engendrer un enfant (§9) |
+| `EXPLORE` | rien d'utile en vue | errer (biaisé vers l'avant) |
+| `DEAD` | a reçu `dead` | s'arrêter |
 
----
+**La survie préempte toujours tout** — le bot ne se fige et ne se coordonne jamais
+jusqu'à la famine.
 
-## 9. Reproduction, forking & eggs
-
-Server `Fork` only **lays an egg and frees a slot** — nothing hatches until a
-*new client connects* with the team name. So on every `Fork ok` the bot
-**spawns a fresh process**
-([`spawn_child_for_egg`](baseline/zappy_ai_baseline.py#L388), detached
-`subprocess.Popen`) to occupy that egg; otherwise eggs rot and the population
-never grows. `SIGCHLD` is ignored so children don't become zombies.
-
-Forking is **disciplined** ([`should_fork`](baseline/zappy_ai_baseline.py#L1701)):
-only while **level ≤ 2**, only when well-fed, and rate-limited per bot. A
-level-3+ bot is valuable and food-bound — forking costs it food *and* adds a
-competitor for scarce food, while the baby won't grow up in time to help. Lean
-forking kept attrition low, which is what let a high-level cohort persist and
-climb to level 8.
-
-### The opening census — `HELLO` and the fork election
-The blitz (§10) needs **≥ `census_target` (default 6) reachable mates**, but a
-bot can't ask the server its team size — `Connect_nbr` returns *free slots*, not
-the active count (§2). So the team **self-counts by broadcast**:
-
-- On boot every bot broadcasts **`HELLO:from=<bot_id>`**
-  ([`broadcast_hello`](baseline/zappy_ai_baseline.py#L1661)) and re-emits it every
-  `hello_interval` (`60/freq`, min 1 s) while the census is open. Everyone unions
-  the sender ids into [`team_members`](baseline/zappy_ai_baseline.py#L209). On the
-  **first** sighting of a new id the bot echoes one HELLO back
-  ([`handle_hello`](baseline/zappy_ai_baseline.py#L1665)) so the newcomer learns
-  about the bots already present — bounded to first-sighting so it can't storm.
-
-- **Fork election:** the bot with the **lowest known `bot_id`** is the sole
-  forker ([`is_census_forker`](baseline/zappy_ai_baseline.py#L1684)). Only it
-  forks — *past the normal per-bot cap* — until the union reaches
-  `census_target`, then **nobody forks**
-  ([`should_fork` census branch](baseline/zappy_ai_baseline.py#L1721)). The
-  observed member count is the global limiter, so total forks ≈
-  `quorum − initial_bots`. Forked children and late siblings HELLO on boot and
-  join the union; their ids are **time-seeded** (always larger) so they never
-  unseat the elected forker — the election is stable without a handshake.
-
-Two pacing guards keep the count honest
-([`census_maintain`](baseline/zappy_ai_baseline.py#L1689) /
-[`should_fork`](baseline/zappy_ai_baseline.py#L1701)):
-- a **settle window** (`census_settle`, 3 s) before a bot will act as forker, so
-  a just-booted bot doesn't fork while it still (wrongly) thinks it's alone — a
-  singleton is always its own minimum id;
-- after each `Fork ok` the next fork **holds** until the child announces via
-  HELLO ([`census_fork_deadline`](baseline/zappy_ai_baseline.py#L663)), or until
-  `census_child_timeout` (4 s) if the child never boots — so one slow egg can't
-  inflate the population, and a deadbeat egg can't stall the census.
-
-The whole census is bounded by `census_timeout` (30 s); if quorum never forms it
-closes and `should_fork` reverts to the **original per-bot cap** (`max_forks`),
-the same fallback the manifest blitz uses on a degenerate map (§10).
+### Économie de nourriture (la contrainte liante)
+`STARTING_FOOD = 10`, et la food se vide en continu (~8 food/s à f=1000). Un bot
+immobile meurt de faim en gros en `food × 0,126` secondes. La survie est plate
+(`survive_food = 8`, `survive_per_level = 0`) : une survie échelonnée par niveau a
+été essayée et a *régressé* — relever le plancher pousse juste les bots haut
+niveau (précieux) à farmer pour toujours sans jamais se coordonner. C'est la
+nourriture, pas les pierres, qui est rare.
 
 ---
 
-## 10. The Manifest Blitz — the strategy
+## 8. Handshakes de coordination (comment les bots se trouvent)
 
-**The one and only strategy** (no on/off switch). Measured: **~30 s to level 8,
-4/4 win rate** at f=1000 / 20×20 / 8 bots; robust across 10×10–40×40 maps. It
-exploits the two server facts from §1: drop *all* stones once, then incant
-repeatedly — each ritual eats only its level's share, and all six players level
-every time.
+Amener N bots de même niveau sur une tuile, sans connaître les positions, est la
+partie difficile. Quatre handshakes par broadcast le résolvent. Ce sont les
+primitives de convergence que le blitz (§10) pilote, et elles soutiennent aussi le
+repli par niveau de dernier recours (§10) :
 
-After the quick solo **L1→L2**, every bot enters
-[`manifest_choose`](baseline/zappy_ai_baseline.py#L1376), a phased rendezvous:
-
-1. **`collect`** — every bot races to gather the **full L2→L8 stone manifest**
-   (`manifest_target` = the sum of every level's requirement: 8 linemate, 8
-   deraumere, 10 sibur, 5 mendiane, 6 phiras, 1 thystame = **38 stones**). The
-   **first** to complete elects itself **anchor** and broadcasts `MFOOD`.
-2. **`bank`** — on hearing `MFOOD`, everyone stops collecting and fills food to
-   **`food_reserve` (default 200)**.
-3. **`ready`** — banked bots broadcast `MRDY`/`MRDY2`. The anchor counts ready
-   mates; when `len(ready_too) + 1 ≥ 6`
-   ([the `+1` is the anchor itself](baseline/zappy_ai_baseline.py#L1420)) it
-   fires `MCOME` and opens a 6-player gather.
-4. **`converge`** — the cohort walks to the anchor **on full food tanks**,
-   homing on the anchor's gather bearing; arrival is tracked by **ARRIVED**
-   (§8), not the level-blind player count.
-5. **`blitz`** — with 6 ARRIVED, the anchor
-   ([`start_manifest_blitz`](baseline/zappy_ai_baseline.py#L1461)) drops all 38
-   stones and fires `Incantation`. On each `Current level: N` the handler
-   immediately fires the next `Incantation`
-   ([blitz driver](baseline/zappy_ai_baseline.py#L528)) — L2→L8 runs in ~3 s.
-
-### Why `food_reserve` is the load-bearing knob
-Convergence is slow and oscillating (§6), so the anchor must **hold the rally
-for ~25 s** while six bodies trickle onto its tile. At ~8 food/sec, hold time ≈
-`reserve / 8`, so **200 ≈ 25 s** — just enough. Below ~140 the rally starves
-before six assemble; above 200 just wastes foraging time. It's **map-size
-independent**. Two supporting fixes make it work: the anchor's gather is
-**persistent** (never resets the ARRIVED count — resetting was the old
-"997-abort thrash"), and the anchor **does not bail** at the normal food-abort
-floor, riding down to `survive_min` while eating tile food
-([`call_teammates`](baseline/zappy_ai_baseline.py#L862)).
-
-Anchor election is deterministic under contention: any bot hearing an
-`MFOOD`/`MRDY` from a **lower `bot_id`** demotes itself and rallies to that one
-([`manifest_demote_to`](baseline/zappy_ai_baseline.py#L739)). If no anchor ever
-emerges (e.g. the map lacks a thystame, or fewer than 6 mates are reachable)
-within `manifest_timeout`, the bot sets `manifest_gave_up` and plays the simple
-per-level gather (§8) as an automatic last-resort safety — not a selectable mode,
-just so a degenerate map doesn't brick the team forever.
-
-### Broadcast vocabulary
-| Message | From → meaning |
-|---------|----------------|
-| `HELLO` | any bot on boot: census ping — union the `from` id, elect the forker (§9) |
-| `GATHER` / `GATHER_ACK` | leader opens rally / teammate accepts |
-| `ARRIVED` | follower is physically on the leader's tile (bearing 0) |
-| `HOLD` | leader: freeze, ritual starting |
-| `MFOOD` | anchor: stop collecting, bank food |
-| `MRDY` / `MRDY2` | anchor fed+ready / member fed+ready |
-| `MCOME` | anchor: launch, converge now |
-
-All carry `:level=…:from=<bot_id>` and are filtered by the `<team>:` prefix.
+- **GATHER / GATHER_ACK** — un leader avec les pierres ouvre une requête
+  (`start_gather`), en diffusant `GATHER:req=…:level=…:need=…`. Les coéquipiers de
+  même niveau et nourris répondent `GATHER_ACK` et commencent à homer sur le
+  relèvement. Le plus petit `bot_id` gagne si deux leaders entrent en collision
+  ([`handle_gather`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1044)).
+- **ARRIVED (le grand déblocage)** — `Look` montre `"player"` **sans niveau**,
+  donc un leader ne peut pas distinguer un vrai coéquipier de même niveau d'un
+  bébé niveau 1 de passage, et tirer sur le mauvais compte garantit un `ko`. À la
+  place, quand le broadcast du leader atteint un suiveur en **relèvement 0**, le
+  suiveur *sait* qu'il est sur la tuile exacte et annonce `ARRIVED`. Le leader
+  compte les **émetteurs ARRIVED distincts de même niveau** et n'incante que sur
+  ce compte
+  ([`present = 1 + len(self.arrived_at_leader)`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L886)).
+  Cela a fait passer le taux de réussite des rituels de ~14 % à ~92 %.
+- **HOLD** — avant son `Set…Set…Incantation` en plusieurs étapes, le leader
+  diffuse `HOLD` pour que les coéquipiers assemblés **se figent sur la tuile** au
+  lieu de partir errer et de faire passer le compte sous `need`. Seuls les bots
+  suivant réellement *ce* leader se figent
+  ([`handle_hold`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1010)), sinon un broadcast à
+  l'échelle de la carte figerait et affamerait les non-participants.
 
 ---
 
-## 11. Tuning knobs & environment
+## 9. Reproduction, fork & œufs
 
-| Var / field | Default | Effect |
-|-------------|---------|--------|
-| `ZAPPY_RESERVE` | 200 | banked food before converging (the main dial) |
-| `ZAPPY_TEAM_TARGET` | 6 | census quorum — the elected forker forks until the team reaches this (§9) |
-| `ZAPPY_CENSUS_TIMEOUT` | 30 | seconds the census stays open before falling back to `max_forks` |
-| `max_forks` | 3 | per-bot fork cap (census fallback / `manifest_gave_up`) |
-| `survive_food` | 8 | flat survival floor |
-| `-f <freq>` | measured | server frequency; practical ceiling ~1000–1500 |
+Le `Fork` serveur ne fait que **pondre un œuf et libérer un slot** — rien n'éclôt
+tant qu'un *nouveau client ne se connecte pas* avec le nom d'équipe. Donc à chaque
+`Fork ok` le bot **engendre un nouveau processus**
+([`spawn_child_for_egg`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L388), `subprocess.Popen`
+détaché) pour occuper cet œuf ; sinon les œufs pourrissent et la population ne
+croît jamais. `SIGCHLD` est ignoré pour que les enfants ne deviennent pas des
+zombies.
 
-**Frequency ceiling:** the bot is **I/O-wait-bound** (blocked on the server's
-per-action delay), not CPU-bound. Past ~f=1500 a single
-action's wall-clock exceeds the `7/f` budget and the bot starves. Stick to
+Le fork est **discipliné**
+([`should_fork`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1701)) : seulement tant que
+**niveau ≤ 2**, seulement bien nourri, et limité en cadence par bot. Un bot
+niveau 3+ est précieux et contraint par la food — forker lui coûte de la food
+*et* ajoute un concurrent pour une food rare, alors que le bébé ne grandira pas à
+temps pour aider. Un fork sobre a maintenu l'attrition basse, ce qui a permis à
+une cohorte de haut niveau de persister et grimper au niveau 8.
+
+### Le recensement d'ouverture — `HELLO` et l'élection du forker
+Le blitz (§10) a besoin de **≥ `census_target` (par défaut 6) coéquipiers
+joignables**, mais un bot ne peut pas demander au serveur la taille de son équipe
+— `Connect_nbr` renvoie les *slots libres*, pas le compte actif (§2). Donc
+l'équipe **s'auto-compte par broadcast** :
+
+- Au démarrage chaque bot diffuse **`HELLO:from=<bot_id>`**
+  ([`broadcast_hello`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1661)) et le ré-émet tous
+  les `hello_interval` (`60/freq`, min 1 s) tant que le recensement est ouvert.
+  Chacun fait l'union des ids émetteurs dans
+  [`team_members`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L209). À la **première** détection
+  d'un nouvel id, le bot renvoie un HELLO en écho
+  ([`handle_hello`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1665)) pour que le nouveau
+  venu apprenne les bots déjà présents — borné à la première détection pour ne pas
+  saturer.
+
+- **Élection du forker :** le bot avec le **plus petit `bot_id` connu** est le
+  seul forker ([`is_census_forker`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1684)). Lui
+  seul forke — *au-delà du plafond normal par bot* — jusqu'à ce que l'union
+  atteigne `census_target`, puis **personne ne forke**
+  ([branche census de `should_fork`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1721)). Le
+  compte de membres observé est le limiteur global, donc le total de forks ≈
+  `quorum − bots_initiaux`. Les enfants forkés et les frères tardifs font HELLO au
+  démarrage et rejoignent l'union ; leurs ids sont **seedés par le temps**
+  (toujours plus grands) pour ne jamais détrôner le forker élu — l'élection est
+  stable sans handshake.
+
+Deux garde-fous de cadence gardent le compte honnête
+([`census_maintain`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1689) /
+[`should_fork`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1701)) :
+- une **fenêtre de stabilisation** (`census_settle`, 3 s) avant qu'un bot
+  n'agisse comme forker, pour qu'un bot tout juste démarré ne forke pas alors
+  qu'il pense (à tort) être seul — un singleton est toujours son propre id minimal;
+- après chaque `Fork ok` le fork suivant **patiente** jusqu'à ce que l'enfant
+  s'annonce via HELLO
+  ([`census_fork_deadline`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L663)), ou jusqu'à
+  `census_child_timeout` (4 s) si l'enfant ne démarre jamais — pour qu'un œuf lent
+  ne gonfle pas la population, et qu'un œuf mort-né ne bloque pas le recensement.
+
+Tout le recensement est borné par `census_timeout` (30 s) ; si le quorum ne se
+forme jamais, il se ferme et `should_fork` revient au **plafond original par bot**
+(`max_forks`), le même repli que le blitz manifeste utilise sur une carte
+dégénérée (§10).
+
+---
+
+## 10. Le Blitz — la stratégie
+
+**La seule et unique stratégie** (pas d'interrupteur). Mesuré : **~30 s pour le
+niveau 8, 4/4 de taux de victoire** à f=1000 / 20×20 / 8 bots ; robuste sur des
+cartes 10×10–40×40. Elle exploite les deux faits serveur du §1 : lâcher *toutes*
+les pierres une fois, puis incanter en boucle — chaque rituel ne mange que la part
+de son niveau, et les six joueurs montent à chaque fois.
+
+Après le rapide **L1→L2** en solo, chaque bot entre dans
+[`manifest_choose`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1376), un rendez-vous en
+phases :
+
+1. **`collect`** — chaque bot fonce ramasser le **manifeste complet de pierres
+   L2→L8** (`manifest_target` = la somme de chaque exigence de niveau : 8
+   linemate, 8 deraumere, 10 sibur, 5 mendiane, 6 phiras, 1 thystame = **38
+   pierres**). Le **premier** à terminer s'auto-élit **anchor** et diffuse
+   `MFOOD`.
+2. **`bank`** — en entendant `MFOOD`, tout le monde arrête de collecter et remplit
+   la food jusqu'à **`food_reserve` (par défaut 200)**.
+3. **`ready`** — les bots remplis diffusent `MRDY`/`MRDY2`. L'anchor compte les
+   coéquipiers prêts ; quand `len(ready_too) + 1 ≥ 6`
+   ([le `+1` est l'anchor lui-même](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1420)) il tire
+   `MCOME` et ouvre un rassemblement à 6 joueurs.
+4. **`converge`** — la cohorte marche vers l'anchor **réservoirs de food pleins**,
+   en homing sur le relèvement de rassemblement de l'anchor ; l'arrivée est
+   suivie par **ARRIVED** (§8), pas par le compte de joueurs aveugle au niveau.
+5. **`blitz`** — avec 6 ARRIVED, l'anchor
+   ([`start_manifest_blitz`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L1461)) lâche les 38
+   pierres et tire `Incantation`. À chaque `Current level: N`, le handler tire
+   immédiatement l'`Incantation` suivante
+   ([driver du blitz](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L528)) — L2→L8 en ~3 s.
+
+### Pourquoi `food_reserve` est le bouton porteur
+La convergence est lente et oscillante (§6), donc l'anchor doit **tenir le
+ralliement ~25 s** pendant que six corps affluent vers sa tuile. À ~8 food/s, le
+temps de maintien ≈ `réserve / 8`, donc **200 ≈ 25 s** — juste assez. Sous ~140 le
+ralliement meurt de faim avant que six s'assemblent ; au-dessus de 200 on gaspille
+juste du temps de fourrage. C'est **indépendant de la taille de carte**. Deux
+correctifs de soutien le font marcher : le rassemblement de l'anchor est
+**persistant** (ne réinitialise jamais le compte ARRIVED — réinitialiser était
+l'ancien « thrash d'abandon à 997 »), et l'anchor **n'abandonne pas** au plancher
+normal d'abandon-food, descendant jusqu'à `survive_min` en mangeant la food de la
+tuile ([`call_teammates`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L862)).
+
+L'élection de l'anchor est déterministe en cas de contention : tout bot entendant
+un `MFOOD`/`MRDY` d'un **`bot_id` plus petit** se rétrograde et se rallie à
+celui-là ([`manifest_demote_to`](https://github.com/EpitechPGE2-2025/G-YEP-400-RUN-4-1-zappy-3/blob/main/ai/baseline/zappy_ai_baseline.py#L739)). Si aucun
+anchor n'émerge jamais (p. ex. la carte manque de thystame, ou moins de 6
+coéquipiers sont joignables) dans `manifest_timeout`, le bot pose
+`manifest_gave_up` et joue le simple rassemblement par niveau (§8) en filet de
+sécurité automatique de dernier recours — pas un mode sélectionnable, juste pour
+qu'une carte dégénérée ne bloque pas l'équipe à jamais.
+
+### Vocabulaire des broadcasts
+| Message | De → sens |
+|---------|-----------|
+| `HELLO` | tout bot au démarrage : ping de recensement — union de l'id `from`, élit le forker (§9) |
+| `GATHER` / `GATHER_ACK` | leader ouvre un ralliement / coéquipier accepte |
+| `ARRIVED` | suiveur physiquement sur la tuile du leader (relèvement 0) |
+| `HOLD` | leader : figez-vous, rituel en cours de démarrage |
+| `MFOOD` | anchor : arrêtez de collecter, banquez la food |
+| `MRDY` / `MRDY2` | anchor nourri+prêt / membre nourri+prêt |
+| `MCOME` | anchor : lancement, convergez maintenant |
+
+Tous portent `:level=…:from=<bot_id>` et sont filtrés par le préfixe `<team>:`.
+
+---
+
+## 11. Boutons de réglage & environnement
+
+| Var / champ | Défaut | Effet |
+|-------------|--------|-------|
+| `ZAPPY_RESERVE` | 200 | food banquée avant convergence (le cadran principal) |
+| `ZAPPY_TEAM_TARGET` | 6 | quorum de recensement — le forker élu forke jusqu'à ce que l'équipe l'atteigne (§9) |
+| `ZAPPY_CENSUS_TIMEOUT` | 30 | secondes pendant lesquelles le recensement reste ouvert avant repli sur `max_forks` |
+| `max_forks` | 3 | plafond de fork par bot (repli census / `manifest_gave_up`) |
+| `survive_food` | 8 | plancher de survie plat |
+| `-f <freq>` | mesurée | fréquence serveur ; plafond pratique ~1000–1500 |
+
+**Plafond de fréquence :** le bot est **limité par l'attente I/O** (bloqué sur le
+délai serveur par action), pas par le CPU. Au-delà de ~f=1500, le temps mural
+d'une seule action dépasse le budget `7/f` et le bot meurt de faim. Rester à
 f ≤ 1000.
 
 ---
 
-## 12. Observability
+## 12. Observabilité
 
-The bot runs **quiet by default** (per-action logging costs ms/action and
-starves at high f). `-v` enables the full `[AI → SERVER]` / `[SERVER → AI]`
-trace. Always-on lifecycle markers regardless of `-v`: **`LEVELUP <n>`**,
-**`[AI] DEAD`**, **`spawned child`** — grep these to score quiet runs.
+Le bot tourne **silencieux par défaut** (le log par action coûte des ms/action et
+affame à haute f). `-v` active la trace complète `[AI → SERVER]` / `[SERVER →
+AI]`. Marqueurs de cycle de vie toujours actifs quel que soit `-v` :
+**`LEVELUP <n>`**, **`[AI] DEAD`**, **`spawned child`** — à grep pour scorer les
+runs silencieux.
 
 ---
 
-## 13. One-line summary
+## 13. Résumé en une ligne
 
-Solo-climb to L2 → every bot hoards the full 38-stone L2→L8 manifest → first done
-becomes the anchor → the team banks a big food reserve → six converge on full
-tanks via sound-homing + the ARRIVED handshake → the anchor drops everything and
-incants six times back-to-back → **6 drones hit level 8 in ~30 s and the game is
-won.**
+Montée solo jusqu'à L2 → chaque bot thésaurise le manifeste complet de 38 pierres
+L2→L8 → le premier terminé devient l'anchor → l'équipe banque une grosse réserve
+de food → six convergent réservoirs pleins via homing sonore + le handshake
+ARRIVED → l'anchor lâche tout et incante six fois d'affilée → **6 drones touchent
+le niveau 8 en ~30 s et la partie est gagnée.**

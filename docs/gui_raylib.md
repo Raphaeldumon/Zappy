@@ -74,7 +74,7 @@ raylib-free et ne manipule que des `gfx::` :
   `mouseWheel`, `drawText/drawRect/drawModelEx/drawCube/…`, `worldToScreen`,
   `loadModel/loadTexture/loadMusic/loadAnimations` + leurs `unload`.
 
-Conséquence : changer de moteur (Vulkan, voir `03_gui_vulkan.md`) ne touche que la
+Conséquence : changer de moteur (p. ex. Vulkan) ne touche que la
 façade ; la logique d'affichage et le réseau ne bougent pas.
 
 ## Réseau et flux protocole
@@ -106,8 +106,8 @@ façade ; la logique d'affichage et le réseau ne bougent pas.
 
 Chaque frame enchaîne trois étapes :
 
-1. **`handleInput()`** — caméra free-fly (souris = regard, ZQSD = vol, Space/Shift =
-   haut/bas, molette = vitesse de vol), sélection de tuile (clic = ray-pick,
+1. **`handleInput()`** — caméra free-fly (souris = regard, ZQSD = vol, Shift = boost
+   vitesse, Space / Ctrl (ou C) = haut/bas, molette = vitesse de vol), sélection de tuile (clic = ray-pick,
    double-clic = focus), suivi de joueur (`F`), contrôle de vitesse (`sst`), pause /
    scrub timeline, `Enter` masque/affiche l'écran de fin.
 2. **`update()`** — `recordIncoming()` draine le socket, applique les lignes, met à
