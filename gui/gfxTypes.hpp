@@ -115,6 +115,34 @@ enum class MouseBtn
     Left
 };
 
+// Gamepad vocabulary (Xbox-style names; mapped to raylib codes in the facade).
+enum class PadBtn
+{
+    FaceDown,  // A / Cross
+    FaceRight, // B / Circle
+    FaceLeft,  // X / Square
+    FaceUp,    // Y / Triangle
+    LeftBumper,
+    RightBumper,
+    Select, // Back / Share
+    Start,  // Start / Options
+    LeftThumb,
+    RightThumb,
+    DpadUp,
+    DpadDown,
+    DpadLeft,
+    DpadRight,
+};
+enum class PadAxis
+{
+    LeftX,
+    LeftY,
+    RightX,
+    RightY,
+    LeftTrigger,  // raylib reports -1 (released) .. +1 (fully pressed)
+    RightTrigger, // idem
+};
+
 // --- Small vector helpers (replace the raymath calls used at runtime) ------
 inline Vec3 add(Vec3 a, Vec3 b)
 {

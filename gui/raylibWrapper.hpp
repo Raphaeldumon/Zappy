@@ -54,6 +54,12 @@ class RaylibEngine
     bool mousePressed(gfx::MouseBtn btn) const;
     gfx::Vec2 mouseDelta() const;
     float mouseWheel() const;
+    // Gamepad (first connected pad only). Axis values are raw raylib readings
+    // (-1..1, triggers rest at -1); callers apply their own deadzone.
+    bool padAvailable() const;
+    bool padDown(gfx::PadBtn btn) const;
+    bool padPressed(gfx::PadBtn btn) const;
+    float padAxis(gfx::PadAxis axis) const;
     double time() const;
     float frameTime() const;
 
@@ -99,15 +105,33 @@ class RaylibEngine
     void drawPlane(gfx::Vec3 center, gfx::Vec2 size, gfx::Color c);
     void drawSphere(gfx::Vec3 center, float radius, gfx::Color c);
     void drawLine3D(gfx::Vec3 a, gfx::Vec3 b, gfx::Color c);
+    void drawCircle3D(gfx::Vec3 center, float radius, gfx::Color c); // ground-parallel ring
     gfx::Vec2 worldToScreen(const gfx::Camera &cam, gfx::Vec3 world) const;
     gfx::Ray screenToWorldRay(const gfx::Camera &cam, gfx::Vec2 screen) const;
 
+    // --- UI font ---
+    // Loads a TTF/OTF used by every drawText/measureText call from then on;
+    // when absent (load failed / never called) they fall back to raylib's
+    // built-in font, so the GUI never renders without text.
+    bool loadUiFont(const std::string &path, int baseSize = 64);
+    void unloadUiFont();
+
     // --- 2D drawing ---
     void drawText(const std::string &text, int x, int y, int fontSize, gfx::Color c);
+    int measureText(const std::string &text, int fontSize) const; // pixel width at that size
     void drawRect(int x, int y, int w, int h, gfx::Color c);
     void drawRectLines(int x, int y, int w, int h, gfx::Color c);
     void drawLine(int x1, int y1, int x2, int y2, gfx::Color c);
     void drawCircle(int cx, int cy, float radius, gfx::Color c);
+
+    // --- Scene shading / post FX ---
+    // Lighting: once loaded, every model (existing and future) is drawn with
+    // it; beginMode3D refreshes the eye-position uniform from the camera.
+    bool loadLightingShader(const std::string &vs, const std::string &fs);
+    // Bloom: the 3D scene renders into an offscreen target that endMode3D
+    // composites through the given fullscreen shader. 2D UI drawn afterwards
+    // stays crisp. Both are optional — missing files just skip the effect.
+    bool enableBloom(const std::string &fs);
 
     // --- Composite scene primitives (raylib/rlgl-coupled, owned here) ---
     bool loadSkybox(const std::string &png, const std::string &vs, const std::string &fs);

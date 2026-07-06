@@ -101,6 +101,7 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
         std::uint32_t id;
         if (!(iss >> idtok >> x >> y >> o >> l >> team) || !parseId(idtok, id))
             return;
+        const bool firstSeen = state.players.find(id) == state.players.end();
         unmirror(map, state, id); // in case of a stale entry
         // aiPlayer has const id/team and no assignment, so replace by erase+emplace.
         state.players.erase(id);
@@ -112,6 +113,8 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
         }
         if (inBounds(map, x, y))
             map.addPlayerToTile(x, y, it->second);
+        if (firstSeen)
+            state.feedEvents.push_back({GameEventKind::Join, id, x, y, l, team});
         return;
     }
 
@@ -143,6 +146,7 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
         auto it = state.players.find(id);
         if (it != state.players.end())
         {
+            const bool levelledUp = l > it->second.getLevel();
             it->second.setLevel(l);
             setWinnerIfLevel8(it->second, state);
             if (inBounds(map, it->second.getX(), it->second.getY()))
@@ -150,6 +154,9 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
                 map.removePlayerFromTile(it->second.getX(), it->second.getY(), it->second);
                 map.addPlayerToTile(it->second.getX(), it->second.getY(), it->second);
             }
+            if (levelledUp)
+                state.feedEvents.push_back(
+                    {GameEventKind::LevelUp, id, it->second.getX(), it->second.getY(), l, it->second.getTeam()});
         }
         return;
     }
@@ -164,8 +171,12 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
         // animation at the spot the player vanished from (it is gone after this).
         auto it = state.players.find(id);
         if (it != state.players.end())
+        {
             state.animEvents.push_back(
                 {id, PlayerAnimEventKind::Death, it->second.getX(), it->second.getY(), it->second.getOrientation()});
+            state.feedEvents.push_back({GameEventKind::Death, id, it->second.getX(), it->second.getY(),
+                                        it->second.getLevel(), it->second.getTeam()});
+        }
         unmirror(map, state, id);
         state.players.erase(id);
         return;
@@ -186,6 +197,21 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
                                          : tag == "pbc" ? PlayerAnimEventKind::Jump
                                                         : PlayerAnimEventKind::Pickup;
         state.animEvents.push_back({id, kind, it->second.getX(), it->second.getY(), it->second.getOrientation()});
+        if (tag == "pbc")
+        {
+            // The message is the rest of the line, verbatim (may contain spaces).
+            std::string msg;
+            std::getline(iss, msg);
+            if (!msg.empty() && msg.front() == ' ')
+                msg.erase(0, 1);
+            state.feedEvents.push_back(
+                {GameEventKind::Broadcast, id, it->second.getX(), it->second.getY(), 0, msg});
+        }
+        else if (tag == "pex")
+        {
+            state.feedEvents.push_back(
+                {GameEventKind::Eject, id, it->second.getX(), it->second.getY(), 0, it->second.getTeam()});
+        }
         return;
     }
 
@@ -216,6 +242,7 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
         if (!(iss >> x >> y >> l) || !inBounds(map, x, y))
             return;
         state.incanting.insert(tileKey(map, x, y));
+        state.feedEvents.push_back({GameEventKind::IncantStart, 0, x, y, l, {}});
         return;
     }
 
@@ -225,6 +252,22 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
         if (!(iss >> x >> y) || !inBounds(map, x, y))
             return;
         state.incanting.erase(tileKey(map, x, y));
+        int result = -1; // servers send 0/1; tolerate its absence
+        iss >> result;
+        state.feedEvents.push_back({GameEventKind::IncantEnd, 0, x, y, result, {}});
+        return;
+    }
+
+    if (tag == "pfk")
+    {
+        std::string idtok;
+        std::uint32_t id;
+        if (!(iss >> idtok) || !parseId(idtok, id))
+            return;
+        auto it = state.players.find(id);
+        if (it != state.players.end())
+            state.feedEvents.push_back(
+                {GameEventKind::Fork, id, it->second.getX(), it->second.getY(), 0, it->second.getTeam()});
         return;
     }
 
@@ -235,10 +278,11 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
         {
             state.hasWinner = true;
             state.winner = name;
+            state.feedEvents.push_back({GameEventKind::Win, 0, 0, 0, 0, name});
         }
         return;
     }
 
-    // msz: map already sized at construction. Everything else (pin/pdr/pfk/
+    // msz: map already sized at construction. Everything else (pin/pdr/
     // smg/suc/sbp) is cosmetic — bct/ppo already keep the model correct.
 }

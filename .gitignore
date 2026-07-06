@@ -73,6 +73,7 @@ Testing/
 .vscode/
 CLAUDE.md
 graphify-out/
+.understand-anything/
 .claude/
 
 # MkDocs build output

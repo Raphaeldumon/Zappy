@@ -114,6 +114,62 @@ int toRlKey(gfx::Key k)
     return KEY_NULL;
 }
 
+int toRlPadBtn(gfx::PadBtn b)
+{
+    switch (b)
+    {
+    case gfx::PadBtn::FaceDown:
+        return GAMEPAD_BUTTON_RIGHT_FACE_DOWN;
+    case gfx::PadBtn::FaceRight:
+        return GAMEPAD_BUTTON_RIGHT_FACE_RIGHT;
+    case gfx::PadBtn::FaceLeft:
+        return GAMEPAD_BUTTON_RIGHT_FACE_LEFT;
+    case gfx::PadBtn::FaceUp:
+        return GAMEPAD_BUTTON_RIGHT_FACE_UP;
+    case gfx::PadBtn::LeftBumper:
+        return GAMEPAD_BUTTON_LEFT_TRIGGER_1;
+    case gfx::PadBtn::RightBumper:
+        return GAMEPAD_BUTTON_RIGHT_TRIGGER_1;
+    case gfx::PadBtn::Select:
+        return GAMEPAD_BUTTON_MIDDLE_LEFT;
+    case gfx::PadBtn::Start:
+        return GAMEPAD_BUTTON_MIDDLE_RIGHT;
+    case gfx::PadBtn::LeftThumb:
+        return GAMEPAD_BUTTON_LEFT_THUMB;
+    case gfx::PadBtn::RightThumb:
+        return GAMEPAD_BUTTON_RIGHT_THUMB;
+    case gfx::PadBtn::DpadUp:
+        return GAMEPAD_BUTTON_LEFT_FACE_UP;
+    case gfx::PadBtn::DpadDown:
+        return GAMEPAD_BUTTON_LEFT_FACE_DOWN;
+    case gfx::PadBtn::DpadLeft:
+        return GAMEPAD_BUTTON_LEFT_FACE_LEFT;
+    case gfx::PadBtn::DpadRight:
+        return GAMEPAD_BUTTON_LEFT_FACE_RIGHT;
+    }
+    return GAMEPAD_BUTTON_UNKNOWN;
+}
+
+int toRlPadAxis(gfx::PadAxis a)
+{
+    switch (a)
+    {
+    case gfx::PadAxis::LeftX:
+        return GAMEPAD_AXIS_LEFT_X;
+    case gfx::PadAxis::LeftY:
+        return GAMEPAD_AXIS_LEFT_Y;
+    case gfx::PadAxis::RightX:
+        return GAMEPAD_AXIS_RIGHT_X;
+    case gfx::PadAxis::RightY:
+        return GAMEPAD_AXIS_RIGHT_Y;
+    case gfx::PadAxis::LeftTrigger:
+        return GAMEPAD_AXIS_LEFT_TRIGGER;
+    case gfx::PadAxis::RightTrigger:
+        return GAMEPAD_AXIS_RIGHT_TRIGGER;
+    }
+    return GAMEPAD_AXIS_LEFT_X;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -169,6 +225,22 @@ struct RaylibEngine::Impl
     Shader skyShader{};
     bool skyboxLoaded{false};
 
+    // UI font, used by drawText/measureText when loaded (built-in otherwise).
+    Font uiFont{};
+    bool uiFontLoaded{false};
+
+    // Per-pixel lighting applied to every model's materials.
+    Shader lightShader{};
+    bool lightLoaded{false};
+    int lightViewPosLoc{-1};
+
+    // Bloom post pass: 3D scene renders into sceneRT, composited in endMode3D.
+    Shader bloomShader{};
+    bool bloomLoaded{false};
+    int bloomResLoc{-1};
+    RenderTexture2D sceneRT{};
+    bool sceneRTActive{false};
+
     bool valid(int h, std::size_t n) const
     {
         return h >= 0 && static_cast<std::size_t>(h) < n;
@@ -188,6 +260,14 @@ RaylibEngine::~RaylibEngine()
 {
     // Free any GPU resources still loaded while the GL context is alive.
     unloadSkybox();
+    unloadUiFont();
+    if (_impl->lightLoaded)
+        UnloadShader(_impl->lightShader);
+    if (_impl->bloomLoaded)
+    {
+        UnloadShader(_impl->bloomShader);
+        UnloadRenderTexture(_impl->sceneRT);
+    }
     for (auto &s : _impl->animSets)
         if (s.anims)
             UnloadModelAnimations(s.anims, s.count);
@@ -237,7 +317,9 @@ int RaylibEngine::screenHeight() const
 }
 void RaylibEngine::drawFps(int x, int y)
 {
-    DrawFPS(x, y);
+    // Not DrawFPS(): that always uses the built-in font, which would make the
+    // FPS counter the one label ignoring the loaded UI font.
+    drawText(TextFormat("%2i FPS", GetFPS()), x, y, 20, gfx::GREEN);
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +348,22 @@ gfx::Vec2 RaylibEngine::mouseDelta() const
 float RaylibEngine::mouseWheel() const
 {
     return GetMouseWheelMove();
+}
+bool RaylibEngine::padAvailable() const
+{
+    return IsGamepadAvailable(0);
+}
+bool RaylibEngine::padDown(gfx::PadBtn b) const
+{
+    return IsGamepadButtonDown(0, toRlPadBtn(b));
+}
+bool RaylibEngine::padPressed(gfx::PadBtn b) const
+{
+    return IsGamepadButtonPressed(0, toRlPadBtn(b));
+}
+float RaylibEngine::padAxis(gfx::PadAxis a) const
+{
+    return GetGamepadAxisMovement(0, toRlPadAxis(a));
 }
 double RaylibEngine::time() const
 {
@@ -379,8 +477,66 @@ gfx::ModelHandle RaylibEngine::loadModel(const std::string &path)
             UnloadModel(m); // free any partial allocation
         return gfx::NoHandle;
     }
+    // Route every material through the lighting shader (glTF puts the real
+    // materials at 1+, with a raylib default at 0 — cover them all).
+    if (_impl->lightLoaded)
+        for (int i = 0; i < m.materialCount; ++i)
+            m.materials[i].shader = _impl->lightShader;
     _impl->models.push_back(m);
     return static_cast<gfx::ModelHandle>(_impl->models.size() - 1);
+}
+
+bool RaylibEngine::loadLightingShader(const std::string &vs, const std::string &fs)
+{
+    if (!FileExists(vs.c_str()) || !FileExists(fs.c_str()))
+    {
+        TraceLog(LOG_WARNING, "loadLightingShader: missing shader files — flat shading kept");
+        return false;
+    }
+    Shader s = LoadShader(vs.c_str(), fs.c_str());
+    if (s.id == 0)
+    {
+        TraceLog(LOG_WARNING, "loadLightingShader: compile failed — flat shading kept");
+        return false;
+    }
+    _impl->lightShader = s;
+    _impl->lightViewPosLoc = GetShaderLocation(s, "viewPos");
+    _impl->lightLoaded = true;
+
+    // Retro-apply to models loaded before the shader (robust to call order).
+    for (auto &m : _impl->models)
+        for (int i = 0; i < m.materialCount; ++i)
+            m.materials[i].shader = s;
+
+    TraceLog(LOG_INFO, "loadLightingShader: '%s' ready", fs.c_str());
+    return true;
+}
+
+bool RaylibEngine::enableBloom(const std::string &fs)
+{
+    if (!FileExists(fs.c_str()))
+    {
+        TraceLog(LOG_WARNING, "enableBloom: missing '%s' — no post FX", fs.c_str());
+        return false;
+    }
+    Shader s = LoadShader(nullptr, fs.c_str()); // default fullscreen vs
+    if (s.id == 0)
+    {
+        TraceLog(LOG_WARNING, "enableBloom: shader failed to compile — no post FX");
+        return false;
+    }
+    _impl->sceneRT = LoadRenderTexture(GetScreenWidth(), GetScreenHeight());
+    if (_impl->sceneRT.texture.id == 0)
+    {
+        TraceLog(LOG_WARNING, "enableBloom: render texture failed — no post FX");
+        UnloadShader(s);
+        return false;
+    }
+    _impl->bloomShader = s;
+    _impl->bloomResLoc = GetShaderLocation(s, "resolution");
+    _impl->bloomLoaded = true;
+    TraceLog(LOG_INFO, "enableBloom: '%s' ready", fs.c_str());
+    return true;
 }
 
 gfx::BBox RaylibEngine::modelBounds(gfx::ModelHandle h) const
@@ -473,11 +629,41 @@ void RaylibEngine::unloadAnimations(gfx::AnimSetHandle s)
 // ---------------------------------------------------------------------------
 void RaylibEngine::beginMode3D(const gfx::Camera &cam)
 {
+    if (_impl->bloomLoaded)
+    {
+        // Track window size so the offscreen target never stretches.
+        if (_impl->sceneRT.texture.width != GetScreenWidth() || _impl->sceneRT.texture.height != GetScreenHeight())
+        {
+            UnloadRenderTexture(_impl->sceneRT);
+            _impl->sceneRT = LoadRenderTexture(GetScreenWidth(), GetScreenHeight());
+        }
+        BeginTextureMode(_impl->sceneRT);
+        ClearBackground(BLACK);
+        _impl->sceneRTActive = true;
+    }
+    if (_impl->lightLoaded && _impl->lightViewPosLoc >= 0)
+    {
+        const Vector3 eye = toRl(cam.position);
+        SetShaderValue(_impl->lightShader, _impl->lightViewPosLoc, &eye, SHADER_UNIFORM_VEC3);
+    }
     BeginMode3D(toRlCamera(cam));
 }
 void RaylibEngine::endMode3D()
 {
     EndMode3D();
+    if (_impl->sceneRTActive)
+    {
+        EndTextureMode();
+        _impl->sceneRTActive = false;
+        const float res[2] = {static_cast<float>(_impl->sceneRT.texture.width),
+                              static_cast<float>(_impl->sceneRT.texture.height)};
+        if (_impl->bloomResLoc >= 0)
+            SetShaderValue(_impl->bloomShader, _impl->bloomResLoc, res, SHADER_UNIFORM_VEC2);
+        BeginShaderMode(_impl->bloomShader);
+        // Negative height: render textures are stored bottom-up.
+        DrawTextureRec(_impl->sceneRT.texture, Rectangle{0.0f, 0.0f, res[0], -res[1]}, Vector2{0.0f, 0.0f}, WHITE);
+        EndShaderMode();
+    }
 }
 
 void RaylibEngine::drawModelEx(gfx::ModelHandle h, gfx::Vec3 pos, gfx::Vec3 axis, float angleDeg, gfx::Vec3 scale,
@@ -503,6 +689,11 @@ void RaylibEngine::drawLine3D(gfx::Vec3 a, gfx::Vec3 b, gfx::Color c)
 {
     DrawLine3D(toRl(a), toRl(b), toRl(c));
 }
+void RaylibEngine::drawCircle3D(gfx::Vec3 center, float radius, gfx::Color c)
+{
+    // Rotated 90 deg around X so the circle lies flat on the ground plane.
+    DrawCircle3D(toRl(center), radius, Vector3{1.0f, 0.0f, 0.0f}, 90.0f, toRl(c));
+}
 
 gfx::Vec2 RaylibEngine::worldToScreen(const gfx::Camera &cam, gfx::Vec3 world) const
 {
@@ -518,9 +709,57 @@ gfx::Ray RaylibEngine::screenToWorldRay(const gfx::Camera &cam, gfx::Vec2 screen
 // ---------------------------------------------------------------------------
 // 2D drawing
 // ---------------------------------------------------------------------------
+bool RaylibEngine::loadUiFont(const std::string &path, int baseSize)
+{
+    unloadUiFont();
+    // Rasterize the default glyph set at a size above every UI size we draw
+    // (14-34px), so text only ever downscales; bilinear keeps that smooth.
+    Font f = LoadFontEx(path.c_str(), baseSize, nullptr, 0);
+    if (f.texture.id == 0 || f.glyphCount <= 0)
+        return false;
+    SetTextureFilter(f.texture, TEXTURE_FILTER_BILINEAR);
+    _impl->uiFont = f;
+    _impl->uiFontLoaded = true;
+    return true;
+}
+
+void RaylibEngine::unloadUiFont()
+{
+    if (_impl->uiFontLoaded)
+    {
+        UnloadFont(_impl->uiFont);
+        _impl->uiFont = {};
+        _impl->uiFontLoaded = false;
+    }
+}
+
+namespace
+{
+// DrawText's internal letter spacing is fontSize / defaultFontSize (10); use
+// the same ratio for the custom font so swapping fonts never reflows the UI
+// more than the glyph shapes themselves do.
+float uiSpacing(int fontSize)
+{
+    return static_cast<float>(fontSize) / 10.0f;
+}
+} // namespace
+
 void RaylibEngine::drawText(const std::string &text, int x, int y, int fontSize, gfx::Color c)
 {
+    if (_impl->uiFontLoaded)
+    {
+        DrawTextEx(_impl->uiFont, text.c_str(), {static_cast<float>(x), static_cast<float>(y)},
+                   static_cast<float>(fontSize), uiSpacing(fontSize), toRl(c));
+        return;
+    }
     DrawText(text.c_str(), x, y, fontSize, toRl(c));
+}
+int RaylibEngine::measureText(const std::string &text, int fontSize) const
+{
+    if (_impl->uiFontLoaded)
+        return static_cast<int>(
+            MeasureTextEx(_impl->uiFont, text.c_str(), static_cast<float>(fontSize), uiSpacing(fontSize)).x);
+    return MeasureText(text.c_str(), fontSize);
 }
 void RaylibEngine::drawRect(int x, int y, int w, int h, gfx::Color c)
 {

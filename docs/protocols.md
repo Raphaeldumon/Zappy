@@ -19,18 +19,18 @@ Cas spécial `TEAM_NAME == "GRAPHIC"` → le serveur switche sur le protocole GU
 
 | Commande         | Réponse | Coût | Description |
 |------------------|---------|------|-------------|
-| `Forward`        | `ok\n`                     | 7/f | Avance d'une tile |
+| `Forward`        | `ok\n`                     | 7/f | Avance d'une case |
 | `Right`          | `ok\n`                     | 7/f | Pivote à droite |
 | `Left`           | `ok\n`                     | 7/f | Pivote à gauche |
 | `Look`           | `[tile1, tile2, ...]\n`    | 7/f | Cône de vision |
 | `Inventory`      | `[food n, sibur n, ...]\n` | 1/f | Inventaire courant |
 | `Broadcast text` | `ok\n`                     | 7/f | Diffuse texte à tous |
 | `Connect_nbr`    | `value\n`                  | -   | Slots libres team |
-| `Fork`           | `ok\n`                     | 42/f | Pond un egg |
-| `Eject`          | `ok\n` ou `ko\n`           | 7/f | Éjecte les autres de la tile |
+| `Fork`           | `ok\n`                     | 42/f | Pond un oeuf |
+| `Eject`          | `ok\n` ou `ko\n`           | 7/f | Éjecte les autres de la case |
 | `Take object`    | `ok\n` ou `ko\n`           | 7/f | Prend objet |
 | `Set object`     | `ok\n` ou `ko\n`           | 7/f | Dépose objet |
-| `Incantation`    | `Elevation underway\nCurrent level: k\n` puis `ok\n` ou `ko\n` | 300/f | Démarre rituel |
+| `Incantation`    | `Elevation underway...` | 300/f | Démarre rituel |
 
 Réponses asynchrones du serveur (non-sollicitées) :
 - `message K, text\n` : broadcast reçu, K = direction (0..8)
@@ -66,31 +66,31 @@ Conforme au PDF `G-YEP-400_zappy_GUI_protocol.pdf`.
 
 | Serveur → GUI | GUI → Serveur | Description |
 |---------------|---------------|-------------|
-| `msz X Y\n` | `msz\n` | dimensions |
-| `bct X Y q0..q6\n` | `bct X Y\n` | contenu d'une tile |
-| `bct X Y q0..q6\n × nb_tiles` | `mct\n` | contenu de toute la map |
+| `msz X Y\n` | `msz\n` | dimensions de la carte |
+| `bct X Y q0..q6\n` | `bct X Y\n` | contenu d'une case |
+| `bct X Y q0..q6\n × nb_tiles` | `mct\n` | contenu de toute la carte |
 | `tna N\n × nb_teams` | `tna\n` | noms des teams |
 | `pnw n X Y O L N\n` | — | nouvelle connexion joueur |
 | `ppo n X Y O\n` | `ppo n\n` | position joueur |
 | `plv n L\n` | `plv n\n` | niveau joueur |
 | `pin n X Y q0..q6\n` | `pin n\n` | inventaire joueur |
 | `pex n\n` | — | expulsion |
-| `pbc n M\n` | — | broadcast |
+| `pbc n M\n` | — | broadcast (message d'une IA) |
 | `pic X Y L n n …\n` | — | début incantation |
 | `pie X Y R\n` | — | fin incantation |
-| `pfk n\n` | — | egg laid |
-| `pdr n i\n` | — | ressource dropped |
-| `pgt n i\n` | — | ressource taken |
+| `pfk n\n` | — | oeuf posé |
+| `pdr n i\n` | — | ressource posée |
+| `pgt n i\n` | — | ressource ramassée |
 | `pdi n\n` | — | mort joueur |
-| `enw e n X Y\n` | — | egg pondu |
-| `ebo e\n` | — | connexion à un egg |
-| `edi e\n` | — | mort d'un egg |
-| `sgt T\n` | `sgt\n` | get time unit |
-| `sst T\n` | `sst T\n` | set time unit |
-| `seg N\n` | — | end of game (team N gagne) |
+| `enw e n X Y\n` | — | oeuf pondu |
+| `ebo e\n` | — | connexion à un oeuf |
+| `edi e\n` | — | mort d'un oeuf |
+| `sgt T\n` | `sgt\n` | accès à la fréquence|
+| `sst T\n` | `sst T\n` | modification de la fréquence |
+| `seg N\n` | — | fin de la partie(team N gagne) |
 | `smg M\n` | — | message serveur |
-| `suc\n` | — | unknown command |
-| `sbp\n` | — | bad parameter |
+| `suc\n` | — | commande inconnue |
+| `sbp\n` | — | mauvais paramètre d'une commande |
 
 ### Stratégie d'émission serveur
 

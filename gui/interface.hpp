@@ -7,6 +7,7 @@
 #include "raylibWrapper.hpp"
 #include <array>
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -14,8 +15,8 @@
 #include <vector>
 
 // Window defaults
-inline constexpr int DEFAULT_WINDOW_WIDTH = 1280;
-inline constexpr int DEFAULT_WINDOW_HEIGHT = 720;
+inline constexpr int DEFAULT_WINDOW_WIDTH = 1920;
+inline constexpr int DEFAULT_WINDOW_HEIGHT = 950;
 inline constexpr std::string_view WINDOW_TITLE = "Zappy - Graphical Client";
 
 // Edge length of a tile, expressed in 3D world units.
@@ -158,6 +159,34 @@ class Interface
     int _selectedX{-1};
     int _selectedY{-1};
 
+    // --- Hover (crosshair aim) ---
+    // Tile currently under the crosshair, recomputed every frame; (-1,-1) =
+    // aiming off the board. Drives the faint 3D outline and the tooltip.
+    int _hoverX{-1};
+    int _hoverY{-1};
+
+    // --- Event feed ---
+    // Rolling log of narrative events (broadcasts, deaths, elevations...),
+    // drained from GuiState::feedEvents each frame and stamped with arrival
+    // time so entries can fade out with age.
+    struct FeedEntry
+    {
+        float t;          // _elapsed when the event arrived
+        gfx::Color color; // per-kind accent, baked at drain time
+        std::string text; // fully formatted, ready to draw
+    };
+    std::deque<FeedEntry> _feed;
+
+    // --- Speech bubbles ---
+    // One active bubble per broadcasting player, keyed by id; expires after a
+    // few seconds. Drawn projected above the player's head.
+    struct Bubble
+    {
+        std::string text;
+        float until; // _elapsed after which the bubble disappears
+    };
+    std::unordered_map<std::uint32_t, Bubble> _bubbles;
+
     // --- Spectator state ---
     bool _showStats{false};           // Tab: global environment stats panel
     bool _showHelp{false};            // H / F1: full controls overlay
@@ -190,9 +219,18 @@ class Interface
     void render();
 
     // --- Selection ---
-    void pickTile();               // left-click ray -> _selectedX/_selectedY
-    void drawSelectionHighlight(); // 3D outline on the picked tile (call inside Mode3D)
-    void drawTileInfoPanel();      // 2D info panel, top-right (call outside Mode3D)
+    bool aimedTile(int &tx, int &ty) const; // crosshair ray -> tile; false if off-board
+    void pickTile();                        // left-click: aimedTile -> _selectedX/_selectedY
+    void drawSelectionHighlight();          // 3D outline on the picked tile (call inside Mode3D)
+    void drawHoverHighlight();              // faint outline on the aimed tile (call inside Mode3D)
+    void drawIncantationRings();            // pulsing rings on incanting tiles (call inside Mode3D)
+    void drawTileInfoPanel();               // 2D info panel, top-right (call outside Mode3D)
+    void drawHoverTooltip();                // compact tile summary near the crosshair
+
+    // --- Event feed / bubbles ---
+    void drainFeedEvents();  // GuiState::feedEvents -> _feed + _bubbles (call from update())
+    void drawEventFeed();    // scrolling log, bottom-left, age-faded
+    void drawSpeechBubbles(); // broadcast text above player heads
 
     // --- Camera helpers ---
     void initCamera();

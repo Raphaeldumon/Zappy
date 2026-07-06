@@ -23,10 +23,10 @@ BINARIES     := $(SERVER_BIN) $(GUI_BIN) $(AI_BIN)
 PORT         ?= 4242
 MAP_W        ?= 20
 MAP_H        ?= 20
-TEAMS        ?= 1 2 3 4 5 6 7 8
+TEAMS        ?= rouge bleu vert jaune
 CLIENTS      ?= 50
-FREQ         ?= 1000
-BOTS         ?= 8
+FREQ         ?= 100
+BOTS         ?= 1
 HOST         ?= 127.0.0.1
 
 # Mandatory Epitech rules: all, clean, fclean, re — plus the subject-mandated

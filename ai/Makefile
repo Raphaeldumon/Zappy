@@ -4,8 +4,15 @@
 
 NAME	= zappy_ai
 SRC	= baseline/zappy_ai_baseline.py
+# The deliverable is bundled from the split modules; regenerate it whenever a
+# module changes so a stale checked-in bundle can never ship silently.
+MODULES	= $(filter-out $(SRC),$(wildcard baseline/*.py))
 
 all:	$(NAME)
+
+$(SRC):	$(MODULES)
+	python3 baseline/_bundle.py > $(SRC)
+	chmod +x $(SRC)
 
 $(NAME):	$(SRC)
 	cp $(SRC) $(NAME)

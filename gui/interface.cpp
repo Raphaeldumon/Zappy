@@ -16,6 +16,15 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     initCamera();
     // The skybox needs the GL context, so load it after the engine init.
     _engine.loadSkybox("assets/Background.png", "assets/shaders/skybox.vs", "assets/shaders/skybox.fs");
+    // Scene shading: per-pixel sun lighting on every model + bloom over the 3D
+    // pass (UI drawn after stays crisp). Load before the models so materials
+    // pick the shader up at load time; both fail soft to the flat look.
+    _engine.loadLightingShader("assets/shaders/lighting.vs", "assets/shaders/lighting.fs");
+    _engine.enableBloom("assets/shaders/bloom.fs");
+    // Global UI font: every drawText/measureText call goes through it once
+    // loaded; on failure the engine silently keeps raylib's built-in font.
+    if (!_engine.loadUiFont("assets/toxigenesis bd.otf"))
+        gfx::logWarn("loadUiFont: 'assets/toxigenesis bd.otf' failed to load (using built-in font)");
     loadTileTextures();
     loadResourceModels();
     loadPlayerModel();
@@ -622,10 +631,18 @@ void Interface::handleInput()
 {
     const float dt = _engine.frameTime();
 
+    // ---- Gamepad (first pad, when plugged in) mirrors mouse+keyboard below:
+    // sticks fly/look, triggers rise/sink, buttons map onto the key actions.
+    const bool pad = _engine.padAvailable();
+    const auto padStick = [&](gfx::PadAxis a) {
+        const float v = pad ? _engine.padAxis(a) : 0.0f;
+        return std::fabs(v) < 0.15f ? 0.0f : v; // stick deadzone
+    };
+
     // ---- Free look: the captured mouse turns the head (yaw/pitch).
     gfx::Vec2 md = _engine.mouseDelta();
-    _camYaw -= md.x * 0.0030f;
-    _camPitch -= md.y * 0.0030f;
+    _camYaw -= md.x * 0.0030f + padStick(gfx::PadAxis::RightX) * 2.2f * dt;
+    _camPitch -= md.y * 0.0030f + padStick(gfx::PadAxis::RightY) * 2.2f * dt;
     // Clamp pitch just shy of straight up/down so the view never flips.
     const float limit = 1.553f; // ~89deg
     if (_camPitch > limit)
@@ -638,7 +655,10 @@ void Interface::handleInput()
     const gfx::Vec3 forward = {cp * std::sin(_camYaw), std::sin(_camPitch), cp * std::cos(_camYaw)};
     const gfx::Vec3 rightH = {-std::cos(_camYaw), 0.0f, std::sin(_camYaw)}; // strafe stays level
 
-    const float boost = (_engine.keyDown(gfx::Key::LeftShift) || _engine.keyDown(gfx::Key::RightShift)) ? 3.0f : 1.0f;
+    const float boost = (_engine.keyDown(gfx::Key::LeftShift) || _engine.keyDown(gfx::Key::RightShift) ||
+                         (pad && _engine.padDown(gfx::PadBtn::LeftThumb)))
+                            ? 3.0f
+                            : 1.0f;
     const float step = _flySpeed * dt * boost;
     gfx::Vec3 move{0.0f, 0.0f, 0.0f};
 
@@ -655,21 +675,45 @@ void Interface::handleInput()
     if (_engine.keyDown(gfx::Key::LeftControl) || _engine.keyDown(gfx::Key::C))
         move.y -= 1.0f; // descend
 
+    // Left stick flies analog (stick up = forward); triggers rise (RT) / sink (LT).
+    move = gfx::add(move, gfx::scale(forward, -padStick(gfx::PadAxis::LeftY)));
+    move = gfx::add(move, gfx::scale(rightH, padStick(gfx::PadAxis::LeftX)));
+    if (pad)
+    {
+        // raylib triggers rest at -1; remap to 0..1 before use.
+        const float rt = (_engine.padAxis(gfx::PadAxis::RightTrigger) + 1.0f) * 0.5f;
+        const float lt = (_engine.padAxis(gfx::PadAxis::LeftTrigger) + 1.0f) * 0.5f;
+        if (rt > 0.05f)
+            move.y += rt;
+        if (lt > 0.05f)
+            move.y -= lt;
+    }
+
     if (move.x != 0.0f || move.y != 0.0f || move.z != 0.0f)
     {
-        move = gfx::scale(gfx::normalize(move), step);
+        // Clamp (not normalize) so partial stick deflection stays analog while
+        // keyboard diagonals still cap at the same speed as a single key.
+        const float len = gfx::length(move);
+        move = gfx::scale(move, step * std::min(len, 1.0f) / len);
         _camera.position = gfx::add(_camera.position, move);
     }
 
     // ---- Enter dismisses (or brings back) the end screen once there's a winner,
     // so the spectator can keep flying around the finished game normally.
-    if (_state.hasWinner && _engine.keyPressed(gfx::Key::Enter))
+    if (_state.hasWinner && (_engine.keyPressed(gfx::Key::Enter) || _engine.padPressed(gfx::PadBtn::FaceRight)))
         _endHidden = !_endHidden;
 
     // ---- Wheel sets the fly speed (not zoom — there's no pivot to zoom to).
     // While the end screen is up, the same wheel scrolls the winner report instead.
     const bool endScreenUp = _state.hasWinner && !_endHidden;
     float wheel = _engine.mouseWheel();
+    if (pad)
+    {
+        // Held bumpers act as a continuous wheel (~4 notches per second).
+        const float bump = (_engine.padDown(gfx::PadBtn::RightBumper) ? 1.0f : 0.0f) -
+                           (_engine.padDown(gfx::PadBtn::LeftBumper) ? 1.0f : 0.0f);
+        wheel += bump * 4.0f * dt;
+    }
     if (wheel != 0.0f && endScreenUp)
     {
         _endScroll -= wheel * 56.0f;
@@ -688,14 +732,14 @@ void Interface::handleInput()
     }
 
     // ---- R: snap back to the overview (also drops follow).
-    if (_engine.keyPressed(gfx::Key::R))
+    if (_engine.keyPressed(gfx::Key::R) || _engine.padPressed(gfx::PadBtn::FaceLeft))
     {
         _followedPlayer = -1;
         initCamera();
     }
 
     // ---- F: toggle riding along with the selected player.
-    if (_engine.keyPressed(gfx::Key::F))
+    if (_engine.keyPressed(gfx::Key::F) || _engine.padPressed(gfx::PadBtn::FaceUp))
     {
         if (_followedPlayer >= 0)
         {
@@ -714,31 +758,34 @@ void Interface::handleInput()
     }
 
     // ---- Simulation speed: +/- request a new time unit from the server (sst).
-    if (_engine.keyPressed(gfx::Key::Equal) || _engine.keyPressed(gfx::Key::KpAdd))
+    if (_engine.keyPressed(gfx::Key::Equal) || _engine.keyPressed(gfx::Key::KpAdd) ||
+        _engine.padPressed(gfx::PadBtn::DpadUp))
         requestTimeUnit(_desiredFreq + (_desiredFreq < 10 ? 1 : 10));
-    if (_engine.keyPressed(gfx::Key::Minus) || _engine.keyPressed(gfx::Key::KpSubtract))
+    if (_engine.keyPressed(gfx::Key::Minus) || _engine.keyPressed(gfx::Key::KpSubtract) ||
+        _engine.padPressed(gfx::PadBtn::DpadDown))
         requestTimeUnit(_desiredFreq - (_desiredFreq <= 10 ? 1 : 10));
 
     // ---- Timeline: pause, scrub back/forward through recorded history, go live.
-    if (_engine.keyPressed(gfx::Key::P))
+    if (_engine.keyPressed(gfx::Key::P) || _engine.padPressed(gfx::PadBtn::Start))
         togglePause();
-    if (_engine.keyPressed(gfx::Key::PageDown))
+    if (_engine.keyPressed(gfx::Key::PageDown) || _engine.padPressed(gfx::PadBtn::DpadLeft))
         scrubBy(-1.0f); // back in time
-    if (_engine.keyPressed(gfx::Key::PageUp))
+    if (_engine.keyPressed(gfx::Key::PageUp) || _engine.padPressed(gfx::PadBtn::DpadRight))
         scrubBy(+1.0f); // forward in time
     if (_engine.keyPressed(gfx::Key::End))
         goLive();
 
     // ---- Panels / music.
-    if (_engine.keyPressed(gfx::Key::Tab))
+    if (_engine.keyPressed(gfx::Key::Tab) || _engine.padPressed(gfx::PadBtn::Select))
         _showStats = !_showStats;
-    if (_engine.keyPressed(gfx::Key::H) || _engine.keyPressed(gfx::Key::F1))
+    if (_engine.keyPressed(gfx::Key::H) || _engine.keyPressed(gfx::Key::F1) ||
+        _engine.padPressed(gfx::PadBtn::RightThumb))
         _showHelp = !_showHelp;
     if (isMusicTogglePressed(_engine))
         toggleMusic();
 
-    // ---- Left-click (crosshair): select the aimed tile; double-click focuses.
-    if (_engine.mousePressed(gfx::MouseBtn::Left))
+    // ---- Left-click / A button (crosshair): select the aimed tile; double-click focuses.
+    if (_engine.mousePressed(gfx::MouseBtn::Left) || _engine.padPressed(gfx::PadBtn::FaceDown))
     {
         pickTile();
         const double now = _engine.time();
@@ -810,7 +857,11 @@ void Interface::rebuildWorldTo(float t)
     }
     // The replay re-fired every historical action packet; drop the queued one-shots
     // so a scrub doesn't trigger a burst of kicks/jumps/deaths on the next frame.
+    // Same for the narrative feed/bubbles: the log keeps what already scrolled by,
+    // but replayed events must not re-announce themselves.
     _state.animEvents.clear();
+    _state.feedEvents.clear();
+    _bubbles.clear();
     _deathGhosts.clear();
     _playerAnimState.clear();
     _playT = t;
@@ -862,6 +913,13 @@ void Interface::update()
     // Record whatever the server pushed since last frame; in live mode it is
     // also folded into the world right away. Scrubbing replays from _history.
     recordIncoming();
+
+    // Turn queued narrative events into feed lines + speech bubbles.
+    drainFeedEvents();
+
+    // Track the tile under the crosshair for the hover outline + tooltip.
+    if (!aimedTile(_hoverX, _hoverY))
+        _hoverX = _hoverY = -1;
 
     // Seed the speed control from the server's first reported time unit (sgt),
     // so +/- nudge from the real value instead of from zero.
@@ -1174,6 +1232,8 @@ void Interface::render()
         }
     }
 
+    drawIncantationRings();
+    drawHoverHighlight();
     drawSelectionHighlight();
 
     _engine.endMode3D();
@@ -1187,9 +1247,12 @@ void Interface::render()
                          label.color);
     }
 
+    drawSpeechBubbles();
     drawHud();
     drawTimeline();
+    drawEventFeed();
     drawTileInfoPanel();
+    drawHoverTooltip();
     if (_showStats)
         drawStatsPanel();
     if (_showHelp)
@@ -1203,29 +1266,37 @@ void Interface::render()
 // ---------------------------------------------------------------------------
 // Selection
 // ---------------------------------------------------------------------------
-void Interface::pickTile()
+bool Interface::aimedTile(int &tx, int &ty) const
 {
     // The cursor is captured (centred) in free-cam, so aim from the crosshair
     // at the middle of the screen rather than the frozen mouse position.
     gfx::Vec2 centre = {_engine.screenWidth() / 2.0f, _engine.screenHeight() / 2.0f};
     gfx::Ray ray = _engine.screenToWorldRay(_camera, centre);
     if (std::fabs(ray.direction.y) < 1e-6f)
-        return; // ray parallel to the ground, no hit
+        return false; // ray parallel to the ground, no hit
 
     // Intersect the tile-top plane y = kTileTopY.
     float t = (kTileTopY - ray.position.y) / ray.direction.y;
     if (t < 0.0f)
-    {
-        _selectedX = _selectedY = -1; // plane is behind the camera
-        return;
-    }
+        return false; // plane is behind the camera
 
     float hx = ray.position.x + ray.direction.x * t;
     float hz = ray.position.z + ray.direction.z * t;
-    int tx = static_cast<int>(std::floor(hx / TILE_SIZE));
-    int ty = static_cast<int>(std::floor(hz / TILE_SIZE));
+    int x = static_cast<int>(std::floor(hx / TILE_SIZE));
+    int y = static_cast<int>(std::floor(hz / TILE_SIZE));
 
-    if (tx >= 0 && ty >= 0 && tx < _map.getWidth() && ty < _map.getHeight())
+    if (x < 0 || y < 0 || x >= _map.getWidth() || y >= _map.getHeight())
+        return false; // aiming off the board
+
+    tx = x;
+    ty = y;
+    return true;
+}
+
+void Interface::pickTile()
+{
+    int tx = -1, ty = -1;
+    if (aimedTile(tx, ty))
     {
         _selectedX = tx;
         _selectedY = ty;
@@ -1233,6 +1304,43 @@ void Interface::pickTile()
     else
     {
         _selectedX = _selectedY = -1; // clicked off the board -> deselect
+    }
+}
+
+void Interface::drawIncantationRings()
+{
+    if (_state.incanting.empty())
+        return;
+
+    // Three expanding, fading rings per ritual tile plus a pulsing core disc.
+    // The colours sit above the bloom threshold, so the whole thing glows.
+    constexpr int kRings = 3;
+    const gfx::Color kRitual{210, 130, 255, 255};
+    const float y = kTileTopY + 0.25f;
+    const float maxR = TILE_SIZE * 0.46f;
+
+    for (const long long key : _state.incanting)
+    {
+        const int tx = static_cast<int>(key % _map.getWidth());
+        const int ty = static_cast<int>(key / _map.getWidth());
+        const float wx = tx * TILE_SIZE + TILE_SIZE / 2.0f;
+        const float wz = ty * TILE_SIZE + TILE_SIZE / 2.0f;
+
+        for (int i = 0; i < kRings; ++i)
+        {
+            // Phase-offset sawtooth: each ring grows 0 -> maxR then wraps.
+            float phase = _elapsed * 0.7f + static_cast<float>(i) / kRings;
+            phase -= std::floor(phase);
+            const float r = maxR * phase;
+            const auto alpha = static_cast<std::uint8_t>(230.0f * (1.0f - phase));
+            _engine.drawCircle3D({wx, y, wz}, r, gfx::Color{kRitual.r, kRitual.g, kRitual.b, alpha});
+        }
+
+        // Core pulse: a slim bright disc the bloom pass turns into a glow.
+        const float pulse = 0.5f + 0.5f * std::sin(_elapsed * 6.0f);
+        const auto coreA = static_cast<std::uint8_t>(90.0f + 90.0f * pulse);
+        _engine.drawCube({wx, y, wz}, TILE_SIZE * 0.5f, 0.2f, TILE_SIZE * 0.5f,
+                         gfx::Color{kRitual.r, kRitual.g, kRitual.b, coreA});
     }
 }
 
@@ -1247,7 +1355,10 @@ void Interface::drawSelectionHighlight()
     float half = size * 0.5f;
 
     // Translucent overlay + bright gold border just above the tile surface.
-    _engine.drawCube({wx, kTileTopY + 0.15f, wz}, size, 0.3f, size, gfx::Color{255, 230, 0, 70});
+    // The fill breathes slowly so the selection reads as "active", not painted.
+    const float breathe = 0.5f + 0.5f * std::sin(_elapsed * 3.0f);
+    const auto fillA = static_cast<std::uint8_t>(45.0f + 45.0f * breathe);
+    _engine.drawCube({wx, kTileTopY + 0.15f, wz}, size, 0.3f, size, gfx::Color{255, 230, 0, fillA});
 
     float y = kTileTopY + 0.35f;
     gfx::Vec3 a = {wx - half, y, wz - half};
@@ -1321,6 +1432,315 @@ void Interface::drawTileInfoPanel()
 }
 
 // ---------------------------------------------------------------------------
+// Event feed / speech bubbles / hover
+// ---------------------------------------------------------------------------
+namespace
+{
+constexpr std::size_t kFeedKeep = 60;    // entries retained in the deque
+constexpr int kFeedVisible = 9;          // lines drawn at once
+constexpr float kFeedFadeStart = 8.0f;   // seconds fully opaque
+constexpr float kFeedFadeEnd = 14.0f;    // seconds until fully gone
+constexpr float kBubbleSeconds = 4.0f;   // how long a broadcast bubble lingers
+constexpr std::size_t kBubbleMaxChars = 48;
+constexpr std::size_t kFeedMaxChars = 64;
+
+std::string truncated(std::string s, std::size_t maxChars)
+{
+    if (s.size() > maxChars)
+    {
+        s.resize(maxChars - 3);
+        s += "...";
+    }
+    return s;
+}
+
+// The baseline AI coordinates over "TEAM:TYPE:key=value:..." packets; that's
+// wire code, not something a spectator should read. Translate the known
+// intents into plain speech and leave anything unrecognized (other AIs,
+// actual free-text chat) untouched.
+std::string prettyBroadcast(const std::string &raw)
+{
+    std::vector<std::string> parts;
+    std::size_t start = 0;
+    while (start <= raw.size())
+    {
+        const std::size_t sep = raw.find(':', start);
+        if (sep == std::string::npos)
+        {
+            parts.push_back(raw.substr(start));
+            break;
+        }
+        parts.push_back(raw.substr(start, sep - start));
+        start = sep + 1;
+    }
+    if (parts.size() < 2)
+        return raw;
+
+    const std::string &type = parts[1];
+    const auto field = [&](const char *key) -> std::string {
+        for (std::size_t i = 2; i < parts.size(); ++i)
+        {
+            const std::size_t eq = parts[i].find('=');
+            if (eq != std::string::npos && parts[i].compare(0, eq, key) == 0)
+                return parts[i].substr(eq + 1);
+        }
+        return {};
+    };
+
+    if (type == "HELLO")
+        return "Hello !";
+    if (type == "GATHER")
+    {
+        const std::string level = field("level");
+        const std::string need = field("need");
+        std::string msg = "Rally to me";
+        if (!level.empty())
+            msg += " for the level " + level + " ritual";
+        if (!need.empty())
+            msg += " - need " + need + " more";
+        return msg + "!";
+    }
+    if (type == "GATHER_ACK")
+        return "On my way!";
+    if (type == "HOLD")
+        return "Hold the tile - ritual is forming!";
+    if (type == "ARRIVED")
+        return "I'm here for the ritual!";
+    if (type == "MCOME")
+        return "Everyone converge on me!";
+    if (type == "MFOOD")
+        return "Stockpile food!";
+    if (type == "MRDY")
+        return "I'm ready!";
+    if (type == "MRDY2")
+        return "Ready confirmed - GO!";
+
+    return raw; // unknown scheme: show what was actually said
+}
+} // namespace
+
+void Interface::drainFeedEvents()
+{
+    for (const auto &ev : _state.feedEvents)
+    {
+        std::string text;
+        gfx::Color color = gfx::LIGHTGRAY;
+        switch (ev.kind)
+        {
+        case GameEventKind::Join:
+            text = gfx::fmt("#%u joined %s (lvl %d)", ev.id, ev.text.c_str(), ev.value);
+            color = gfx::LIGHTGRAY;
+            break;
+        case GameEventKind::Broadcast:
+        {
+            const std::string spoken = prettyBroadcast(ev.text);
+            text = gfx::fmt("#%u: %s", ev.id, truncated(spoken, kFeedMaxChars).c_str());
+            color = gfx::SKYBLUE;
+            _bubbles[ev.id] = {truncated(spoken, kBubbleMaxChars), _elapsed + kBubbleSeconds};
+            break;
+        }
+        case GameEventKind::Death:
+            text = gfx::fmt("#%u (%s) died", ev.id, ev.text.c_str());
+            color = gfx::RED;
+            break;
+        case GameEventKind::LevelUp:
+            text = gfx::fmt("#%u (%s) reached level %d", ev.id, ev.text.c_str(), ev.value);
+            color = gfx::GOLD;
+            break;
+        case GameEventKind::IncantStart:
+            text = gfx::fmt("Level %d ritual started at (%d,%d)", ev.value, ev.x, ev.y);
+            color = gfx::Color{180, 105, 255, 255};
+            break;
+        case GameEventKind::IncantEnd:
+            if (ev.value == 0)
+            {
+                text = gfx::fmt("Ritual at (%d,%d) FAILED", ev.x, ev.y);
+                color = gfx::Color{255, 120, 120, 255};
+            }
+            else
+            {
+                text = gfx::fmt("Ritual at (%d,%d) succeeded", ev.x, ev.y);
+                color = gfx::GREEN;
+            }
+            break;
+        case GameEventKind::Fork:
+            text = gfx::fmt("#%u (%s) laid an egg", ev.id, ev.text.c_str());
+            color = gfx::BEIGE;
+            break;
+        case GameEventKind::Eject:
+            text = gfx::fmt("#%u (%s) ejected the tile", ev.id, ev.text.c_str());
+            color = gfx::Color{255, 145, 55, 255};
+            break;
+        case GameEventKind::Win:
+            text = gfx::fmt("*** %s WINS ***", ev.text.c_str());
+            color = gfx::GOLD;
+            break;
+        }
+        _feed.push_back({_elapsed, color, std::move(text)});
+    }
+    _state.feedEvents.clear();
+
+    while (_feed.size() > kFeedKeep)
+        _feed.pop_front();
+
+    // Bubbles for players that died/left must not float over nothing.
+    for (auto it = _bubbles.begin(); it != _bubbles.end();)
+    {
+        if (it->second.until <= _elapsed || _state.players.find(it->first) == _state.players.end())
+            it = _bubbles.erase(it);
+        else
+            ++it;
+    }
+}
+
+void Interface::drawEventFeed()
+{
+    if (_feed.empty())
+        return;
+
+    // Newest at the bottom, anchored above the control-hint line; older lines
+    // stack upward and fade out with age.
+    const int baseY = _engine.screenHeight() - 92;
+    const int lineH = 18;
+    int drawn = 0;
+
+    for (auto it = _feed.rbegin(); it != _feed.rend() && drawn < kFeedVisible; ++it)
+    {
+        const float age = _elapsed - it->t;
+        if (age >= kFeedFadeEnd)
+            break; // everything older is even more faded
+        float alpha = 1.0f;
+        if (age > kFeedFadeStart)
+            alpha = 1.0f - (age - kFeedFadeStart) / (kFeedFadeEnd - kFeedFadeStart);
+
+        const int y = baseY - drawn * lineH;
+        const int w = _engine.measureText(it->text, 15);
+        const auto a = [alpha](int v) { return static_cast<std::uint8_t>(v * alpha); };
+        _engine.drawRect(8, y - 2, w + 8, lineH, gfx::Color{0, 0, 0, a(150)});
+        _engine.drawText(it->text, 12, y, 15,
+                         gfx::Color{it->color.r, it->color.g, it->color.b, a(255)});
+        ++drawn;
+    }
+}
+
+void Interface::drawSpeechBubbles()
+{
+    if (_bubbles.empty())
+        return;
+
+    const gfx::Vec3 camFwd = gfx::normalize(gfx::sub(_camera.target, _camera.position));
+
+    for (const auto &[id, bubble] : _bubbles)
+    {
+        const auto pit = _state.players.find(id);
+        if (pit == _state.players.end())
+            continue; // pruned next drain
+
+        // Anchor to the smoothed display position so the bubble glides with the
+        // body during a step instead of popping cell to cell.
+        float fx = static_cast<float>(pit->second.getX());
+        float fy = static_cast<float>(pit->second.getY());
+        if (const auto ait = _playerAnimState.find(id); ait != _playerAnimState.end() && ait->second.posInit)
+        {
+            fx = ait->second.dispX;
+            fy = ait->second.dispY;
+        }
+        const gfx::Vec3 head = {fx * TILE_SIZE + TILE_SIZE / 2.0f, kTileTopY + TILE_SIZE * 0.85f,
+                                fy * TILE_SIZE + TILE_SIZE / 2.0f};
+        if (gfx::dot(gfx::sub(head, _camera.position), camFwd) <= 0.0f)
+            continue; // behind the camera; worldToScreen would mirror it
+
+        const gfx::Vec2 sp = _engine.worldToScreen(_camera, head);
+
+        // Last second: fade out instead of vanishing.
+        const float left = bubble.until - _elapsed;
+        const float alpha = left < 1.0f ? left : 1.0f;
+        const auto a = [alpha](int v) { return static_cast<std::uint8_t>(v * alpha); };
+
+        const int fontSize = 14;
+        const int w = _engine.measureText(bubble.text, fontSize) + 16;
+        const int h = 24;
+        const int bx = static_cast<int>(sp.x) - w / 2;
+        const int by = static_cast<int>(sp.y) - h - 8;
+
+        const gfx::Color border = teamColor(pit->second.getTeam());
+        _engine.drawRect(bx, by, w, h, gfx::Color{0, 0, 0, a(200)});
+        _engine.drawRectLines(bx, by, w, h, gfx::Color{border.r, border.g, border.b, a(255)});
+        // Small tail pointing at the head.
+        _engine.drawLine(static_cast<int>(sp.x), by + h, static_cast<int>(sp.x), by + h + 6,
+                         gfx::Color{border.r, border.g, border.b, a(255)});
+        _engine.drawText(bubble.text, bx + 8, by + 5, fontSize, gfx::Color{255, 255, 255, a(255)});
+    }
+}
+
+void Interface::drawHoverHighlight()
+{
+    // Faint outline on the aimed tile; the gold selection stays dominant.
+    if (_hoverX < 0 || _hoverY < 0 || (_hoverX == _selectedX && _hoverY == _selectedY))
+        return;
+
+    const float wx = _hoverX * TILE_SIZE + TILE_SIZE / 2.0f;
+    const float wz = _hoverY * TILE_SIZE + TILE_SIZE / 2.0f;
+    const float half = (TILE_SIZE - kTileMargin) * 0.5f;
+    const float y = kTileTopY + 0.30f;
+    const gfx::Color c{255, 255, 255, 130};
+
+    _engine.drawLine3D({wx - half, y, wz - half}, {wx + half, y, wz - half}, c);
+    _engine.drawLine3D({wx + half, y, wz - half}, {wx + half, y, wz + half}, c);
+    _engine.drawLine3D({wx + half, y, wz + half}, {wx - half, y, wz + half}, c);
+    _engine.drawLine3D({wx - half, y, wz + half}, {wx - half, y, wz - half}, c);
+}
+
+void Interface::drawHoverTooltip()
+{
+    if (_hoverX < 0 || _hoverY < 0)
+        return;
+
+    const MapTile &tile = _map.getTile(_hoverX, _hoverY);
+
+    int eggs = 0;
+    for (const auto &[eid, egg] : _state.eggs)
+    {
+        (void)eid;
+        if (egg.x == _hoverX && egg.y == _hoverY)
+            ++eggs;
+    }
+
+    // Line 1: coordinates + occupants. Line 2: non-zero resources, initial-coded
+    // (f/l/d/s/m/p/t follows MAP_RESOURCE_NAMES order); full names are one click away.
+    std::string line1 = gfx::fmt("(%d,%d)", _hoverX, _hoverY);
+    if (!tile.players.empty())
+        line1 += gfx::fmt("  %d player%s", static_cast<int>(tile.players.size()),
+                          tile.players.size() > 1 ? "s" : "");
+    if (eggs > 0)
+        line1 += gfx::fmt("  %d egg%s", eggs, eggs > 1 ? "s" : "");
+
+    std::string line2;
+    for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
+    {
+        if (tile.resources[i] > 0)
+            line2 += gfx::fmt("%c:%d  ", MAP_RESOURCE_NAMES[i][0], tile.resources[i]);
+    }
+    if (line2.empty() && tile.players.empty() && eggs == 0)
+        line2 = "(empty)";
+
+    const int fontSize = 14;
+    const int pad = 6;
+    const int lineH = 17;
+    const int lines = line2.empty() ? 1 : 2;
+    const int w = std::max(_engine.measureText(line1, fontSize), _engine.measureText(line2, fontSize)) + pad * 2;
+    const int h = pad * 2 + lines * lineH;
+    const int px = _engine.screenWidth() / 2 + 16;
+    const int py = _engine.screenHeight() / 2 + 16;
+
+    _engine.drawRect(px, py, w, h, gfx::Color{0, 0, 0, 170});
+    _engine.drawRectLines(px, py, w, h, gfx::Color{255, 255, 255, 90});
+    _engine.drawText(line1, px + pad, py + pad, fontSize, gfx::RAYWHITE);
+    if (!line2.empty())
+        _engine.drawText(line2, px + pad, py + pad + lineH, fontSize, gfx::LIGHTGRAY);
+}
+
+// ---------------------------------------------------------------------------
 // HUD / stats / help
 // ---------------------------------------------------------------------------
 void Interface::drawHud()
@@ -1342,7 +1762,7 @@ void Interface::drawHud()
 
     // One-line control reminder; the full list is on H / F1.
     _engine.drawText("ZQSD: fly   Mouse: look   Space/Ctrl: up/down   Wheel: speed   LMB: select   "
-                     "R: reset   F: follow   P: pause   Tab: stats   H: help",
+                     "R: reset   F: follow   P: pause   Tab: stats   H: help   (gamepad supported)",
                      10, _engine.screenHeight() - 24, 15, gfx::LIGHTGRAY);
 
     if (_net && _net->closed())
@@ -1421,12 +1841,12 @@ void Interface::drawStatsPanel()
     // Panel geometry: left side, under the HUD.
     const int pad = 18;
     const int lineH = 24;
-    const int width = 420;
+    const int width = 530;
     const int height = pad * 2 + static_cast<int>(lines.size()) * lineH;
     const int px = 10;
     const int py = 80;
 
-    _engine.drawRect(px, py, width, height, gfx::Color{0, 0, 0, 115});
+    _engine.drawRect(px, py, width, height, gfx::Color{0, 0, 0, 255});
     _engine.drawRectLines(px, py, width, height, gfx::GOLD);
 
     int ty = py + pad;
@@ -1572,7 +1992,7 @@ void Interface::drawEndScreen()
 
 void Interface::drawHelpOverlay()
 {
-    static const std::array<const char *, 17> kHelp = {
+    static const std::array<const char *, 27> kHelp = {
         "CONTROLS  -  FREE CAMERA",
         "Mouse           look around freely",
         "ZQSD / Arrows   fly (Shift = faster)",
@@ -1590,6 +2010,16 @@ void Interface::drawHelpOverlay()
         "M               toggle music",
         "Enter           dismiss / show end screen (after a win)",
         "H / F1          this help",
+        "",
+        "GAMEPAD (Xbox layout)",
+        "Sticks          left: fly   right: look (L3 = faster)",
+        "Triggers        RT: up   LT: down",
+        "LB / RB         fly speed down / up",
+        "A / X / Y / B   select / reset / follow / end screen",
+        "D-pad U/D       simulation speed",
+        "D-pad L/R       step back / forward in time",
+        "Start / Select  pause / stats",
+        "R3              this help",
     };
 
     const int pad = 16;
@@ -1599,13 +2029,14 @@ void Interface::drawHelpOverlay()
     const int px = _engine.screenWidth() / 2 - width / 2;
     const int py = _engine.screenHeight() / 2 - height / 2;
 
-    _engine.drawRect(px, py, width, height, gfx::Color{0, 0, 0, 210});
+    _engine.drawRect(px, py, width, height, gfx::Color{0, 0, 0, 255});
     _engine.drawRectLines(px, py, width, height, gfx::GOLD);
 
     int ty = py + pad;
     for (size_t i = 0; i < kHelp.size(); ++i)
     {
-        _engine.drawText(kHelp[i], px + pad, ty, i == 0 ? 20 : 16, i == 0 ? gfx::GOLD : gfx::RAYWHITE);
+        const bool header = (i == 0 || i == 18); // section titles
+        _engine.drawText(kHelp[i], px + pad, ty, header ? 20 : 16, header ? gfx::GOLD : gfx::RAYWHITE);
         ty += lineH;
     }
 }

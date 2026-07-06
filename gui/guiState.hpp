@@ -40,6 +40,32 @@ struct PlayerAnimEvent
     Orientation orientation{Orientation::North};
 };
 
+// Narrative events the parser emits for the on-screen event feed. Unlike
+// animEvents these carry the human-facing payload (broadcast text, team name,
+// levels) so the renderer can print them without re-deriving game logic.
+enum class GameEventKind : std::uint8_t
+{
+    Join,         // pnw: text = team
+    Broadcast,    // pbc: text = raw message (also feeds the speech bubble)
+    Death,        // pdi: text = team
+    LevelUp,      // plv with a higher level: value = new level
+    IncantStart,  // pic: x/y set, value = target level
+    IncantEnd,    // pie: x/y set, value = result (1 ok, 0 failed, -1 unknown)
+    Fork,         // pfk: player laid an egg
+    Eject,        // pex: player ejected others
+    Win           // seg: text = winning team
+};
+
+struct GameEvent
+{
+    GameEventKind kind{GameEventKind::Join};
+    std::uint32_t id{0}; // player id when the event is about one (0 otherwise)
+    int x{0};
+    int y{0};
+    int value{0};
+    std::string text;
+};
+
 struct GuiState
 {
     std::unordered_map<std::uint32_t, aiPlayer> players;
@@ -47,6 +73,7 @@ struct GuiState
     std::vector<std::string> teams;
     std::unordered_set<long long> incanting; // tile keys (y*W+x) mid-incantation
     std::vector<PlayerAnimEvent> animEvents; // drained by the renderer each frame
+    std::vector<GameEvent> feedEvents;       // drained by the renderer each frame
     int frequency{0};
     bool hasWinner{false};
     std::string winner;
