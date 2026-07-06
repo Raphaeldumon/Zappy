@@ -45,15 +45,15 @@ struct PlayerAnimEvent
 // levels) so the renderer can print them without re-deriving game logic.
 enum class GameEventKind : std::uint8_t
 {
-    Join,         // pnw: text = team
-    Broadcast,    // pbc: text = raw message (also feeds the speech bubble)
-    Death,        // pdi: text = team
-    LevelUp,      // plv with a higher level: value = new level
-    IncantStart,  // pic: x/y set, value = target level
-    IncantEnd,    // pie: x/y set, value = result (1 ok, 0 failed, -1 unknown)
-    Fork,         // pfk: player laid an egg
-    Eject,        // pex: player ejected others
-    Win           // seg: text = winning team
+    Join,        // pnw: text = team
+    Broadcast,   // pbc: text = raw message (also feeds the speech bubble)
+    Death,       // pdi: text = team
+    LevelUp,     // plv with a higher level: value = new level
+    IncantStart, // pic: x/y set, value = target level
+    IncantEnd,   // pie: x/y set, value = result (1 ok, 0 failed, -1 unknown)
+    Fork,        // pfk: player laid an egg
+    Eject,       // pex: player ejected others
+    Win          // seg: text = winning team
 };
 
 struct GameEvent

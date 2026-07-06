@@ -95,15 +95,11 @@ class CensusMixin:
         # window was too short to finish forking): re-open it so the elected
         # forker repopulates. Short settle: one heartbeat round, enough to
         # hear a member the eviction wrongly presumed dead.
-        if (
-            len(self.team_members) < self.census_target
-            and now >= self.census_deadline
-        ):
+        if len(self.team_members) < self.census_target and now >= self.census_deadline:
             self.census_deadline = now + self.census_window()
             self.census_settle_until = now + self.hello_interval()
             self.log(
-                f"[AI] census re-armed: {len(self.team_members)}/"
-                f"{self.census_target}"
+                f"[AI] census re-armed: {len(self.team_members)}/{self.census_target}"
             )
 
     def should_fork(self) -> bool:

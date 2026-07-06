@@ -228,8 +228,8 @@ class Interface
     void drawHoverTooltip();                // compact tile summary near the crosshair
 
     // --- Event feed / bubbles ---
-    void drainFeedEvents();  // GuiState::feedEvents -> _feed + _bubbles (call from update())
-    void drawEventFeed();    // scrolling log, bottom-left, age-faded
+    void drainFeedEvents();   // GuiState::feedEvents -> _feed + _bubbles (call from update())
+    void drawEventFeed();     // scrolling log, bottom-left, age-faded
     void drawSpeechBubbles(); // broadcast text above player heads
 
     // --- Camera helpers ---

@@ -7,11 +7,8 @@
 
 from dataclasses import dataclass, field
 from typing import Dict
-from typing import Dict, List
-from typing import Dict, List, Optional, Tuple
-from typing import List, Optional
-from typing import List, Optional, Tuple
-from typing import Optional
+from typing import List
+from typing import Optional, Tuple
 import argparse
 import enum
 import os
@@ -105,8 +102,6 @@ REQ = {
 """State machine enum + per-bot Memory model."""
 
 
-
-
 class State(enum.Enum):
     SURVIVE = "SURVIVE"
     LOOK = "LOOK"
@@ -146,7 +141,6 @@ class Memory:
 
 Auto-split from the original monolith; bodies are byte-identical.
 The build bundler (_bundle.py) re-stitches these into a single zappy_ai."""
-
 
 
 class NetMixin:
@@ -370,7 +364,6 @@ Auto-split from the original monolith; bodies are byte-identical.
 The build bundler (_bundle.py) re-stitches these into a single zappy_ai."""
 
 
-
 class ProtocolMixin:
     def parse_inventory(self, line: str) -> Dict[str, int]:
         inv = {r: 0 for r in RESOURCES}
@@ -441,7 +434,6 @@ class ProtocolMixin:
 
 Auto-split from the original monolith; bodies are byte-identical.
 The build bundler (_bundle.py) re-stitches these into a single zappy_ai."""
-
 
 
 class SensingMixin:
@@ -585,7 +577,6 @@ Auto-split from the original monolith; bodies are byte-identical.
 The build bundler (_bundle.py) re-stitches these into a single zappy_ai."""
 
 
-
 class MovementMixin:
     def move_to_tile(
         self, idx: int, full: bool, terminal: Optional[str] = None
@@ -707,7 +698,6 @@ class MovementMixin:
 
 Auto-split from the original monolith; bodies are byte-identical.
 The build bundler (_bundle.py) re-stitches these into a single zappy_ai."""
-
 
 
 class BehaviorMixin:
@@ -888,7 +878,6 @@ class BehaviorMixin:
 
 Auto-split from the original monolith; bodies are byte-identical.
 The build bundler (_bundle.py) re-stitches these into a single zappy_ai."""
-
 
 
 class GatherMixin:
@@ -1271,7 +1260,6 @@ Auto-split from the original monolith; bodies are byte-identical.
 The build bundler (_bundle.py) re-stitches these into a single zappy_ai."""
 
 
-
 class ManifestMixin:
     def broadcast_focus_food(self) -> None:
         self.last_focus_bcast = time.time()
@@ -1482,7 +1470,6 @@ Auto-split from the original monolith; bodies are byte-identical.
 The build bundler (_bundle.py) re-stitches these into a single zappy_ai."""
 
 
-
 class CensusMixin:
     def hello_interval(self) -> float:
         return max(1.0, 60.0 / self.frequency)
@@ -1571,15 +1558,11 @@ class CensusMixin:
         # window was too short to finish forking): re-open it so the elected
         # forker repopulates. Short settle: one heartbeat round, enough to
         # hear a member the eviction wrongly presumed dead.
-        if (
-            len(self.team_members) < self.census_target
-            and now >= self.census_deadline
-        ):
+        if len(self.team_members) < self.census_target and now >= self.census_deadline:
             self.census_deadline = now + self.census_window()
             self.census_settle_until = now + self.hello_interval()
             self.log(
-                f"[AI] census re-armed: {len(self.team_members)}/"
-                f"{self.census_target}"
+                f"[AI] census re-armed: {len(self.team_members)}/{self.census_target}"
             )
 
     def should_fork(self) -> bool:
@@ -1633,7 +1616,6 @@ class CensusMixin:
 
 Auto-split from the original monolith; bodies are byte-identical.
 The build bundler (_bundle.py) re-stitches these into a single zappy_ai."""
-
 
 
 class BrainMixin:
@@ -1993,8 +1975,6 @@ class BrainMixin:
 """The AI class: assembles all mixins and holds construction (__init__)."""
 
 
-
-
 class AI(
     NetMixin,
     ProtocolMixin,
@@ -2194,8 +2174,6 @@ class AI(
 Unchanged from the original; not used by the live bot."""
 
 
-
-
 INCANTATION_REQUIREMENTS = REQ
 
 
@@ -2378,8 +2356,6 @@ class Parser:
 """Command-line entry point: arg parsing + main()."""
 
 
-
-
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("-p", dest="port", type=int)
@@ -2431,4 +2407,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

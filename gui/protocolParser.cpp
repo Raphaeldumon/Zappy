@@ -204,8 +204,7 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
             std::getline(iss, msg);
             if (!msg.empty() && msg.front() == ' ')
                 msg.erase(0, 1);
-            state.feedEvents.push_back(
-                {GameEventKind::Broadcast, id, it->second.getX(), it->second.getY(), 0, msg});
+            state.feedEvents.push_back({GameEventKind::Broadcast, id, it->second.getX(), it->second.getY(), 0, msg});
         }
         else if (tag == "pex")
         {

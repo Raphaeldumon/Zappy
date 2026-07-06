@@ -1436,11 +1436,11 @@ void Interface::drawTileInfoPanel()
 // ---------------------------------------------------------------------------
 namespace
 {
-constexpr std::size_t kFeedKeep = 60;    // entries retained in the deque
-constexpr int kFeedVisible = 9;          // lines drawn at once
-constexpr float kFeedFadeStart = 8.0f;   // seconds fully opaque
-constexpr float kFeedFadeEnd = 14.0f;    // seconds until fully gone
-constexpr float kBubbleSeconds = 4.0f;   // how long a broadcast bubble lingers
+constexpr std::size_t kFeedKeep = 60;  // entries retained in the deque
+constexpr int kFeedVisible = 9;        // lines drawn at once
+constexpr float kFeedFadeStart = 8.0f; // seconds fully opaque
+constexpr float kFeedFadeEnd = 14.0f;  // seconds until fully gone
+constexpr float kBubbleSeconds = 4.0f; // how long a broadcast bubble lingers
 constexpr std::size_t kBubbleMaxChars = 48;
 constexpr std::size_t kFeedMaxChars = 64;
 
@@ -1531,8 +1531,7 @@ void Interface::drainFeedEvents()
             text = gfx::fmt("#%u joined %s (lvl %d)", ev.id, ev.text.c_str(), ev.value);
             color = gfx::LIGHTGRAY;
             break;
-        case GameEventKind::Broadcast:
-        {
+        case GameEventKind::Broadcast: {
             const std::string spoken = prettyBroadcast(ev.text);
             text = gfx::fmt("#%u: %s", ev.id, truncated(spoken, kFeedMaxChars).c_str());
             color = gfx::SKYBLUE;
@@ -1617,8 +1616,7 @@ void Interface::drawEventFeed()
         const int w = _engine.measureText(it->text, 15);
         const auto a = [alpha](int v) { return static_cast<std::uint8_t>(v * alpha); };
         _engine.drawRect(8, y - 2, w + 8, lineH, gfx::Color{0, 0, 0, a(150)});
-        _engine.drawText(it->text, 12, y, 15,
-                         gfx::Color{it->color.r, it->color.g, it->color.b, a(255)});
+        _engine.drawText(it->text, 12, y, 15, gfx::Color{it->color.r, it->color.g, it->color.b, a(255)});
         ++drawn;
     }
 }
@@ -1710,8 +1708,7 @@ void Interface::drawHoverTooltip()
     // (f/l/d/s/m/p/t follows MAP_RESOURCE_NAMES order); full names are one click away.
     std::string line1 = gfx::fmt("(%d,%d)", _hoverX, _hoverY);
     if (!tile.players.empty())
-        line1 += gfx::fmt("  %d player%s", static_cast<int>(tile.players.size()),
-                          tile.players.size() > 1 ? "s" : "");
+        line1 += gfx::fmt("  %d player%s", static_cast<int>(tile.players.size()), tile.players.size() > 1 ? "s" : "");
     if (eggs > 0)
         line1 += gfx::fmt("  %d egg%s", eggs, eggs > 1 ? "s" : "");
 
