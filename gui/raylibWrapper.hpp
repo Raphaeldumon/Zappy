@@ -3,6 +3,7 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
 // ---------------------------------------------------------------------------
 // RaylibEngine — the graphics facade. This is the ONLY place raylib is used:
@@ -101,11 +102,22 @@ class RaylibEngine
     void endMode3D();
     void drawModelEx(gfx::ModelHandle h, gfx::Vec3 pos, gfx::Vec3 axis, float angleDeg, gfx::Vec3 scale,
                      gfx::Color tint);
+    // Draw a model in an arbitrary orthonormal frame: local X/Y/Z map onto
+    // right/up/back, with an extra yaw (degrees) about the local up axis first.
+    // Passing the identity basis reproduces drawModelEx(h, pos, +Y, yaw, ...).
+    void drawModelOriented(gfx::ModelHandle h, gfx::Vec3 pos, gfx::Vec3 right, gfx::Vec3 up, gfx::Vec3 back,
+                           float yawDeg, gfx::Vec3 scale, gfx::Color tint);
+    // Draw every placement of one model in a single instanced call per mesh
+    // (needs the instancing shader; falls back to a drawModelOriented loop).
+    void drawModelInstanced(gfx::ModelHandle h, const std::vector<gfx::InstanceXform> &xforms, gfx::Color tint);
     void drawCube(gfx::Vec3 pos, float w, float h, float l, gfx::Color c);
     void drawPlane(gfx::Vec3 center, gfx::Vec2 size, gfx::Color c);
     void drawSphere(gfx::Vec3 center, float radius, gfx::Color c);
     void drawLine3D(gfx::Vec3 a, gfx::Vec3 b, gfx::Color c);
     void drawCircle3D(gfx::Vec3 center, float radius, gfx::Color c); // ground-parallel ring
+    void drawCircle3D(gfx::Vec3 center, float radius, gfx::Vec3 normal, gfx::Color c); // ring in any plane
+    // Filled quad a-b-c-d (both windings, so it reads from either side).
+    void drawQuad3D(gfx::Vec3 a, gfx::Vec3 b, gfx::Vec3 c, gfx::Vec3 d, gfx::Color col);
     gfx::Vec2 worldToScreen(const gfx::Camera &cam, gfx::Vec3 world) const;
     gfx::Ray screenToWorldRay(const gfx::Camera &cam, gfx::Vec2 screen) const;
 
@@ -128,10 +140,15 @@ class RaylibEngine
     // Lighting: once loaded, every model (existing and future) is drawn with
     // it; beginMode3D refreshes the eye-position uniform from the camera.
     bool loadLightingShader(const std::string &vs, const std::string &fs);
-    // Bloom: the 3D scene renders into an offscreen target that endMode3D
-    // composites through the given fullscreen shader. 2D UI drawn afterwards
-    // stays crisp. Both are optional — missing files just skip the effect.
-    bool enableBloom(const std::string &fs);
+    // Instanced variant (usually the same fs as the lighting shader with a
+    // per-instance-transform vs). Enables the fast path of drawModelInstanced.
+    bool loadInstancingShader(const std::string &vs, const std::string &fs);
+    // Bloom: the 3D scene renders into an offscreen target; endMode3D runs
+    // the extract shader into a half-res glow target (quarter of the heavy
+    // taps), then the combine shader composites scene + glow to the screen.
+    // 2D UI drawn afterwards stays crisp. Optional — missing files just skip
+    // the effect.
+    bool enableBloom(const std::string &extractFs, const std::string &combineFs);
 
     // --- Composite scene primitives (raylib/rlgl-coupled, owned here) ---
     bool loadSkybox(const std::string &png, const std::string &vs, const std::string &fs);

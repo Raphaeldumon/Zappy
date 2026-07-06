@@ -20,7 +20,8 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     // pass (UI drawn after stays crisp). Load before the models so materials
     // pick the shader up at load time; both fail soft to the flat look.
     _engine.loadLightingShader("assets/shaders/lighting.vs", "assets/shaders/lighting.fs");
-    _engine.enableBloom("assets/shaders/bloom.fs");
+    _engine.loadInstancingShader("assets/shaders/lighting_instancing.vs", "assets/shaders/lighting.fs");
+    _engine.enableBloom("assets/shaders/bloom_extract.fs", "assets/shaders/bloom_combine.fs");
     // Global UI font: every drawText/measureText call goes through it once
     // loaded; on failure the engine silently keeps raylib's built-in font.
     if (!_engine.loadUiFont("assets/toxigenesis bd.otf"))
@@ -86,6 +87,16 @@ constexpr float kPlayerModelHeight = TILE_SIZE * 0.70f;
 constexpr float kPlayerModelFootprint = TILE_SIZE * 0.46f;
 constexpr const char *kMusicPath = "assets/music_back.mp3";
 constexpr float kMusicVolume = 0.45f;
+
+constexpr float kPi = 3.14159265358979f;
+// Torus proportions. 1.0 keeps surface distances equal to the flat grid;
+// shrinking the minor scale flattens the tube (tiles get smaller around it)
+// while a larger major scale widens the ring, for a broad thin donut.
+constexpr float kTorusMinorScale = 0.55f;
+constexpr float kTorusMajorScale = 1.30f;
+constexpr float kTileHeight = 2.0f;
+constexpr float kTileMargin = 0.0f;
+constexpr float kTileTopY = kTileHeight / 2.0f; // surface items stand on
 
 bool isMusicTogglePressed(RaylibEngine &engine)
 {
@@ -492,21 +503,19 @@ void Interface::updatePlayerAnimations()
     }
 }
 
-void Interface::applyPlayerPose(std::uint32_t id)
+bool Interface::playerPose(std::uint32_t id, int &clipIdx, float &frame) const
 {
     if (_playerAnimCount <= 0)
-        return;
+        return false;
     const auto it = _playerAnimState.find(id);
     if (it == _playerAnimState.end())
-        return;
+        return false;
     const PlayerAnimState &st = it->second;
     const bool oneShot = st.oneShot != PlayerClip::Count;
     const PlayerClip clip = oneShot ? st.oneShot : st.loopClip;
-    const float frame = oneShot ? st.oneShotFrame : st.loopFrame;
-    const int idx = _clipIndex[static_cast<std::size_t>(clip)];
-    if (idx < 0)
-        return;
-    _engine.applyPose(_playerModel.handle, _playerAnims, idx, frame);
+    clipIdx = _clipIndex[static_cast<std::size_t>(clip)];
+    frame = oneShot ? st.oneShotFrame : st.loopFrame;
+    return clipIdx >= 0;
 }
 
 void Interface::loadTileTextures()
@@ -539,6 +548,18 @@ void Interface::initCamera()
     _camera.up = {0.0f, 1.0f, 0.0f};
     _camera.fovy = 60.0f; // a touch wider feels better for a free cam
 
+    if (_torusView)
+    {
+        // Overview of the whole donut: above and south of its centre.
+        const TorusGeom g = torusGeom();
+        const float reach = g.R + g.r;
+        _camera.position = {g.c.x, g.c.y + reach * 1.3f, g.c.z + reach * 1.7f};
+        _flySpeed = reach * 0.8f;
+        lookAt(g.c);
+        updateCameraTarget();
+        return;
+    }
+
     _camera.position = {centerX, span * 0.9f, centerZ + span * 0.9f};
     _flySpeed = span * 0.6f; // units/sec; tuned to the map scale
 
@@ -565,6 +586,118 @@ void Interface::updateCameraTarget()
         cp * std::cos(_camYaw),
     };
     _camera.target = gfx::add(_camera.position, forward);
+}
+
+// ---------------------------------------------------------------------------
+// Torus view
+// ---------------------------------------------------------------------------
+Interface::TorusGeom Interface::torusGeom() const
+{
+    // Radii start from the "honest" values (one trip around the major circle
+    // spans the map width, around the tube the map height), then get reshaped
+    // by the scale constants into a wider, flatter donut with smaller tiles.
+    // On tall/square maps the major radius is pushed out so the tube never
+    // self-intersects (slight stretch along x instead of a pinched hole).
+    TorusGeom g{};
+    const float w = _map.getWidth() * TILE_SIZE;
+    const float h = _map.getHeight() * TILE_SIZE;
+    g.r = h / (2.0f * kPi) * kTorusMinorScale;
+    g.R = std::max(w / (2.0f * kPi) * kTorusMajorScale, g.r * 2.2f);
+    g.c = {w / 2.0f, 0.0f, h / 2.0f};
+    return g;
+}
+
+Interface::Surface Interface::surfaceAt(float wx, float wz, float h) const
+{
+    if (!_torusView)
+        return {{wx, kTileTopY + h, wz}, {0.0f, 1.0f, 0.0f}, {1.0f, 0.0f, 0.0f}, {0.0f, 0.0f, 1.0f}};
+
+    const TorusGeom g = torusGeom();
+    const float u = wx / (_map.getWidth() * TILE_SIZE) * 2.0f * kPi;  // around the hole (map x)
+    const float v = wz / (_map.getHeight() * TILE_SIZE) * 2.0f * kPi; // around the tube (map y)
+    const float cu = std::cos(u), su = std::sin(u);
+    const float cv = std::cos(v), sv = std::sin(v);
+
+    const gfx::Vec3 n = {cv * cu, sv, cv * su};    // outward normal
+    const gfx::Vec3 tu = {-su, 0.0f, cu};          // east tangent
+    const gfx::Vec3 tv = {-sv * cu, cv, -sv * su}; // south tangent
+    gfx::Vec3 p = {g.c.x + (g.R + g.r * cv) * cu, g.c.y + g.r * sv, g.c.z + (g.R + g.r * cv) * su};
+    p = gfx::add(p, gfx::scale(n, kTileTopY + h));
+    return {p, n, tu, tv};
+}
+
+void Interface::toggleTorusView()
+{
+    _torusView = !_torusView;
+    _followedPlayer = -1; // follow is grid-only; its anchor loses meaning here
+    initCamera();
+    gfx::logInfo("toggleTorusView: %s", _torusView ? "TORUS" : "GRID");
+}
+
+// Sub-quads per tile per axis: small maps curve a lot per tile, so subdivide
+// more; on big maps one quad per tile already hugs the surface.
+static int torusSubdiv(int tiles)
+{
+    const int s = 24 / tiles + 1;
+    return s < 1 ? 1 : (s > 6 ? 6 : s);
+}
+
+void Interface::drawTorusFloor()
+{
+    // Checkerboard painted straight onto the torus. rlgl immediate quads skip
+    // the lighting shader, so a cheap analytic lambert term stands in for it —
+    // without it the donut reads as a flat silhouette.
+    const int mapW = _map.getWidth(), mapH = _map.getHeight();
+    const int subU = torusSubdiv(mapW);
+    const int subV = torusSubdiv(mapH);
+    const gfx::Vec3 lightDir = gfx::normalize({0.35f, 0.85f, 0.30f});
+    const gfx::Color dark{58, 54, 66, 255}, light{232, 138, 46, 255};
+
+    for (int y = 0; y < mapH; ++y)
+    {
+        for (int x = 0; x < mapW; ++x)
+        {
+            const gfx::Color base = ((x + y) & 1) ? dark : light;
+            for (int j = 0; j < subV; ++j)
+            {
+                for (int i = 0; i < subU; ++i)
+                {
+                    const float u0 = (x + static_cast<float>(i) / subU) * TILE_SIZE;
+                    const float u1 = (x + static_cast<float>(i + 1) / subU) * TILE_SIZE;
+                    const float v0 = (y + static_cast<float>(j) / subV) * TILE_SIZE;
+                    const float v1 = (y + static_cast<float>(j + 1) / subV) * TILE_SIZE;
+
+                    const Surface mid = surfaceAt((u0 + u1) * 0.5f, (v0 + v1) * 0.5f, 0.0f);
+                    const float lum = 0.45f + 0.55f * std::max(0.0f, gfx::dot(mid.up, lightDir));
+                    const gfx::Color c{static_cast<std::uint8_t>(base.r * lum),
+                                       static_cast<std::uint8_t>(base.g * lum),
+                                       static_cast<std::uint8_t>(base.b * lum), 255};
+
+                    _engine.drawQuad3D(surfaceAt(u0, v0, 0.0f).pos, surfaceAt(u1, v0, 0.0f).pos,
+                                       surfaceAt(u1, v1, 0.0f).pos, surfaceAt(u0, v1, 0.0f).pos, c);
+                }
+            }
+        }
+    }
+}
+
+void Interface::drawTileEdges(int x, int y, float h, gfx::Color c)
+{
+    // Border of tile (x,y) slightly above the surface; subdivided in torus
+    // mode so the lines follow the curvature (1 segment/edge on the flat grid).
+    const int seg = _torusView ? std::max(torusSubdiv(_map.getWidth()), torusSubdiv(_map.getHeight())) + 1 : 1;
+    const float x0 = x * TILE_SIZE, z0 = y * TILE_SIZE;
+    auto at = [&](float fx, float fz) { return surfaceAt(x0 + fx * TILE_SIZE, z0 + fz * TILE_SIZE, h).pos; };
+
+    for (int i = 0; i < seg; ++i)
+    {
+        const float a = static_cast<float>(i) / seg;
+        const float b = static_cast<float>(i + 1) / seg;
+        _engine.drawLine3D(at(a, 0.0f), at(b, 0.0f), c);
+        _engine.drawLine3D(at(a, 1.0f), at(b, 1.0f), c);
+        _engine.drawLine3D(at(0.0f, a), at(0.0f, b), c);
+        _engine.drawLine3D(at(1.0f, a), at(1.0f, b), c);
+    }
 }
 
 void Interface::loadBackgroundMusic()
@@ -738,8 +871,13 @@ void Interface::handleInput()
         initCamera();
     }
 
-    // ---- F: toggle riding along with the selected player.
-    if (_engine.keyPressed(gfx::Key::F) || _engine.padPressed(gfx::PadBtn::FaceUp))
+    // ---- T: swap the world between the flat grid and its true torus shape.
+    if (_engine.keyPressed(gfx::Key::T))
+        toggleTorusView();
+
+    // ---- F: toggle riding along with the selected player (grid view only:
+    // the follow anchor is a flat-world position).
+    if (!_torusView && (_engine.keyPressed(gfx::Key::F) || _engine.padPressed(gfx::PadBtn::FaceUp)))
     {
         if (_followedPlayer >= 0)
         {
@@ -781,6 +919,8 @@ void Interface::handleInput()
     if (_engine.keyPressed(gfx::Key::H) || _engine.keyPressed(gfx::Key::F1) ||
         _engine.padPressed(gfx::PadBtn::RightThumb))
         _showHelp = !_showHelp;
+    if (_engine.keyPressed(gfx::Key::F3))
+        _showPerf = !_showPerf;
     if (isMusicTogglePressed(_engine))
         toggleMusic();
 
@@ -803,9 +943,18 @@ void Interface::focusOnTile(int tx, int ty)
 {
     // Fly to a fixed vantage above/south of the tile and aim down at it.
     _followedPlayer = -1;
-    const gfx::Vec3 centre = {tx * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f, ty * TILE_SIZE + TILE_SIZE / 2.0f};
-    _camera.position = {centre.x, TILE_SIZE * 5.0f, centre.z + TILE_SIZE * 5.0f};
-    lookAt(centre);
+    const Surface s = surfaceAt(tx * TILE_SIZE + TILE_SIZE / 2.0f, ty * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f);
+    if (_torusView)
+    {
+        // "Above" follows the local normal; back off along the local south.
+        _camera.position =
+            gfx::add(s.pos, gfx::add(gfx::scale(s.up, TILE_SIZE * 4.0f), gfx::scale(s.back, TILE_SIZE * 3.0f)));
+    }
+    else
+    {
+        _camera.position = {s.pos.x, TILE_SIZE * 5.0f, s.pos.z + TILE_SIZE * 5.0f};
+    }
+    lookAt(s.pos);
     updateCameraTarget();
 }
 
@@ -965,13 +1114,23 @@ void Interface::update()
 
 namespace
 {
-constexpr float kTileHeight = 2.0f;
-constexpr float kTileMargin = 0.0f;
 constexpr float kPlayerBaseSize = TILE_SIZE * 0.4f;
 constexpr float kPlayerY = 4.0f;
 constexpr float kPlayerHeight = 6.0f;
-constexpr float kTileTopY = kTileHeight / 2.0f;   // surface items stand on
 constexpr float kItemSpacing = TILE_SIZE * 0.22f; // grid pitch between stacked items
+
+// Beyond this distance resource meshes are sub-pixel: draw a small tinted
+// cube (rlgl-batched) instead of a full model instance.
+constexpr float kItemLodDist = TILE_SIZE * 26.0f;
+constexpr std::array<gfx::Color, MAP_RESOURCE_COUNT> kResourceLodColors{{
+    {235, 150, 60, 255},  // 0 food      (roast chicken)
+    {200, 200, 205, 255}, // 1 linemate  (white can)
+    {120, 120, 130, 255}, // 2 deraumere (black can)
+    {255, 205, 60, 255},  // 3 sibur     (golden can)
+    {90, 210, 120, 255},  // 4 mendiane  (green can)
+    {160, 160, 170, 255}, // 5 phiras    (zero ultra can)
+    {235, 120, 200, 255}, // 6 thystame  (pink can)
+}};
 constexpr int kMaxVisiblePlayers = 4;
 constexpr float kPlayerSpacing = TILE_SIZE * 0.28f;
 
@@ -1021,17 +1180,6 @@ const char *orientationLabel(Orientation orientation)
     return "?";
 }
 
-void drawTileOutline(RaylibEngine &engine, float worldX, float worldZ, float size)
-{
-    const float half = size * 0.5f;
-    const float y = kTileTopY + 0.02f;
-
-    engine.drawLine3D({worldX - half, y, worldZ - half}, {worldX + half, y, worldZ - half}, gfx::BLACK);
-    engine.drawLine3D({worldX + half, y, worldZ - half}, {worldX + half, y, worldZ + half}, gfx::BLACK);
-    engine.drawLine3D({worldX + half, y, worldZ + half}, {worldX - half, y, worldZ + half}, gfx::BLACK);
-    engine.drawLine3D({worldX - half, y, worldZ + half}, {worldX - half, y, worldZ - half}, gfx::BLACK);
-}
-
 float playerOrientationAngle(Orientation orientation)
 {
     switch (orientation)
@@ -1051,7 +1199,23 @@ float playerOrientationAngle(Orientation orientation)
 
 void Interface::render()
 {
+    _stats = {};
     std::vector<CountLabel> labels;
+
+    // Player/ghost draws are collected first, then sorted so one pose upload
+    // (CPU skinning) serves every model sharing the same clip + frame bucket.
+    struct PlayerDrawCmd
+    {
+        int clip;   // -1 = no animation data, draw with whatever pose is current
+        int bucket; // frame quantised to half-frames; upload key with clip
+        Surface s;
+        float yaw;
+        gfx::Color tint;
+    };
+    std::vector<PlayerDrawCmd> playerDraws;
+
+    // Per-resource-type placements, flushed as one instanced call per type.
+    std::vector<std::vector<gfx::InstanceXform>> itemXf(_resourceModels.size());
 
     _engine.beginMode3D(_camera);
 
@@ -1059,28 +1223,35 @@ void Interface::render()
     _engine.drawSkybox();
 
     // Floor: two batched draws (dark + orange) instead of one per tile.
+    // In torus view the checkerboard is painted on the torus surface instead.
     const bool floorTextured = _darkTileTexture != gfx::NoHandle || _orangeTileTexture != gfx::NoHandle;
-    if (floorTextured)
+    if (_torusView)
+    {
+        drawTorusFloor();
+    }
+    else if (floorTextured)
     {
         _engine.drawCheckerFloor(_darkTileTexture, _orangeTileTexture, _map.getWidth(), _map.getHeight(), TILE_SIZE,
                                  TILE_SIZE - kTileMargin, kTileTopY);
     }
 
     // Frustum cull: skip the expensive per-tile content (outlines, players,
-    // resource models) for tiles whose centre projects off-screen. The batched
-    // floor above stays fully drawn — it's cheap and avoids holes at the edges.
+    // resource models) for tiles outside the view cone. Pure dot products —
+    // no worldToScreen matrix work per tile. The cone half-angle covers the
+    // screen diagonal plus slack, and a per-tile angular term widens it so
+    // partly-visible edge tiles still draw. The batched floor above stays
+    // fully drawn — it's cheap and avoids holes at the edges.
     const gfx::Vec3 camFwd = gfx::normalize(gfx::sub(_camera.target, _camera.position));
-    const float screenW = static_cast<float>(_engine.screenWidth());
-    const float screenH = static_cast<float>(_engine.screenHeight());
-    const float cullMargin = 160.0f; // px slack so partly-visible edge tiles still draw
-    auto tileVisible = [&](float wx, float wz) {
-        gfx::Vec3 c{wx, kTileTopY, wz};
-        gfx::Vec3 d = gfx::sub(c, _camera.position);
-        if (gfx::dot(d, camFwd) <= 0.0f)
-            return false; // behind the camera
-        gfx::Vec2 sp = _engine.worldToScreen(_camera, c);
-        return sp.x >= -cullMargin && sp.x <= screenW + cullMargin && sp.y >= -cullMargin &&
-               sp.y <= screenH + cullMargin;
+    const float aspect = static_cast<float>(_engine.screenWidth()) / static_cast<float>(_engine.screenHeight());
+    const float tanHalfV = std::tan(_camera.fovy * 0.5f * kPi / 180.0f);
+    const float halfDiag = std::atan(tanHalfV * std::sqrt(1.0f + aspect * aspect));
+    const float cosCone = std::cos(std::min(halfDiag + 0.10f, 1.5f));
+    auto tileVisible = [&](gfx::Vec3 c) {
+        const gfx::Vec3 d = gfx::sub(c, _camera.position);
+        const float dist = gfx::length(d);
+        if (dist < TILE_SIZE * 3.0f)
+            return true; // touching the camera: always in
+        return gfx::dot(d, camFwd) / dist > cosCone - TILE_SIZE * 1.6f / dist;
     };
 
     for (int y = 0; y < _map.getHeight(); ++y)
@@ -1089,17 +1260,23 @@ void Interface::render()
         {
             float worldX = x * TILE_SIZE + TILE_SIZE / 2.0f;
             float worldZ = y * TILE_SIZE + TILE_SIZE / 2.0f;
+            const Surface surf = surfaceAt(worldX, worldZ, 0.0f);
 
-            if (!tileVisible(worldX, worldZ))
+            if (!tileVisible(surf.pos))
+            {
+                ++_stats.tilesCulled;
                 continue;
+            }
+            ++_stats.tilesDrawn;
+            const bool lodTile = gfx::length(gfx::sub(surf.pos, _camera.position)) > kItemLodDist;
 
             const MapTile &tile = _map.getTile(x, y);
 
             // Untextured fallback only (textured floor was drawn batched above).
-            if (!floorTextured)
+            if (!_torusView && !floorTextured)
                 _engine.drawPlane({worldX, kTileTopY, worldZ}, {TILE_SIZE - kTileMargin, TILE_SIZE - kTileMargin},
                                   gfx::WHITE);
-            drawTileOutline(_engine, worldX, worldZ, TILE_SIZE - kTileMargin);
+            drawTileEdges(x, y, 0.02f, gfx::BLACK);
 
             // Players: draw up to four robots side by side, then show a count label.
             const int playerCount = static_cast<int>(tile.players.size());
@@ -1132,23 +1309,25 @@ void Interface::render()
                     // Tint each robot with its team's colour (lightened to a sheen)
                     // so teams are tellable apart at a glance.
                     const gfx::Color teamGlow = glowTint(teamColor(player.getTeam()));
+                    const Surface ps = surfaceAt(px, pz, 0.0f);
                     if (_playerModel.loaded)
                     {
-                        // Upload this player's own clip+frame before drawing it, so
-                        // each robot shows its own animation despite sharing one model.
-                        applyPlayerPose(player.getId());
-                        _engine.drawModelEx(_playerModel.handle, {px, kTileTopY, pz}, {0.0f, 1.0f, 0.0f},
-                                            playerOrientationAngle(player.getOrientation()), _playerModel.scale,
-                                            teamGlow);
+                        int clipIdx = -1;
+                        float frame = 0.0f;
+                        const bool posed = playerPose(player.getId(), clipIdx, frame);
+                        playerDraws.push_back({posed ? clipIdx : -1,
+                                               posed ? static_cast<int>(frame * 2.0f) : -1, ps,
+                                               playerOrientationAngle(player.getOrientation()), teamGlow});
                     }
                     else
                     {
-                        _engine.drawCube({px, kPlayerY, pz}, kPlayerBaseSize, kPlayerHeight, kPlayerBaseSize,
-                                         teamColor(player.getTeam()));
+                        _engine.drawCube(gfx::add(ps.pos, gfx::scale(ps.up, kPlayerY - kTileTopY)), kPlayerBaseSize,
+                                         kPlayerHeight, kPlayerBaseSize, teamColor(player.getTeam()));
                     }
                 }
                 if (playerCount > kMaxVisiblePlayers)
-                    labels.push_back({{worldX, kPlayerY + kPlayerHeight, worldZ}, playerCount, gfx::YELLOW});
+                    labels.push_back({gfx::add(surf.pos, gfx::scale(surf.up, kPlayerY + kPlayerHeight - kTileTopY)),
+                                      playerCount, gfx::YELLOW});
             }
 
             // Resources render only on empty tiles; occupied tiles show the player model alone.
@@ -1184,16 +1363,24 @@ void Interface::render()
                         const float cz = originZ + pitch * static_cast<float>(row);
                         const float angle = static_cast<float>((x * 53 + y * 97 + i * 17 + slot * 31) % 360);
 
-                        if (hasModel)
+                        const Surface is = surfaceAt(cx, cz, 0.0f);
+                        if (hasModel && lodTile)
                         {
-                            const ResourceModel &rm = _resourceModels[i];
-                            _engine.drawModelEx(rm.handle, {cx, kTileTopY, cz}, {0.0f, 1.0f, 0.0f}, angle, rm.scale,
-                                                gfx::WHITE);
+                            // Too far for the mesh to read: small tinted cube.
+                            _engine.drawCube(gfx::add(is.pos, gfx::scale(is.up, kItemWidth * 0.5f)), kItemWidth,
+                                             kItemWidth, kItemWidth, kResourceLodColors[static_cast<std::size_t>(i)]);
+                            ++_stats.itemsLod;
+                        }
+                        else if (hasModel)
+                        {
+                            itemXf[static_cast<std::size_t>(i)].push_back(
+                                {is.pos, is.right, is.up, is.back, angle, _resourceModels[static_cast<std::size_t>(i)].scale});
+                            ++_stats.itemsModel;
                         }
                         else
                         {
                             const float s = kItemWidth;
-                            _engine.drawCube({cx, kTileTopY + s / 2.0f, cz}, s, s, s, gfx::RED);
+                            _engine.drawCube(gfx::add(is.pos, gfx::scale(is.up, s / 2.0f)), s, s, s, gfx::RED);
                         }
                     }
                 }
@@ -1209,13 +1396,16 @@ void Interface::render()
             continue;
         float ex = egg.x * TILE_SIZE + TILE_SIZE / 2.0f;
         float ez = egg.y * TILE_SIZE + TILE_SIZE / 2.0f;
-        if (!tileVisible(ex, ez))
+        const Surface es = surfaceAt(ex, ez, TILE_SIZE * 0.08f);
+        if (!tileVisible(es.pos))
             continue;
-        _engine.drawSphere({ex, kTileTopY + TILE_SIZE * 0.08f, ez}, TILE_SIZE * 0.08f, gfx::BEIGE);
+        _engine.drawSphere(es.pos, TILE_SIZE * 0.08f, gfx::BEIGE);
+        ++_stats.eggs;
     }
 
-    // Death ghosts: players already erased from the world, replaying the Death clip
-    // once at the spot they fell so the death reads on screen.
+    // Death ghosts: players already erased from the world, replaying the Death
+    // clip once at the spot they fell. Collected with the live players so they
+    // share the same pose buckets.
     if (_playerModel.loaded && !_deathGhosts.empty())
     {
         const int didx = _clipIndex[static_cast<std::size_t>(PlayerClip::Death)];
@@ -1223,14 +1413,43 @@ void Interface::render()
         {
             for (const auto &g : _deathGhosts)
             {
-                if (!tileVisible(g.x, g.y))
+                const Surface gs = surfaceAt(g.x, g.y, 0.0f);
+                if (!tileVisible(gs.pos))
                     continue;
-                _engine.applyPose(_playerModel.handle, _playerAnims, didx, g.frame);
-                _engine.drawModelEx(_playerModel.handle, {g.x, kTileTopY, g.y}, {0.0f, 1.0f, 0.0f},
-                                    playerOrientationAngle(g.orientation), _playerModel.scale, gfx::WHITE);
+                playerDraws.push_back({didx, static_cast<int>(g.frame * 2.0f), gs,
+                                       playerOrientationAngle(g.orientation), gfx::WHITE});
             }
         }
     }
+
+    // Flush players: sort by (clip, half-frame bucket) so one CPU-skinning
+    // upload poses every model in the bucket. Unposed entries (clip -1) sort
+    // first and draw with whatever pose the mesh currently holds.
+    _stats.players = static_cast<int>(playerDraws.size());
+    if (_playerModel.loaded && !playerDraws.empty())
+    {
+        std::sort(playerDraws.begin(), playerDraws.end(), [](const PlayerDrawCmd &a, const PlayerDrawCmd &b) {
+            return a.clip != b.clip ? a.clip < b.clip : a.bucket < b.bucket;
+        });
+        int lastClip = -2, lastBucket = -1;
+        for (const auto &pd : playerDraws)
+        {
+            if (pd.clip >= 0 && (pd.clip != lastClip || pd.bucket != lastBucket))
+            {
+                _engine.applyPose(_playerModel.handle, _playerAnims, pd.clip, static_cast<float>(pd.bucket) * 0.5f);
+                ++_stats.poseUploads;
+                lastClip = pd.clip;
+                lastBucket = pd.bucket;
+            }
+            _engine.drawModelOriented(_playerModel.handle, pd.s.pos, pd.s.right, pd.s.up, pd.s.back, pd.yaw,
+                                      _playerModel.scale, pd.tint);
+        }
+    }
+
+    // Flush resources: one instanced call per resource type.
+    for (std::size_t i = 0; i < itemXf.size(); ++i)
+        if (!itemXf[i].empty())
+            _engine.drawModelInstanced(_resourceModels[i].handle, itemXf[i], gfx::WHITE);
 
     drawIncantationRings();
     drawHoverHighlight();
@@ -1253,6 +1472,8 @@ void Interface::render()
     drawEventFeed();
     drawTileInfoPanel();
     drawHoverTooltip();
+    if (_showPerf)
+        drawPerfOverlay();
     if (_showStats)
         drawStatsPanel();
     if (_showHelp)
@@ -1272,6 +1493,41 @@ bool Interface::aimedTile(int &tx, int &ty) const
     // at the middle of the screen rather than the frozen mouse position.
     gfx::Vec2 centre = {_engine.screenWidth() / 2.0f, _engine.screenHeight() / 2.0f};
     gfx::Ray ray = _engine.screenToWorldRay(_camera, centre);
+
+    if (_torusView)
+    {
+        // Sphere-trace the torus SDF, then invert the (u, v) angles at the hit
+        // point back into tile coordinates. Cheap and exact enough for picking.
+        const TorusGeom g = torusGeom();
+        const auto sdf = [&](gfx::Vec3 p) {
+            const float dx = p.x - g.c.x, dy = p.y - g.c.y, dz = p.z - g.c.z;
+            const float q = std::sqrt(dx * dx + dz * dz) - g.R;
+            return std::sqrt(q * q + dy * dy) - g.r;
+        };
+        const float maxT = (g.R + g.r) * 6.0f;
+        float t = 0.0f;
+        for (int i = 0; i < 128 && t < maxT; ++i)
+        {
+            const gfx::Vec3 p = gfx::add(ray.position, gfx::scale(ray.direction, t));
+            const float d = sdf(p);
+            if (d < 0.1f)
+            {
+                const float dx = p.x - g.c.x, dy = p.y - g.c.y, dz = p.z - g.c.z;
+                const float q = std::sqrt(dx * dx + dz * dz) - g.R;
+                const float twoPi = 2.0f * kPi;
+                float u = std::atan2(dz, dx);
+                float v = std::atan2(dy, q);
+                u = u < 0.0f ? u + twoPi : u;
+                v = v < 0.0f ? v + twoPi : v;
+                tx = std::min(_map.getWidth() - 1, static_cast<int>(u / twoPi * _map.getWidth()));
+                ty = std::min(_map.getHeight() - 1, static_cast<int>(v / twoPi * _map.getHeight()));
+                return true;
+            }
+            t += d;
+        }
+        return false; // aiming past the donut
+    }
+
     if (std::fabs(ray.direction.y) < 1e-6f)
         return false; // ray parallel to the ground, no hit
 
@@ -1316,15 +1572,14 @@ void Interface::drawIncantationRings()
     // The colours sit above the bloom threshold, so the whole thing glows.
     constexpr int kRings = 3;
     const gfx::Color kRitual{210, 130, 255, 255};
-    const float y = kTileTopY + 0.25f;
     const float maxR = TILE_SIZE * 0.46f;
 
     for (const long long key : _state.incanting)
     {
         const int tx = static_cast<int>(key % _map.getWidth());
         const int ty = static_cast<int>(key / _map.getWidth());
-        const float wx = tx * TILE_SIZE + TILE_SIZE / 2.0f;
-        const float wz = ty * TILE_SIZE + TILE_SIZE / 2.0f;
+        const Surface s =
+            surfaceAt(tx * TILE_SIZE + TILE_SIZE / 2.0f, ty * TILE_SIZE + TILE_SIZE / 2.0f, 0.25f);
 
         for (int i = 0; i < kRings; ++i)
         {
@@ -1333,14 +1588,16 @@ void Interface::drawIncantationRings()
             phase -= std::floor(phase);
             const float r = maxR * phase;
             const auto alpha = static_cast<std::uint8_t>(230.0f * (1.0f - phase));
-            _engine.drawCircle3D({wx, y, wz}, r, gfx::Color{kRitual.r, kRitual.g, kRitual.b, alpha});
+            _engine.drawCircle3D(s.pos, r, s.up, gfx::Color{kRitual.r, kRitual.g, kRitual.b, alpha});
         }
 
-        // Core pulse: a slim bright disc the bloom pass turns into a glow.
+        // Core pulse: a slim bright quad the bloom pass turns into a glow.
         const float pulse = 0.5f + 0.5f * std::sin(_elapsed * 6.0f);
         const auto coreA = static_cast<std::uint8_t>(90.0f + 90.0f * pulse);
-        _engine.drawCube({wx, y, wz}, TILE_SIZE * 0.5f, 0.2f, TILE_SIZE * 0.5f,
-                         gfx::Color{kRitual.r, kRitual.g, kRitual.b, coreA});
+        const gfx::Vec3 dx = gfx::scale(s.right, TILE_SIZE * 0.25f), dz = gfx::scale(s.back, TILE_SIZE * 0.25f);
+        _engine.drawQuad3D(gfx::sub(gfx::sub(s.pos, dx), dz), gfx::sub(gfx::add(s.pos, dx), dz),
+                           gfx::add(gfx::add(s.pos, dx), dz), gfx::add(gfx::sub(s.pos, dx), dz),
+                           gfx::Color{kRitual.r, kRitual.g, kRitual.b, coreA});
     }
 }
 
@@ -1349,26 +1606,21 @@ void Interface::drawSelectionHighlight()
     if (_selectedX < 0 || _selectedY < 0)
         return;
 
-    float wx = _selectedX * TILE_SIZE + TILE_SIZE / 2.0f;
-    float wz = _selectedY * TILE_SIZE + TILE_SIZE / 2.0f;
-    float size = TILE_SIZE - kTileMargin;
-    float half = size * 0.5f;
+    const float wx = _selectedX * TILE_SIZE + TILE_SIZE / 2.0f;
+    const float wz = _selectedY * TILE_SIZE + TILE_SIZE / 2.0f;
+    const float half = (TILE_SIZE - kTileMargin) * 0.5f;
 
     // Translucent overlay + bright gold border just above the tile surface.
     // The fill breathes slowly so the selection reads as "active", not painted.
     const float breathe = 0.5f + 0.5f * std::sin(_elapsed * 3.0f);
     const auto fillA = static_cast<std::uint8_t>(45.0f + 45.0f * breathe);
-    _engine.drawCube({wx, kTileTopY + 0.15f, wz}, size, 0.3f, size, gfx::Color{255, 230, 0, fillA});
+    const Surface s = surfaceAt(wx, wz, 0.15f);
+    const gfx::Vec3 dx = gfx::scale(s.right, half), dz = gfx::scale(s.back, half);
+    _engine.drawQuad3D(gfx::sub(gfx::sub(s.pos, dx), dz), gfx::sub(gfx::add(s.pos, dx), dz),
+                       gfx::add(gfx::add(s.pos, dx), dz), gfx::add(gfx::sub(s.pos, dx), dz),
+                       gfx::Color{255, 230, 0, fillA});
 
-    float y = kTileTopY + 0.35f;
-    gfx::Vec3 a = {wx - half, y, wz - half};
-    gfx::Vec3 b = {wx + half, y, wz - half};
-    gfx::Vec3 c = {wx + half, y, wz + half};
-    gfx::Vec3 d = {wx - half, y, wz + half};
-    _engine.drawLine3D(a, b, gfx::GOLD);
-    _engine.drawLine3D(b, c, gfx::GOLD);
-    _engine.drawLine3D(c, d, gfx::GOLD);
-    _engine.drawLine3D(d, a, gfx::GOLD);
+    drawTileEdges(_selectedX, _selectedY, 0.35f, gfx::GOLD);
 }
 
 void Interface::drawTileInfoPanel()
@@ -1643,8 +1895,8 @@ void Interface::drawSpeechBubbles()
             fx = ait->second.dispX;
             fy = ait->second.dispY;
         }
-        const gfx::Vec3 head = {fx * TILE_SIZE + TILE_SIZE / 2.0f, kTileTopY + TILE_SIZE * 0.85f,
-                                fy * TILE_SIZE + TILE_SIZE / 2.0f};
+        const gfx::Vec3 head =
+            surfaceAt(fx * TILE_SIZE + TILE_SIZE / 2.0f, fy * TILE_SIZE + TILE_SIZE / 2.0f, TILE_SIZE * 0.85f).pos;
         if (gfx::dot(gfx::sub(head, _camera.position), camFwd) <= 0.0f)
             continue; // behind the camera; worldToScreen would mirror it
 
@@ -1677,16 +1929,7 @@ void Interface::drawHoverHighlight()
     if (_hoverX < 0 || _hoverY < 0 || (_hoverX == _selectedX && _hoverY == _selectedY))
         return;
 
-    const float wx = _hoverX * TILE_SIZE + TILE_SIZE / 2.0f;
-    const float wz = _hoverY * TILE_SIZE + TILE_SIZE / 2.0f;
-    const float half = (TILE_SIZE - kTileMargin) * 0.5f;
-    const float y = kTileTopY + 0.30f;
-    const gfx::Color c{255, 255, 255, 130};
-
-    _engine.drawLine3D({wx - half, y, wz - half}, {wx + half, y, wz - half}, c);
-    _engine.drawLine3D({wx + half, y, wz - half}, {wx + half, y, wz + half}, c);
-    _engine.drawLine3D({wx + half, y, wz + half}, {wx - half, y, wz + half}, c);
-    _engine.drawLine3D({wx - half, y, wz + half}, {wx - half, y, wz - half}, c);
+    drawTileEdges(_hoverX, _hoverY, 0.30f, gfx::Color{255, 255, 255, 130});
 }
 
 void Interface::drawHoverTooltip()
@@ -1756,11 +1999,6 @@ void Interface::drawHud()
     if (_followedPlayer >= 0)
         _engine.drawText(gfx::fmt("Following player #%lld  (F to release)", static_cast<long long>(_followedPlayer)),
                          10, 52, 16, gfx::GOLD);
-
-    // One-line control reminder; the full list is on H / F1.
-    _engine.drawText("ZQSD: fly   Mouse: look   Space/Ctrl: up/down   Wheel: speed   LMB: select   "
-                     "R: reset   F: follow   P: pause   Tab: stats   H: help   (gamepad supported)",
-                     10, _engine.screenHeight() - 24, 15, gfx::LIGHTGRAY);
 
     if (_net && _net->closed())
         _engine.drawText("DISCONNECTED", _engine.screenWidth() / 2 - 70, 10, 20, gfx::RED);
@@ -1989,7 +2227,7 @@ void Interface::drawEndScreen()
 
 void Interface::drawHelpOverlay()
 {
-    static const std::array<const char *, 27> kHelp = {
+    static const std::array<const char *, 29> kHelp = {
         "CONTROLS  -  FREE CAMERA",
         "Mouse           look around freely",
         "ZQSD / Arrows   fly (Shift = faster)",
@@ -2004,9 +2242,11 @@ void Interface::drawHelpOverlay()
         "PageDown / Up   step back / forward in time (1s)",
         "End             jump back to live",
         "Tab             toggle global stats",
+        "T               grid <-> torus world view",
         "M               toggle music",
         "Enter           dismiss / show end screen (after a win)",
         "H / F1          this help",
+        "F3              perf counters overlay",
         "",
         "GAMEPAD (Xbox layout)",
         "Sticks          left: fly   right: look (L3 = faster)",
@@ -2032,8 +2272,36 @@ void Interface::drawHelpOverlay()
     int ty = py + pad;
     for (size_t i = 0; i < kHelp.size(); ++i)
     {
-        const bool header = (i == 0 || i == 18); // section titles
+        const bool header = (i == 0 || i == 20); // section titles
         _engine.drawText(kHelp[i], px + pad, ty, header ? 20 : 16, header ? gfx::GOLD : gfx::RAYWHITE);
+        ty += lineH;
+    }
+}
+
+void Interface::drawPerfOverlay()
+{
+    const std::array<std::string, 7> lines = {
+        gfx::fmt("frame        %5.2f ms", _engine.frameTime() * 1000.0f),
+        gfx::fmt("tiles        %d drawn / %d culled", _stats.tilesDrawn, _stats.tilesCulled),
+        gfx::fmt("players      %d (poses %d)", _stats.players, _stats.poseUploads),
+        gfx::fmt("items        %d mesh / %d lod", _stats.itemsModel, _stats.itemsLod),
+        gfx::fmt("eggs         %d", _stats.eggs),
+        gfx::fmt("view         %s", _torusView ? "torus" : "grid"),
+        "F3 to close",
+    };
+
+    const int lineH = 20;
+    const int w = 300;
+    const int h = 16 + static_cast<int>(lines.size()) * lineH;
+    const int x = _engine.screenWidth() - w - 10;
+    const int y = 36; // under the FPS counter
+
+    _engine.drawRect(x, y, w, h, gfx::Color{0, 0, 0, 175});
+    _engine.drawRectLines(x, y, w, h, gfx::GREEN);
+    int ty = y + 8;
+    for (const auto &line : lines)
+    {
+        _engine.drawText(line, x + 10, ty, 15, gfx::RAYWHITE);
         ty += lineH;
     }
 }

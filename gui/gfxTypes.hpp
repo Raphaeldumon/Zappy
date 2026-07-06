@@ -98,6 +98,7 @@ enum class Key
     F,
     P,
     M,
+    T,
     H,
     Equal,
     Minus,
@@ -109,6 +110,7 @@ enum class Key
     Tab,
     Enter,
     F1,
+    F3,
 };
 enum class MouseBtn
 {
@@ -141,6 +143,18 @@ enum class PadAxis
     RightY,
     LeftTrigger,  // raylib reports -1 (released) .. +1 (fully pressed)
     RightTrigger, // idem
+};
+
+// One placement for an instanced model draw: the same frame + yaw + scale
+// drawModelOriented takes, batched so the facade can upload them in one call.
+struct InstanceXform
+{
+    Vec3 pos;
+    Vec3 right;
+    Vec3 up;
+    Vec3 back;
+    float yawDeg{0.0f};
+    Vec3 scale{1.0f, 1.0f, 1.0f};
 };
 
 // --- Small vector helpers (replace the raymath calls used at runtime) ------

@@ -187,6 +187,54 @@ class Interface
     };
     std::unordered_map<std::uint32_t, Bubble> _bubbles;
 
+    // --- Torus view ---
+    // T switches the world between the flat grid and a real torus: the map
+    // wraps on both axes, so the donut is its honest shape. Every world
+    // position goes through surfaceAt(), which either passes flat coordinates
+    // through unchanged or wraps them around the torus and hands back a local
+    // frame (up/right/back) for orienting models on the curved surface.
+    bool _torusView{false};
+
+    struct Surface
+    {
+        gfx::Vec3 pos;   // world position, already lifted to the tile surface
+        gfx::Vec3 up;    // outward surface normal
+        gfx::Vec3 right; // tangent along increasing map x
+        gfx::Vec3 back;  // tangent along increasing map y
+    };
+    struct TorusGeom
+    {
+        float R; // major radius (around the hole)
+        float r; // minor radius (tube)
+        gfx::Vec3 c; // world-space centre
+    };
+    TorusGeom torusGeom() const;
+    // (wx, wz) are flat world coords (tile * TILE_SIZE ...), h is the height
+    // above the tile surface. Works with fractional coords, so mid-step player
+    // interpolation wraps seamlessly across the map seam in torus mode.
+    Surface surfaceAt(float wx, float wz, float h) const;
+    void toggleTorusView();
+    void drawTorusFloor(); // checkerboard painted on the torus (call inside Mode3D)
+    // Tile border at height h above the surface; curvature-subdivided on the torus.
+    void drawTileEdges(int x, int y, float h, gfx::Color c);
+
+    // --- Perf overlay (F3) ---
+    // Per-frame render counters, reset at the top of render(), so every
+    // optimisation (culling, pose bucketing, instancing, LOD) is measurable.
+    struct FrameStats
+    {
+        int tilesDrawn{0};
+        int tilesCulled{0};
+        int players{0};     // player models drawn (incl. death ghosts)
+        int poseUploads{0}; // CPU skinning uploads (<= players thanks to bucketing)
+        int itemsModel{0};  // resources drawn as instanced meshes
+        int itemsLod{0};    // resources drawn as far-away LOD cubes
+        int eggs{0};
+    };
+    FrameStats _stats;
+    bool _showPerf{false};
+    void drawPerfOverlay();
+
     // --- Spectator state ---
     bool _showStats{false};           // Tab: global environment stats panel
     bool _showHelp{false};            // H / F1: full controls overlay
@@ -268,7 +316,9 @@ class Interface
     void unloadResourceModels();
     void loadPlayerModel();
     void unloadPlayerModel();
-    void loadPlayerAnimations();            // resolve clip names -> _clipIndex, log them
-    void updatePlayerAnimations();          // per-frame anim state machine (call from update())
-    void applyPlayerPose(std::uint32_t id); // upload a player's current clip+frame before draw
+    void loadPlayerAnimations();   // resolve clip names -> _clipIndex, log them
+    void updatePlayerAnimations(); // per-frame anim state machine (call from update())
+    // A player's current clip + frame, for the render-time pose bucketing
+    // (false when the model has no animations or the player has no state yet).
+    bool playerPose(std::uint32_t id, int &clipIdx, float &frame) const;
 };

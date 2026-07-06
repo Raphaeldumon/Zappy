@@ -90,6 +90,8 @@ int toRlKey(gfx::Key k)
         return KEY_P;
     case gfx::Key::M:
         return KEY_M;
+    case gfx::Key::T:
+        return KEY_T;
     case gfx::Key::H:
         return KEY_H;
     case gfx::Key::Equal:
@@ -110,6 +112,8 @@ int toRlKey(gfx::Key k)
         return KEY_TAB;
     case gfx::Key::F1:
         return KEY_F1;
+    case gfx::Key::F3:
+        return KEY_F3;
     }
     return KEY_NULL;
 }
@@ -234,11 +238,22 @@ struct RaylibEngine::Impl
     bool lightLoaded{false};
     int lightViewPosLoc{-1};
 
-    // Bloom post pass: 3D scene renders into sceneRT, composited in endMode3D.
-    Shader bloomShader{};
+    // Instanced variant of the lighting shader (model matrix as attribute),
+    // swapped in for the duration of a drawModelInstanced call.
+    Shader instShader{};
+    bool instLoaded{false};
+    int instViewPosLoc{-1};
+
+    // Bloom post FX: the 3D scene renders into full-res sceneRT; endMode3D
+    // extracts+blurs the bright parts into half-res bloomRT (quarter of the
+    // heavy taps), then composites both to the screen.
+    Shader bloomExtract{};
+    Shader bloomCombine{};
     bool bloomLoaded{false};
-    int bloomResLoc{-1};
+    int bloomResLoc{-1};    // "resolution" on the extract shader
+    int bloomGlowLoc{-1};   // "glowTex" sampler on the combine shader
     RenderTexture2D sceneRT{};
+    RenderTexture2D bloomRT{}; // half of sceneRT
     bool sceneRTActive{false};
 
     bool valid(int h, std::size_t n) const
@@ -263,10 +278,14 @@ RaylibEngine::~RaylibEngine()
     unloadUiFont();
     if (_impl->lightLoaded)
         UnloadShader(_impl->lightShader);
+    if (_impl->instLoaded)
+        UnloadShader(_impl->instShader);
     if (_impl->bloomLoaded)
     {
-        UnloadShader(_impl->bloomShader);
+        UnloadShader(_impl->bloomExtract);
+        UnloadShader(_impl->bloomCombine);
         UnloadRenderTexture(_impl->sceneRT);
+        UnloadRenderTexture(_impl->bloomRT);
     }
     for (auto &s : _impl->animSets)
         if (s.anims)
@@ -512,30 +531,65 @@ bool RaylibEngine::loadLightingShader(const std::string &vs, const std::string &
     return true;
 }
 
-bool RaylibEngine::enableBloom(const std::string &fs)
+bool RaylibEngine::loadInstancingShader(const std::string &vs, const std::string &fs)
 {
-    if (!FileExists(fs.c_str()))
+    if (!FileExists(vs.c_str()) || !FileExists(fs.c_str()))
     {
-        TraceLog(LOG_WARNING, "enableBloom: missing '%s' — no post FX", fs.c_str());
+        TraceLog(LOG_WARNING, "loadInstancingShader: missing shader files — per-instance draws kept");
         return false;
     }
-    Shader s = LoadShader(nullptr, fs.c_str()); // default fullscreen vs
+    Shader s = LoadShader(vs.c_str(), fs.c_str());
     if (s.id == 0)
     {
-        TraceLog(LOG_WARNING, "enableBloom: shader failed to compile — no post FX");
+        TraceLog(LOG_WARNING, "loadInstancingShader: compile failed — per-instance draws kept");
+        return false;
+    }
+    // DrawMeshInstanced reads the model matrix from this vertex attribute.
+    s.locs[SHADER_LOC_MATRIX_MODEL] = GetShaderLocationAttrib(s, "instanceTransform");
+    _impl->instShader = s;
+    _impl->instViewPosLoc = GetShaderLocation(s, "viewPos");
+    _impl->instLoaded = true;
+    TraceLog(LOG_INFO, "loadInstancingShader: '%s' ready", vs.c_str());
+    return true;
+}
+
+bool RaylibEngine::enableBloom(const std::string &extractFs, const std::string &combineFs)
+{
+    if (!FileExists(extractFs.c_str()) || !FileExists(combineFs.c_str()))
+    {
+        TraceLog(LOG_WARNING, "enableBloom: missing shader files — no post FX");
+        return false;
+    }
+    Shader ext = LoadShader(nullptr, extractFs.c_str()); // default fullscreen vs
+    if (ext.id == 0)
+    {
+        TraceLog(LOG_WARNING, "enableBloom: extract shader failed to compile — no post FX");
+        return false;
+    }
+    Shader comb = LoadShader(nullptr, combineFs.c_str());
+    if (comb.id == 0)
+    {
+        TraceLog(LOG_WARNING, "enableBloom: combine shader failed to compile — no post FX");
+        UnloadShader(ext);
         return false;
     }
     _impl->sceneRT = LoadRenderTexture(GetScreenWidth(), GetScreenHeight());
-    if (_impl->sceneRT.texture.id == 0)
+    _impl->bloomRT = LoadRenderTexture(GetScreenWidth() / 2, GetScreenHeight() / 2);
+    if (_impl->sceneRT.texture.id == 0 || _impl->bloomRT.texture.id == 0)
     {
         TraceLog(LOG_WARNING, "enableBloom: render texture failed — no post FX");
-        UnloadShader(s);
+        UnloadShader(ext);
+        UnloadShader(comb);
         return false;
     }
-    _impl->bloomShader = s;
-    _impl->bloomResLoc = GetShaderLocation(s, "resolution");
+    // Bilinear so the half-res glow upscales smoothly instead of blocky.
+    SetTextureFilter(_impl->bloomRT.texture, TEXTURE_FILTER_BILINEAR);
+    _impl->bloomExtract = ext;
+    _impl->bloomCombine = comb;
+    _impl->bloomResLoc = GetShaderLocation(ext, "resolution");
+    _impl->bloomGlowLoc = GetShaderLocation(comb, "glowTex");
     _impl->bloomLoaded = true;
-    TraceLog(LOG_INFO, "enableBloom: '%s' ready", fs.c_str());
+    TraceLog(LOG_INFO, "enableBloom: '%s' + '%s' ready (half-res glow)", extractFs.c_str(), combineFs.c_str());
     return true;
 }
 
@@ -631,21 +685,24 @@ void RaylibEngine::beginMode3D(const gfx::Camera &cam)
 {
     if (_impl->bloomLoaded)
     {
-        // Track window size so the offscreen target never stretches.
+        // Track window size so the offscreen targets never stretch.
         if (_impl->sceneRT.texture.width != GetScreenWidth() || _impl->sceneRT.texture.height != GetScreenHeight())
         {
             UnloadRenderTexture(_impl->sceneRT);
+            UnloadRenderTexture(_impl->bloomRT);
             _impl->sceneRT = LoadRenderTexture(GetScreenWidth(), GetScreenHeight());
+            _impl->bloomRT = LoadRenderTexture(GetScreenWidth() / 2, GetScreenHeight() / 2);
+            SetTextureFilter(_impl->bloomRT.texture, TEXTURE_FILTER_BILINEAR);
         }
         BeginTextureMode(_impl->sceneRT);
         ClearBackground(BLACK);
         _impl->sceneRTActive = true;
     }
+    const Vector3 eye = toRl(cam.position);
     if (_impl->lightLoaded && _impl->lightViewPosLoc >= 0)
-    {
-        const Vector3 eye = toRl(cam.position);
         SetShaderValue(_impl->lightShader, _impl->lightViewPosLoc, &eye, SHADER_UNIFORM_VEC3);
-    }
+    if (_impl->instLoaded && _impl->instViewPosLoc >= 0)
+        SetShaderValue(_impl->instShader, _impl->instViewPosLoc, &eye, SHADER_UNIFORM_VEC3);
     BeginMode3D(toRlCamera(cam));
 }
 void RaylibEngine::endMode3D()
@@ -657,10 +714,26 @@ void RaylibEngine::endMode3D()
         _impl->sceneRTActive = false;
         const float res[2] = {static_cast<float>(_impl->sceneRT.texture.width),
                               static_cast<float>(_impl->sceneRT.texture.height)};
+
+        // Pass 1: bright-extract + hex blur into the half-res glow target.
+        // (Negative source height: render textures are stored bottom-up; the
+        // flip keeps bloomRT in the same texel orientation as sceneRT so the
+        // combine pass can sample both with one set of coords.)
         if (_impl->bloomResLoc >= 0)
-            SetShaderValue(_impl->bloomShader, _impl->bloomResLoc, res, SHADER_UNIFORM_VEC2);
-        BeginShaderMode(_impl->bloomShader);
-        // Negative height: render textures are stored bottom-up.
+            SetShaderValue(_impl->bloomExtract, _impl->bloomResLoc, res, SHADER_UNIFORM_VEC2);
+        BeginTextureMode(_impl->bloomRT);
+        BeginShaderMode(_impl->bloomExtract);
+        DrawTexturePro(_impl->sceneRT.texture, Rectangle{0.0f, 0.0f, res[0], -res[1]},
+                       Rectangle{0.0f, 0.0f, static_cast<float>(_impl->bloomRT.texture.width),
+                                 static_cast<float>(_impl->bloomRT.texture.height)},
+                       Vector2{0.0f, 0.0f}, 0.0f, WHITE);
+        EndShaderMode();
+        EndTextureMode();
+
+        // Pass 2: composite the scene with the upscaled glow.
+        BeginShaderMode(_impl->bloomCombine);
+        if (_impl->bloomGlowLoc >= 0)
+            SetShaderValueTexture(_impl->bloomCombine, _impl->bloomGlowLoc, _impl->bloomRT.texture);
         DrawTextureRec(_impl->sceneRT.texture, Rectangle{0.0f, 0.0f, res[0], -res[1]}, Vector2{0.0f, 0.0f}, WHITE);
         EndShaderMode();
     }
@@ -671,6 +744,81 @@ void RaylibEngine::drawModelEx(gfx::ModelHandle h, gfx::Vec3 pos, gfx::Vec3 axis
 {
     if (_impl->valid(h, _impl->models.size()) && _impl->models[h].meshCount > 0)
         DrawModelEx(_impl->models[h], toRl(pos), toRl(axis), angleDeg, toRl(scale), toRl(tint));
+}
+
+namespace
+{
+// scale -> yaw about local up -> orthonormal basis + translation. Column-major
+// basis: local X/Y/Z land on right/up/back. raymath MatrixMultiply(A, B)
+// applies A first.
+Matrix composeWorld(gfx::Vec3 pos, gfx::Vec3 right, gfx::Vec3 up, gfx::Vec3 back, float yawDeg, gfx::Vec3 scale)
+{
+    Matrix basis = MatrixIdentity();
+    basis.m0 = right.x;
+    basis.m1 = right.y;
+    basis.m2 = right.z;
+    basis.m4 = up.x;
+    basis.m5 = up.y;
+    basis.m6 = up.z;
+    basis.m8 = back.x;
+    basis.m9 = back.y;
+    basis.m10 = back.z;
+    basis.m12 = pos.x;
+    basis.m13 = pos.y;
+    basis.m14 = pos.z;
+    return MatrixMultiply(MatrixMultiply(MatrixScale(scale.x, scale.y, scale.z), MatrixRotateY(DEG2RAD * yawDeg)),
+                          basis);
+}
+} // namespace
+
+void RaylibEngine::drawModelOriented(gfx::ModelHandle h, gfx::Vec3 pos, gfx::Vec3 right, gfx::Vec3 up, gfx::Vec3 back,
+                                     float yawDeg, gfx::Vec3 scale, gfx::Color tint)
+{
+    if (!_impl->valid(h, _impl->models.size()) || _impl->models[h].meshCount == 0)
+        return;
+    Model &model = _impl->models[h];
+
+    // Splice under the baked transform for one draw; DrawModel then only adds
+    // an identity, so the composed matrix fully controls placement.
+    const Matrix saved = model.transform;
+    model.transform = MatrixMultiply(saved, composeWorld(pos, right, up, back, yawDeg, scale));
+    DrawModel(model, Vector3{0.0f, 0.0f, 0.0f}, 1.0f, toRl(tint));
+    model.transform = saved;
+}
+
+void RaylibEngine::drawModelInstanced(gfx::ModelHandle h, const std::vector<gfx::InstanceXform> &xforms,
+                                      gfx::Color tint)
+{
+    if (xforms.empty() || !_impl->valid(h, _impl->models.size()) || _impl->models[h].meshCount == 0)
+        return;
+
+    if (!_impl->instLoaded)
+    {
+        // No instancing shader: same result, one draw per placement.
+        for (const auto &x : xforms)
+            drawModelOriented(h, x.pos, x.right, x.up, x.back, x.yawDeg, x.scale, tint);
+        return;
+    }
+
+    Model &m = _impl->models[h];
+    std::vector<Matrix> mats;
+    mats.reserve(xforms.size());
+    for (const auto &x : xforms)
+        mats.push_back(MatrixMultiply(m.transform, composeWorld(x.pos, x.right, x.up, x.back, x.yawDeg, x.scale)));
+
+    const Color tc = toRl(tint);
+    for (int i = 0; i < m.meshCount; ++i)
+    {
+        // Swap in the instancing shader (and tint) just for this call.
+        Material &mat = m.materials[m.meshMaterial[i]];
+        const Shader savedShader = mat.shader;
+        const Color savedColor = mat.maps[MATERIAL_MAP_DIFFUSE].color;
+        mat.shader = _impl->instShader;
+        mat.maps[MATERIAL_MAP_DIFFUSE].color = tc;
+        DrawMeshInstanced(m.meshes[i], mat, mats.data(), static_cast<int>(mats.size()));
+        mat.shader = savedShader;
+        mat.maps[MATERIAL_MAP_DIFFUSE].color = savedColor;
+    }
 }
 
 void RaylibEngine::drawCube(gfx::Vec3 pos, float w, float h, float l, gfx::Color c)
@@ -693,6 +841,27 @@ void RaylibEngine::drawCircle3D(gfx::Vec3 center, float radius, gfx::Color c)
 {
     // Rotated 90 deg around X so the circle lies flat on the ground plane.
     DrawCircle3D(toRl(center), radius, Vector3{1.0f, 0.0f, 0.0f}, 90.0f, toRl(c));
+}
+void RaylibEngine::drawCircle3D(gfx::Vec3 center, float radius, gfx::Vec3 normal, gfx::Color c)
+{
+    // DrawCircle3D's base circle lies in the XY plane (normal +Z); rotate +Z
+    // onto the requested normal.
+    const Vector3 n = Vector3Normalize(toRl(normal));
+    const Vector3 z = {0.0f, 0.0f, 1.0f};
+    Vector3 axis = Vector3CrossProduct(z, n);
+    const float len = Vector3Length(axis);
+    if (len < 1e-6f)
+        axis = {1.0f, 0.0f, 0.0f}; // normal (anti)parallel to +Z: any perpendicular works
+    const float angle = RAD2DEG * atan2f(len, Vector3DotProduct(z, n));
+    DrawCircle3D(toRl(center), radius, axis, angle, toRl(c));
+}
+void RaylibEngine::drawQuad3D(gfx::Vec3 a, gfx::Vec3 b, gfx::Vec3 c, gfx::Vec3 d, gfx::Color col)
+{
+    // Both windings so the quad reads from either side (torus underside).
+    DrawTriangle3D(toRl(a), toRl(b), toRl(c), toRl(col));
+    DrawTriangle3D(toRl(a), toRl(c), toRl(d), toRl(col));
+    DrawTriangle3D(toRl(c), toRl(b), toRl(a), toRl(col));
+    DrawTriangle3D(toRl(d), toRl(c), toRl(a), toRl(col));
 }
 
 gfx::Vec2 RaylibEngine::worldToScreen(const gfx::Camera &cam, gfx::Vec3 world) const

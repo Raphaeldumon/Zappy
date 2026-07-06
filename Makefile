@@ -21,8 +21,8 @@ BINARIES     := $(SERVER_BIN) $(GUI_BIN) $(AI_BIN)
 # ---- demo knobs — override on the command line -------------------------------
 #   make demo PORT=4242 MAP_W=20 MAP_H=20 BOTS=4 FREQ=100 TEAMS="red blue"
 PORT         ?= 4242
-MAP_W        ?= 20
-MAP_H        ?= 20
+MAP_W        ?= 25
+MAP_H        ?= 25
 TEAMS        ?= rouge bleu vert jaune
 CLIENTS      ?= 50
 FREQ         ?= 100
