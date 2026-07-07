@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace zappy::core
 {
@@ -30,6 +31,7 @@ enum class Orientation : std::uint8_t
 struct Tile
 {
     ResourceSet resources{};
+    std::vector<std::uint64_t> food_expirations{};
 };
 
 // A team registered with the server.

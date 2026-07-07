@@ -217,6 +217,37 @@ static void test_respawn_reports_changed_tiles_only()
     assert(again.size() <= changed.size());
 }
 
+static void test_food_expires_after_ground_lifetime()
+{
+    WorldState w(1, 1);
+
+    auto changed = w.respawn_resources(/*now_tick=*/10);
+    assert(changed.size() == 1);
+    assert(w.at(0, 0).resources[0] == 1);
+
+    assert(w.expire_food(10 + FOOD_GROUND_LIFETIME_TICKS - 1).empty());
+    assert(w.at(0, 0).resources[0] == 1);
+
+    auto expired = w.expire_food(10 + FOOD_GROUND_LIFETIME_TICKS);
+    assert(expired.size() == 1);
+    assert(expired[0].first == 0 && expired[0].second == 0);
+    assert(w.at(0, 0).resources[0] == 0);
+}
+
+static void test_taken_food_no_longer_expires_on_tile()
+{
+    WorldState w(1, 1);
+    Player &p = w.add_player(0, 0, 0, Orientation::North);
+
+    w.respawn_resources(/*now_tick=*/50);
+    assert(w.take_object(p.id, 0));
+    assert(p.inventory[0] == 1);
+    assert(w.at(0, 0).resources[0] == 0);
+
+    assert(w.expire_food(50 + FOOD_GROUND_LIFETIME_TICKS).empty());
+    assert(p.inventory[0] == 1);
+}
+
 static void test_check_win()
 {
     WorldState w(10, 10);
@@ -260,6 +291,8 @@ int main()
     test_look_tile_count_scales_with_level();
     test_look_sees_resources_ahead();
     test_respawn_reports_changed_tiles_only();
+    test_food_expires_after_ground_lifetime();
+    test_taken_food_no_longer_expires_on_tile();
     test_check_win();
     test_check_win_needs_six();
     std::cout << "world_state tests OK\n";

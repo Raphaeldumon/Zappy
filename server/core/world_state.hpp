@@ -2,6 +2,7 @@
 
 #include "core/types.hpp"
 
+#include <cstdint>
 #include <cstddef>
 #include <optional>
 #include <random>
@@ -79,7 +80,7 @@ class WorldState
 
     // Object interaction — returns true on success
     bool take_object(PlayerId id, int resource_index);
-    bool set_object(PlayerId id, int resource_index);
+    bool set_object(PlayerId id, int resource_index, std::uint64_t now_tick = 0);
 
     // Ejection — returns {victim_id, K} list (K = direction in victim's frame 1..8)
     // Also marks eggs on the ejector's original tile as hatched (destroyed).
@@ -114,7 +115,11 @@ class WorldState
     // Respawn: add resources to meet density targets (called every 20 ticks).
     // Returns the coordinates of the tiles actually modified, so the caller can
     // emit `bct` only for those (the subject forbids re-pushing the whole map).
-    std::vector<std::pair<int, int>> respawn_resources();
+    std::vector<std::pair<int, int>> respawn_resources(std::uint64_t now_tick = 0);
+
+    // Remove food that has stayed on the ground past its lifetime. Returns the
+    // modified tile coordinates for GUI `bct` updates.
+    std::vector<std::pair<int, int>> expire_food(std::uint64_t now_tick);
 
     // --- Win condition ----------------------------------------------------------
     [[nodiscard]] std::optional<TeamId> check_win() const;

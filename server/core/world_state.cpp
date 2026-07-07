@@ -261,11 +261,13 @@ bool WorldState::take_object(PlayerId id, int resource_index)
     if (tile.resources[resource] <= 0)
         return false;
     --tile.resources[resource];
+    if (resource_index == 0 && !tile.food_expirations.empty())
+        tile.food_expirations.erase(std::min_element(tile.food_expirations.begin(), tile.food_expirations.end()));
     ++p->inventory[resource];
     return true;
 }
 
-bool WorldState::set_object(PlayerId id, int resource_index)
+bool WorldState::set_object(PlayerId id, int resource_index, std::uint64_t now_tick)
 {
     auto *p = find_player(id);
     if (!p || !p->alive)
@@ -276,7 +278,10 @@ bool WorldState::set_object(PlayerId id, int resource_index)
     if (p->inventory[resource] <= 0)
         return false;
     --p->inventory[resource];
-    ++at(p->x, p->y).resources[resource];
+    auto &tile = at(p->x, p->y);
+    ++tile.resources[resource];
+    if (resource_index == 0)
+        tile.food_expirations.push_back(now_tick + static_cast<std::uint64_t>(FOOD_GROUND_LIFETIME_TICKS));
     return true;
 }
 
@@ -438,7 +443,7 @@ Egg *WorldState::find_egg(EggId id) noexcept
 
 static constexpr double RESOURCE_DENSITIES[RESOURCE_COUNT] = {0.5, 0.3, 0.15, 0.1, 0.1, 0.08, 0.05};
 
-std::vector<std::pair<int, int>> WorldState::respawn_resources()
+std::vector<std::pair<int, int>> WorldState::respawn_resources(std::uint64_t now_tick)
 {
     int total_tiles = width_ * height_;
     std::uniform_int_distribution<int> tile_dist(0, total_tiles - 1);
@@ -459,7 +464,10 @@ std::vector<std::pair<int, int>> WorldState::respawn_resources()
         for (int i = 0; i < to_add; ++i)
         {
             int idx = tile_dist(rng_);
-            ++tiles_[static_cast<std::size_t>(idx)].resources[r];
+            auto &tile = tiles_[static_cast<std::size_t>(idx)];
+            ++tile.resources[r];
+            if (r == 0)
+                tile.food_expirations.push_back(now_tick + static_cast<std::uint64_t>(FOOD_GROUND_LIFETIME_TICKS));
             if (!touched[static_cast<std::size_t>(idx)])
             {
                 touched[static_cast<std::size_t>(idx)] = 1;
@@ -472,6 +480,34 @@ std::vector<std::pair<int, int>> WorldState::respawn_resources()
     changed.reserve(changed_idx.size());
     for (int idx : changed_idx)
         changed.emplace_back(idx % width_, idx / width_); // (x, y), row-major
+    return changed;
+}
+
+std::vector<std::pair<int, int>> WorldState::expire_food(std::uint64_t now_tick)
+{
+    std::vector<std::pair<int, int>> changed;
+
+    for (std::size_t idx = 0; idx < tiles_.size(); ++idx)
+    {
+        auto &tile = tiles_[idx];
+        if (tile.food_expirations.empty())
+            continue;
+
+        const auto before = tile.food_expirations.size();
+        tile.food_expirations.erase(
+            std::remove_if(tile.food_expirations.begin(), tile.food_expirations.end(),
+                           [now_tick](std::uint64_t expires_at) { return expires_at <= now_tick; }),
+            tile.food_expirations.end());
+
+        const auto expired = before - tile.food_expirations.size();
+        if (expired == 0)
+            continue;
+
+        tile.resources[0] = std::max(0, tile.resources[0] - static_cast<int>(expired));
+        changed.emplace_back(static_cast<int>(idx % static_cast<std::size_t>(width_)),
+                             static_cast<int>(idx / static_cast<std::size_t>(width_)));
+    }
+
     return changed;
 }
 

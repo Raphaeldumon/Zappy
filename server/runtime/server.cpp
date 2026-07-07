@@ -62,15 +62,18 @@ void Server::init_world()
         world_.register_team(tid, name, args_.clients_per_team);
         ++tid;
     }
-    world_.respawn_resources();
+    world_.respawn_resources(now_ticks());
 }
 
 void Server::schedule_resource_respawn()
 {
     scheduler_.schedule(now_ticks() + 20, [this]() {
+        for (auto [x, y] : world_.expire_food(now_ticks()))
+            net_.broadcast_gui(protocol::GuiEmitter::bct(x, y, world_.at(x, y).resources));
+
         // Push bct only for the tiles respawn actually changed (subject: avoid
         // re-broadcasting the whole map every cycle).
-        for (auto [x, y] : world_.respawn_resources())
+        for (auto [x, y] : world_.respawn_resources(now_ticks()))
             net_.broadcast_gui(protocol::GuiEmitter::bct(x, y, world_.at(x, y).resources));
         schedule_resource_respawn();
     });

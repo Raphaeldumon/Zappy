@@ -16,6 +16,7 @@ inline constexpr int MAX_LEVEL = 8;
 // A drone starts with this many life units worth of food; each food = 126 time units.
 inline constexpr int LIFE_UNITS_PER_FOOD = 126;
 inline constexpr int STARTING_FOOD = 10;
+inline constexpr int FOOD_GROUND_LIFETIME_TICKS = LIFE_UNITS_PER_FOOD * 20;
 
 // Elevation requirements per target level (index 0 => ritual to reach level 2).
 // {players_required, linemate, deraumere, sibur, mendiane, phiras, thystame}

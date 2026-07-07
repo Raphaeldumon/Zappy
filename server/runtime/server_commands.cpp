@@ -264,7 +264,7 @@ void Server::cmd_set(int fd, int resource_index)
     if (!p)
         return;
 
-    if (!world_.set_object(p->id, resource_index))
+    if (!world_.set_object(p->id, resource_index, now_ticks()))
         return send_ko(fd);
 
     send_ok(fd);
