@@ -289,6 +289,7 @@ class Interface
     // --- Spectator helpers ---
     void requestTimeUnit(int freq);                      // send "sst T" to the server (speed control)
     void drawHud();                                      // permanent compact HUD (top-left)
+    void drawWeatherOverlay();                           // visual weather pass under the HUD
     void drawStatsPanel();                               // global environment stats (Tab)
     void drawHelpOverlay();                              // full controls list (H / F1)
     void drawEndScreen();                                // centered winner summary after seg

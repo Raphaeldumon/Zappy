@@ -33,6 +33,19 @@ bool inBounds(const GameMap &map, int x, int y)
     return x >= 0 && y >= 0 && x < map.getWidth() && y < map.getHeight();
 }
 
+bool isIntegerToken(const std::string &tok)
+{
+    if (tok.empty())
+        return false;
+    std::size_t start = tok[0] == '-' ? 1 : 0;
+    if (start == tok.size())
+        return false;
+    for (std::size_t i = start; i < tok.size(); ++i)
+        if (tok[i] < '0' || tok[i] > '9')
+            return false;
+    return true;
+}
+
 long long tileKey(const GameMap &map, int x, int y)
 {
     return static_cast<long long>(y) * map.getWidth() + x;
@@ -91,6 +104,40 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
         int f;
         if (iss >> f)
             state.frequency = f;
+        return;
+    }
+
+    if (tag == "wth")
+    {
+        std::string first;
+        std::string second;
+        int duration = 0;
+        if (!(iss >> first))
+            return;
+        if (iss >> second)
+        {
+            if (isIntegerToken(second))
+            {
+                duration = std::atoi(second.c_str());
+                second = first;
+                first = state.season;
+            }
+            else if (!(iss >> duration))
+            {
+                duration = 0;
+            }
+        }
+        else
+        {
+            second = first;
+            first = state.season;
+        }
+        const std::string weather = second;
+        if (state.season != first || state.weather != weather)
+            state.feedEvents.push_back({GameEventKind::Weather, 0, 0, 0, duration, first + ":" + weather});
+        state.season = first;
+        state.weather = weather;
+        state.weatherDurationTicks = duration;
         return;
     }
 

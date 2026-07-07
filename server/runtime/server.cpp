@@ -6,6 +6,8 @@
 #include "runtime/limits.hpp"
 #include "zappy/protocol/ai_protocol.hpp"
 
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <iostream>
 #include <limits>
@@ -39,6 +41,9 @@ void Server::run()
     start_time_ = std::chrono::steady_clock::now();
     init_world();
     schedule_resource_respawn();
+    season_until_tick_ = now_ticks() + 2400;
+    set_season_weather("spring", "clear", 600);
+    schedule_weather_change();
 
     while (running_.load(std::memory_order_relaxed))
     {
@@ -98,6 +103,70 @@ void Server::schedule_food_consumption(core::PlayerId id)
                                      });
     if (auto *p = world_.find_player(id))
         p->food_event_id = ev_id;
+}
+
+void Server::schedule_weather_change()
+{
+    scheduler_.schedule(weather_until_tick_, [this]() {
+        static constexpr std::array<std::string_view, 4> kSeasons = {"spring", "summer", "autumn", "winter"};
+        constexpr core::EventScheduler::Tick kSeasonDuration = 2400;
+        const auto now = now_ticks();
+
+        if (season_until_tick_ <= now)
+        {
+            auto it = std::find(kSeasons.begin(), kSeasons.end(), season_);
+            const std::size_t idx =
+                it == kSeasons.end() ? 0 : (static_cast<std::size_t>(std::distance(kSeasons.begin(), it)) + 1) %
+                                                  kSeasons.size();
+            season_ = std::string(kSeasons[idx]);
+            season_until_tick_ = now + kSeasonDuration;
+        }
+
+        struct WeatherChoice
+        {
+            std::string_view name;
+            int weight;
+        };
+        static constexpr std::array<WeatherChoice, 3> kSpring = {{{"fertile", 45}, {"clear", 35}, {"rain", 20}}};
+        static constexpr std::array<WeatherChoice, 3> kSummer = {{{"heat", 55}, {"clear", 35}, {"storm", 10}}};
+        static constexpr std::array<WeatherChoice, 3> kAutumn = {{{"rain", 40}, {"fog", 35}, {"storm", 25}}};
+        static constexpr std::array<WeatherChoice, 3> kWinter = {{{"fog", 55}, {"rain", 35}, {"clear", 10}}};
+
+        const auto &choices = season_ == "summer" ? kSummer
+                              : season_ == "autumn" ? kAutumn
+                              : season_ == "winter" ? kWinter
+                                                     : kSpring;
+
+        int total = 0;
+        for (const auto &choice : choices)
+            total += choice.weight;
+
+        std::uniform_int_distribution<int> pick_dist(1, total);
+        int pick = pick_dist(rng_);
+        std::string_view next = choices.front().name;
+        for (const auto &choice : choices)
+        {
+            pick -= choice.weight;
+            if (pick <= 0)
+            {
+                next = choice.name;
+                break;
+            }
+        }
+
+        std::uniform_int_distribution<int> duration_dist(500, 900);
+        const int duration = std::min<int>(duration_dist(rng_), static_cast<int>(season_until_tick_ - now));
+        set_season_weather(season_, std::string(next), duration);
+        schedule_weather_change();
+    });
+}
+
+void Server::set_season_weather(std::string season, std::string weather, int duration_ticks)
+{
+    season_ = std::move(season);
+    weather_ = std::move(weather);
+    weather_until_tick_ = now_ticks() + static_cast<core::EventScheduler::Tick>(std::max(1, duration_ticks));
+    net_.broadcast_gui(protocol::GuiEmitter::wth(season_, weather_, duration_ticks));
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +329,10 @@ void Server::send_gui_snapshot(int fd)
 {
     net_.send_to(fd, protocol::GuiEmitter::msz(world_.width(), world_.height()));
     net_.send_to(fd, protocol::GuiEmitter::sgt(args_.frequency));
+    const auto now = now_ticks();
+    const int weather_left =
+        weather_until_tick_ > now ? static_cast<int>(weather_until_tick_ - now) : 0;
+    net_.send_to(fd, protocol::GuiEmitter::wth(season_, weather_, weather_left));
 
     for (auto &t : world_.teams())
         net_.send_to(fd, protocol::GuiEmitter::tna(t.name));

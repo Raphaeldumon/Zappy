@@ -39,6 +39,7 @@ struct GuiEmitter
     [[nodiscard]] static std::string ebo(core::EggId e);
     [[nodiscard]] static std::string edi(core::EggId e);
     [[nodiscard]] static std::string sst(int frequency);
+    [[nodiscard]] static std::string wth(std::string_view season, std::string_view weather, int duration_ticks);
     [[nodiscard]] static std::string seg(std::string_view team_name);
     [[nodiscard]] static std::string smg(std::string_view msg);
     [[nodiscard]] static std::string suc();

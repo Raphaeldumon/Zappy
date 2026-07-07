@@ -31,6 +31,8 @@ class Server
     void init_world();
     void schedule_resource_respawn();
     void schedule_food_consumption(core::PlayerId id);
+    void schedule_weather_change();
+    void set_season_weather(std::string season, std::string weather, int duration_ticks);
 
     // Network callbacks
     void on_client_connect(int fd);
@@ -104,6 +106,10 @@ class Server
 
     std::chrono::steady_clock::time_point start_time_;
     std::mt19937 rng_;
+    std::string season_{"spring"};
+    std::string weather_{"clear"};
+    core::EventScheduler::Tick season_until_tick_{0};
+    core::EventScheduler::Tick weather_until_tick_{0};
 };
 
 } // namespace zappy::runtime

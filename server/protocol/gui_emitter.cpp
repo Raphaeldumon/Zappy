@@ -139,6 +139,11 @@ std::string GuiEmitter::sst(int frequency)
     return "sst " + std::to_string(frequency);
 }
 
+std::string GuiEmitter::wth(std::string_view season, std::string_view weather, int duration_ticks)
+{
+    return "wth " + std::string(season) + ' ' + std::string(weather) + ' ' + std::to_string(duration_ticks);
+}
+
 std::string GuiEmitter::seg(std::string_view team_name)
 {
     return "seg " + std::string(team_name);

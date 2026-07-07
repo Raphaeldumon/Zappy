@@ -53,6 +53,7 @@ enum class GameEventKind : std::uint8_t
     IncantEnd,   // pie: x/y set, value = result (1 ok, 0 failed, -1 unknown)
     Fork,        // pfk: player laid an egg
     Eject,       // pex: player ejected others
+    Weather,     // wth: text = weather, value = duration ticks
     Win          // seg: text = winning team
 };
 
@@ -75,6 +76,9 @@ struct GuiState
     std::vector<PlayerAnimEvent> animEvents; // drained by the renderer each frame
     std::vector<GameEvent> feedEvents;       // drained by the renderer each frame
     int frequency{0};
+    std::string season{"spring"};
+    std::string weather{"clear"};
+    int weatherDurationTicks{0};
     bool hasWinner{false};
     std::string winner;
 };

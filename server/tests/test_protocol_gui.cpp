@@ -69,6 +69,7 @@ static void test_gui_emitter_events()
     assert(GuiEmitter::ebo(10) == "ebo #10");
     assert(GuiEmitter::edi(11) == "edi #11");
     assert(GuiEmitter::sst(200) == "sst 200");
+    assert(GuiEmitter::wth("winter", "rain", 900) == "wth winter rain 900");
     assert(GuiEmitter::seg("blue") == "seg blue");
     assert(GuiEmitter::smg("hi") == "smg hi");
     assert(GuiEmitter::suc() == "suc");
