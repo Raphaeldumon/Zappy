@@ -29,6 +29,7 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     loadTileTextures();
     loadResourceModels();
     loadPlayerModel();
+    loadMeteoriteModel();
     loadBackgroundMusic();
     _engine.disableCursor(); // capture the mouse for free-look (Esc releases on close)
 }
@@ -41,6 +42,7 @@ Interface::~Interface()
     unloadBackgroundMusic();
     unloadPlayerModel();
     unloadResourceModels();
+    unloadMeteoriteModel();
     unloadTileTextures();
     _engine.unloadSkybox();
 }
@@ -89,6 +91,15 @@ constexpr const char *kMusicPath = "assets/music_back.mp3";
 constexpr float kMusicVolume = 0.45f;
 
 constexpr float kPi = 3.14159265358979f;
+
+// Meteorite random event: cadence + odds + look.
+constexpr const char *kMeteoriteModelPath = "assets/meteorite.glb";
+constexpr float kMeteorRollTicks = 60.0f;               // roll every N game ticks
+constexpr int kMeteorChance = 100;                      // 1-in-N per roll
+constexpr float kMeteorFallSeconds = 1.2f;              // sky -> ground
+constexpr float kMeteorGlowSeconds = 1.6f;              // impact shockwave fade
+constexpr float kMeteorFallHeight = TILE_SIZE * 10.0f;  // spawn altitude
+constexpr float kMeteorSize = TILE_SIZE * 0.55f;        // display box edge
 // Torus proportions. 1.0 keeps surface distances equal to the flat grid;
 // shrinking the minor scale flattens the tube (tiles get smaller around it)
 // while a larger major scale widens the ring, for a broad thin donut.
@@ -227,6 +238,41 @@ void Interface::unloadResourceModels()
             _engine.unloadModel(rm.handle);
     }
     _resourceModels.clear();
+}
+
+void Interface::loadMeteoriteModel()
+{
+    if (!fs::exists(kMeteoriteModelPath))
+    {
+        gfx::logWarn("loadMeteoriteModel: missing asset '%s' (falling back to sphere)", kMeteoriteModelPath);
+        return;
+    }
+    _meteoriteModel.handle = _engine.loadModel(kMeteoriteModelPath);
+    if (_meteoriteModel.handle == gfx::NoHandle)
+    {
+        gfx::logWarn("loadMeteoriteModel: failed to load '%s' (falling back to sphere)", kMeteoriteModelPath);
+        return;
+    }
+    _meteoriteModel.loaded = true;
+
+    // Same re-centre + fit as the resource models: footprint centred on the
+    // origin, base at y=0, uniform scale into a kMeteorSize box.
+    const gfx::BBox box = _engine.modelBounds(_meteoriteModel.handle);
+    const float dx = std::max(box.max.x - box.min.x, 0.0001f);
+    const float dy = std::max(box.max.y - box.min.y, 0.0001f);
+    const float dz = std::max(box.max.z - box.min.z, 0.0001f);
+    const gfx::Vec3 centre = {(box.min.x + box.max.x) * 0.5f, box.min.y, (box.min.z + box.max.z) * 0.5f};
+    _engine.translateModel(_meteoriteModel.handle, {-centre.x, -centre.y, -centre.z});
+    const float s = kMeteorSize / std::max(dx, std::max(dy, dz));
+    _meteoriteModel.scale = {s, s, s};
+    gfx::logInfo("METEORITE '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=%.2f", kMeteoriteModelPath, dx, dy, dz, s);
+}
+
+void Interface::unloadMeteoriteModel()
+{
+    if (_meteoriteModel.loaded)
+        _engine.unloadModel(_meteoriteModel.handle);
+    _meteoriteModel = {};
 }
 
 void Interface::loadPlayerModel()
@@ -1058,6 +1104,7 @@ void Interface::update()
         _engine.updateMusic(_backgroundMusic);
 
     _elapsed += _engine.frameTime();
+    updateRandomEvents(_engine.frameTime());
 
     // Record whatever the server pushed since last frame; in live mode it is
     // also folded into the world right away. Scrubbing replays from _history.
@@ -1110,6 +1157,37 @@ void Interface::update()
 
     // Drive per-player animation state (walk/idle/dance + one-shots + death ghosts).
     updatePlayerAnimations();
+}
+
+void Interface::updateRandomEvents(float dt)
+{
+    // Advance active meteorites; drop them once the impact glow has faded.
+    for (auto &m : _meteorites)
+        m.age += dt;
+    _meteorites.erase(std::remove_if(_meteorites.begin(), _meteorites.end(),
+                                     [](const Meteorite &m) {
+                                         return m.age >= kMeteorFallSeconds + kMeteorGlowSeconds;
+                                     }),
+                      _meteorites.end());
+
+    // Game-tick accumulator: frequency is server time units per second, so
+    // the roll cadence tracks sst speed changes. Paused scrubbing still ticks
+    // — these are ambience, not simulation state.
+    _tickAccum += dt * static_cast<float>(std::max(1, _state.frequency));
+    while (_tickAccum >= kMeteorRollTicks)
+    {
+        _tickAccum -= kMeteorRollTicks;
+        std::uniform_int_distribution<int> dice(1, kMeteorChance);
+        if (dice(_rng) != 1)
+            continue;
+
+        std::uniform_int_distribution<int> rx(0, _map.getWidth() - 1);
+        std::uniform_int_distribution<int> ry(0, _map.getHeight() - 1);
+        const Meteorite m{rx(_rng), ry(_rng), 0.0f};
+        _meteorites.push_back(m);
+        _feed.push_back({_elapsed, gfx::Color{255, 130, 50, 255}, gfx::fmt("Meteorite strike at (%d, %d)!", m.x, m.y)});
+        gfx::logInfo("updateRandomEvents: meteorite at (%d, %d)", m.x, m.y);
+    }
 }
 
 namespace
@@ -1488,6 +1566,7 @@ void Interface::render()
         if (!itemXf[i].empty())
             _engine.drawModelInstanced(_resourceModels[i].handle, itemXf[i], gfx::WHITE);
 
+    drawMeteorites();
     drawIncantationRings();
     drawHoverHighlight();
     drawSelectionHighlight();
@@ -1598,6 +1677,64 @@ void Interface::pickTile()
     else
     {
         _selectedX = _selectedY = -1; // clicked off the board -> deselect
+    }
+}
+
+void Interface::drawMeteorites()
+{
+    for (const auto &m : _meteorites)
+    {
+        const Surface s = surfaceAt(m.x * TILE_SIZE + TILE_SIZE / 2.0f, m.y * TILE_SIZE + TILE_SIZE / 2.0f, 0.0f);
+        // Spin while falling, frozen once embedded (continuity at impact).
+        const float spin = std::min(m.age, kMeteorFallSeconds) * 540.0f;
+
+        if (m.age < kMeteorFallSeconds)
+        {
+            // Falling: quadratic ease-in down the local normal (reads as gravity).
+            const float p = m.age / kMeteorFallSeconds;
+            const float h = kMeteorFallHeight * (1.0f - p * p);
+            const gfx::Vec3 pos = gfx::add(s.pos, gfx::scale(s.up, h));
+
+            if (_meteoriteModel.loaded)
+                _engine.drawModelOriented(_meteoriteModel.handle, pos, s.right, s.up, s.back, spin,
+                                          _meteoriteModel.scale, gfx::WHITE);
+            else
+                _engine.drawSphere(gfx::add(pos, gfx::scale(s.up, kMeteorSize * 0.5f)), kMeteorSize * 0.5f,
+                                   gfx::Color{140, 95, 60, 255});
+
+            // Short fire trail above the rock; bright enough for the bloom pass.
+            for (int i = 1; i <= 3; ++i)
+            {
+                const float ta = 1.0f - static_cast<float>(i) * 0.28f;
+                _engine.drawSphere(gfx::add(pos, gfx::scale(s.up, kMeteorSize * 0.5f + i * TILE_SIZE * 0.45f)),
+                                   kMeteorSize * (0.30f - 0.06f * i),
+                                   gfx::Color{255, 170, 70, static_cast<std::uint8_t>(220.0f * ta)});
+            }
+        }
+        else
+        {
+            // Impact: rock embedded on the tile, expanding shockwave ring and
+            // a bright fading glow quad (the bloom pass makes it flare).
+            const float g = (m.age - kMeteorFallSeconds) / kMeteorGlowSeconds; // 0..1
+            const auto fade = static_cast<std::uint8_t>(230.0f * (1.0f - g));
+
+            if (_meteoriteModel.loaded)
+                _engine.drawModelOriented(_meteoriteModel.handle, s.pos, s.right, s.up, s.back, spin,
+                                          _meteoriteModel.scale, gfx::WHITE);
+            else
+                _engine.drawSphere(gfx::add(s.pos, gfx::scale(s.up, kMeteorSize * 0.3f)), kMeteorSize * 0.5f,
+                                   gfx::Color{140, 95, 60, 255});
+
+            const gfx::Vec3 ringPos = gfx::add(s.pos, gfx::scale(s.up, 0.3f));
+            _engine.drawCircle3D(ringPos, TILE_SIZE * (0.2f + 0.9f * g), s.up, gfx::Color{255, 160, 60, fade});
+            _engine.drawCircle3D(ringPos, TILE_SIZE * (0.1f + 0.6f * g), s.up, gfx::Color{255, 210, 120, fade});
+
+            const float hs = TILE_SIZE * 0.35f * (1.0f - 0.4f * g);
+            const gfx::Vec3 dx = gfx::scale(s.right, hs), dz = gfx::scale(s.back, hs);
+            _engine.drawQuad3D(gfx::sub(gfx::sub(ringPos, dx), dz), gfx::sub(gfx::add(ringPos, dx), dz),
+                               gfx::add(gfx::add(ringPos, dx), dz), gfx::add(gfx::sub(ringPos, dx), dz),
+                               gfx::Color{255, 190, 90, static_cast<std::uint8_t>(fade * 0.7f)});
+        }
     }
 }
 

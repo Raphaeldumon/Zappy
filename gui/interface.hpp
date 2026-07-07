@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
+#include <random>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -186,6 +187,26 @@ class Interface
         float until; // _elapsed after which the bubble disappears
     };
     std::unordered_map<std::uint32_t, Bubble> _bubbles;
+
+    // --- Random events (GUI-side, visual only) ---
+    // First member of the future random-event system: every 60 game ticks a
+    // d100 rolls; on a 1 a meteorite falls onto a random tile (fall, impact
+    // shockwave + glow, gone). Ticks come from the server frequency, so the
+    // cadence follows sst speed changes.
+    struct Meteorite
+    {
+        int x{0};
+        int y{0};
+        float age{0.0f}; // seconds since spawn
+    };
+    std::vector<Meteorite> _meteorites;
+    ResourceModel _meteoriteModel{};
+    float _tickAccum{0.0f};                    // fractional game ticks toward the next roll
+    std::mt19937 _rng{std::random_device{}()}; // shared by future random events
+    void loadMeteoriteModel();
+    void unloadMeteoriteModel();
+    void updateRandomEvents(float dt); // roll the dice + advance active events
+    void drawMeteorites();             // call inside Mode3D
 
     // --- Torus view ---
     // T switches the world between the flat grid and a real torus: the map
