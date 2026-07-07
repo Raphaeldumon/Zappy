@@ -100,6 +100,7 @@ enum class Key
     M,
     T,
     H,
+    V,
     Equal,
     Minus,
     KpAdd,

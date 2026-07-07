@@ -94,6 +94,8 @@ int toRlKey(gfx::Key k)
         return KEY_T;
     case gfx::Key::H:
         return KEY_H;
+    case gfx::Key::V:
+        return KEY_V;
     case gfx::Key::Equal:
         return KEY_EQUAL;
     case gfx::Key::Minus:
@@ -862,6 +864,33 @@ void RaylibEngine::drawQuad3D(gfx::Vec3 a, gfx::Vec3 b, gfx::Vec3 c, gfx::Vec3 d
     DrawTriangle3D(toRl(a), toRl(c), toRl(d), toRl(col));
     DrawTriangle3D(toRl(c), toRl(b), toRl(a), toRl(col));
     DrawTriangle3D(toRl(d), toRl(c), toRl(a), toRl(col));
+}
+
+void RaylibEngine::drawTexturedQuad3D(gfx::TextureHandle tex, gfx::Vec3 a, gfx::Vec3 b, gfx::Vec3 c, gfx::Vec3 d,
+                                      gfx::Vec3 normal, gfx::Color tint)
+{
+    if (!_impl->valid(tex, _impl->textures.size()))
+        return;
+
+    const auto emit = [&](gfx::Vec3 p, float u, float v) {
+        rlTexCoord2f(u, v);
+        rlVertex3f(p.x, p.y, p.z);
+    };
+
+    rlSetTexture(_impl->textures[tex].id);
+    rlBegin(RL_QUADS);
+    rlColor4ub(tint.r, tint.g, tint.b, tint.a);
+    rlNormal3f(normal.x, normal.y, normal.z);
+    emit(a, 0.0f, 1.0f);
+    emit(b, 1.0f, 1.0f);
+    emit(c, 1.0f, 0.0f);
+    emit(d, 0.0f, 0.0f);
+    emit(d, 0.0f, 0.0f);
+    emit(c, 1.0f, 0.0f);
+    emit(b, 1.0f, 1.0f);
+    emit(a, 0.0f, 1.0f);
+    rlEnd();
+    rlSetTexture(0);
 }
 
 gfx::Vec2 RaylibEngine::worldToScreen(const gfx::Camera &cam, gfx::Vec3 world) const

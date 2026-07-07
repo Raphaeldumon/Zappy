@@ -69,6 +69,8 @@ class Interface
     // --- Assets ---
     gfx::TextureHandle _darkTileTexture{gfx::NoHandle};
     gfx::TextureHandle _orangeTileTexture{gfx::NoHandle};
+    gfx::TextureHandle _grassTileTexture{gfx::NoHandle};
+    gfx::TextureHandle _blackGrassTileTexture{gfx::NoHandle};
 
     // --- Skybox ---
     // A 360 equirectangular panorama sampled by view direction in a shader and
@@ -201,10 +203,13 @@ class Interface
     };
     std::vector<Meteorite> _meteorites;
     ResourceModel _meteoriteModel{};
+    ResourceModel _incantationModel{};
     float _tickAccum{0.0f};                    // fractional game ticks toward the next roll
     std::mt19937 _rng{std::random_device{}()}; // shared by future random events
     void loadMeteoriteModel();
     void unloadMeteoriteModel();
+    void loadIncantationModel();
+    void unloadIncantationModel();
     void updateRandomEvents(float dt); // roll the dice + advance active events
     void drawMeteorites();             // call inside Mode3D
 
@@ -259,6 +264,7 @@ class Interface
     // --- Spectator state ---
     bool _showStats{false};           // Tab: global environment stats panel
     bool _showHelp{false};            // H / F1: full controls overlay
+    bool _weatherVisible{true};       // V: visual weather/season overlay
     bool _endHidden{false};           // Enter: dismiss the end screen to keep using the GUI
     float _endScroll{0.0f};           // mouse-wheel offset for the end-screen player list
     std::int64_t _followedPlayer{-1}; // F: camera rides along this player id (-1 = none)

@@ -118,6 +118,8 @@ class RaylibEngine
     void drawCircle3D(gfx::Vec3 center, float radius, gfx::Vec3 normal, gfx::Color c); // ring in any plane
     // Filled quad a-b-c-d (both windings, so it reads from either side).
     void drawQuad3D(gfx::Vec3 a, gfx::Vec3 b, gfx::Vec3 c, gfx::Vec3 d, gfx::Color col);
+    void drawTexturedQuad3D(gfx::TextureHandle tex, gfx::Vec3 a, gfx::Vec3 b, gfx::Vec3 c, gfx::Vec3 d,
+                            gfx::Vec3 normal, gfx::Color tint);
     gfx::Vec2 worldToScreen(const gfx::Camera &cam, gfx::Vec3 world) const;
     gfx::Ray screenToWorldRay(const gfx::Camera &cam, gfx::Vec2 screen) const;
 

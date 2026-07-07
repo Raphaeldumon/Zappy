@@ -30,6 +30,7 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     loadResourceModels();
     loadPlayerModel();
     loadMeteoriteModel();
+    loadIncantationModel();
     loadBackgroundMusic();
     _engine.disableCursor(); // capture the mouse for free-look (Esc releases on close)
 }
@@ -42,6 +43,7 @@ Interface::~Interface()
     unloadBackgroundMusic();
     unloadPlayerModel();
     unloadResourceModels();
+    unloadIncantationModel();
     unloadMeteoriteModel();
     unloadTileTextures();
     _engine.unloadSkybox();
@@ -94,12 +96,15 @@ constexpr float kPi = 3.14159265358979f;
 
 // Meteorite random event: cadence + odds + look.
 constexpr const char *kMeteoriteModelPath = "assets/meteorite.glb";
+constexpr const char *kIncantationModelPath = "assets/incantation.glb";
 constexpr float kMeteorRollTicks = 60.0f;               // roll every N game ticks
 constexpr int kMeteorChance = 100;                      // 1-in-N per roll
 constexpr float kMeteorFallSeconds = 1.2f;              // sky -> ground
 constexpr float kMeteorGlowSeconds = 1.6f;              // impact shockwave fade
 constexpr float kMeteorFallHeight = TILE_SIZE * 10.0f;  // spawn altitude
 constexpr float kMeteorSize = TILE_SIZE * 0.55f;        // display box edge
+constexpr float kIncantationSize = TILE_SIZE * 1.35f;   // display box edge
+constexpr float kIncantationSpin = 140.0f;              // degrees per second
 // Torus proportions. 1.0 keeps surface distances equal to the flat grid;
 // shrinking the minor scale flattens the tube (tiles get smaller around it)
 // while a larger major scale widens the ring, for a broad thin donut.
@@ -273,6 +278,39 @@ void Interface::unloadMeteoriteModel()
     if (_meteoriteModel.loaded)
         _engine.unloadModel(_meteoriteModel.handle);
     _meteoriteModel = {};
+}
+
+void Interface::loadIncantationModel()
+{
+    if (!fs::exists(kIncantationModelPath))
+    {
+        gfx::logWarn("loadIncantationModel: missing asset '%s' (rings only)", kIncantationModelPath);
+        return;
+    }
+    _incantationModel.handle = _engine.loadModel(kIncantationModelPath);
+    if (_incantationModel.handle == gfx::NoHandle)
+    {
+        gfx::logWarn("loadIncantationModel: failed to load '%s' (rings only)", kIncantationModelPath);
+        return;
+    }
+    _incantationModel.loaded = true;
+
+    const gfx::BBox box = _engine.modelBounds(_incantationModel.handle);
+    const float dx = std::max(box.max.x - box.min.x, 0.0001f);
+    const float dy = std::max(box.max.y - box.min.y, 0.0001f);
+    const float dz = std::max(box.max.z - box.min.z, 0.0001f);
+    const gfx::Vec3 centre = {(box.min.x + box.max.x) * 0.5f, box.min.y, (box.min.z + box.max.z) * 0.5f};
+    _engine.translateModel(_incantationModel.handle, {-centre.x, -centre.y, -centre.z});
+    const float s = kIncantationSize / std::max(dx, std::max(dy, dz));
+    _incantationModel.scale = {s, s, s};
+    gfx::logInfo("INCANTATION '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=%.2f", kIncantationModelPath, dx, dy, dz, s);
+}
+
+void Interface::unloadIncantationModel()
+{
+    if (_incantationModel.loaded)
+        _engine.unloadModel(_incantationModel.handle);
+    _incantationModel = {};
 }
 
 void Interface::loadPlayerModel()
@@ -573,6 +611,14 @@ void Interface::loadTileTextures()
     _orangeTileTexture = _engine.loadTexture("assets/sol_blanc.png");
     if (_orangeTileTexture == gfx::NoHandle)
         gfx::logWarn("loadTileTextures: failed to load assets/sol_blanc.png");
+
+    _grassTileTexture = _engine.loadTexture("assets/grass.png");
+    if (_grassTileTexture == gfx::NoHandle)
+        gfx::logWarn("loadTileTextures: failed to load assets/grass.png");
+
+    _blackGrassTileTexture = _engine.loadTexture("assets/blackgrass.png");
+    if (_blackGrassTileTexture == gfx::NoHandle)
+        gfx::logWarn("loadTileTextures: failed to load assets/blackgrass.png");
 }
 
 void Interface::unloadTileTextures()
@@ -581,6 +627,10 @@ void Interface::unloadTileTextures()
         _engine.unloadTexture(_darkTileTexture);
     if (_orangeTileTexture != gfx::NoHandle)
         _engine.unloadTexture(_orangeTileTexture);
+    if (_grassTileTexture != gfx::NoHandle)
+        _engine.unloadTexture(_grassTileTexture);
+    if (_blackGrassTileTexture != gfx::NoHandle)
+        _engine.unloadTexture(_blackGrassTileTexture);
 }
 
 void Interface::initCamera()
@@ -690,20 +740,21 @@ static int torusSubdiv(int tiles)
 
 void Interface::drawTorusFloor()
 {
-    // Checkerboard painted straight onto the torus. rlgl immediate quads skip
-    // the lighting shader, so a cheap analytic lambert term stands in for it —
-    // without it the donut reads as a flat silhouette.
+    // Checkerboard painted straight onto the torus. Textured immediate quads
+    // skip the lighting shader, so a cheap analytic lambert term stands in for it.
     const int mapW = _map.getWidth(), mapH = _map.getHeight();
     const int subU = torusSubdiv(mapW);
     const int subV = torusSubdiv(mapH);
     const gfx::Vec3 lightDir = gfx::normalize({0.35f, 0.85f, 0.30f});
-    const gfx::Color dark{58, 54, 66, 255}, light{232, 138, 46, 255};
+    const gfx::Color dark{55, 78, 54, 255}, light{122, 190, 82, 255};
 
     for (int y = 0; y < mapH; ++y)
     {
         for (int x = 0; x < mapW; ++x)
         {
-            const gfx::Color base = ((x + y) & 1) ? dark : light;
+            const bool blackGrass = ((x + y) & 1) != 0;
+            const gfx::Color base = blackGrass ? dark : light;
+            const gfx::TextureHandle tex = blackGrass ? _blackGrassTileTexture : _grassTileTexture;
             for (int j = 0; j < subV; ++j)
             {
                 for (int i = 0; i < subU; ++i)
@@ -719,8 +770,17 @@ void Interface::drawTorusFloor()
                                        static_cast<std::uint8_t>(base.g * lum),
                                        static_cast<std::uint8_t>(base.b * lum), 255};
 
-                    _engine.drawQuad3D(surfaceAt(u0, v0, 0.0f).pos, surfaceAt(u1, v0, 0.0f).pos,
-                                       surfaceAt(u1, v1, 0.0f).pos, surfaceAt(u0, v1, 0.0f).pos, c);
+                    const gfx::Vec3 a = surfaceAt(u0, v0, 0.0f).pos;
+                    const gfx::Vec3 b = surfaceAt(u1, v0, 0.0f).pos;
+                    const gfx::Vec3 cpos = surfaceAt(u1, v1, 0.0f).pos;
+                    const gfx::Vec3 d = surfaceAt(u0, v1, 0.0f).pos;
+                    if (tex != gfx::NoHandle)
+                        _engine.drawTexturedQuad3D(tex, a, b, cpos, d, mid.up,
+                                                   gfx::Color{static_cast<std::uint8_t>(255.0f * lum),
+                                                              static_cast<std::uint8_t>(255.0f * lum),
+                                                              static_cast<std::uint8_t>(255.0f * lum), 255});
+                    else
+                        _engine.drawQuad3D(a, b, cpos, d, c);
                 }
             }
         }
@@ -920,6 +980,8 @@ void Interface::handleInput()
     // ---- T: swap the world between the flat grid and its true torus shape.
     if (_engine.keyPressed(gfx::Key::T))
         toggleTorusView();
+    if (_engine.keyPressed(gfx::Key::V))
+        _weatherVisible = !_weatherVisible;
 
     // ---- F: toggle riding along with the selected player (grid view only:
     // the follow anchor is a flat-world position).
@@ -1582,7 +1644,8 @@ void Interface::render()
                          label.color);
     }
 
-    drawWeatherOverlay();
+    if (_weatherVisible)
+        drawWeatherOverlay();
     drawSpeechBubbles();
     drawHud();
     drawTimeline();
@@ -1743,7 +1806,7 @@ void Interface::drawIncantationRings()
     if (_state.incanting.empty())
         return;
 
-    // Three expanding, fading rings per ritual tile plus a pulsing core disc.
+    // Three expanding, fading rings per ritual tile.
     // The colours sit above the bloom threshold, so the whole thing glows.
     constexpr int kRings = 3;
     const gfx::Color kRitual{210, 130, 255, 255};
@@ -1756,6 +1819,13 @@ void Interface::drawIncantationRings()
         const Surface s =
             surfaceAt(tx * TILE_SIZE + TILE_SIZE / 2.0f, ty * TILE_SIZE + TILE_SIZE / 2.0f, 0.25f);
 
+        if (_incantationModel.loaded)
+        {
+            const float spin = std::fmod(_elapsed * kIncantationSpin, 360.0f);
+            _engine.drawModelOriented(_incantationModel.handle, s.pos, s.right, s.up, s.back, spin,
+                                      _incantationModel.scale, gfx::WHITE);
+        }
+
         for (int i = 0; i < kRings; ++i)
         {
             // Phase-offset sawtooth: each ring grows 0 -> maxR then wraps.
@@ -1765,14 +1835,6 @@ void Interface::drawIncantationRings()
             const auto alpha = static_cast<std::uint8_t>(230.0f * (1.0f - phase));
             _engine.drawCircle3D(s.pos, r, s.up, gfx::Color{kRitual.r, kRitual.g, kRitual.b, alpha});
         }
-
-        // Core pulse: a slim bright quad the bloom pass turns into a glow.
-        const float pulse = 0.5f + 0.5f * std::sin(_elapsed * 6.0f);
-        const auto coreA = static_cast<std::uint8_t>(90.0f + 90.0f * pulse);
-        const gfx::Vec3 dx = gfx::scale(s.right, TILE_SIZE * 0.25f), dz = gfx::scale(s.back, TILE_SIZE * 0.25f);
-        _engine.drawQuad3D(gfx::sub(gfx::sub(s.pos, dx), dz), gfx::sub(gfx::add(s.pos, dx), dz),
-                           gfx::add(gfx::add(s.pos, dx), dz), gfx::add(gfx::sub(s.pos, dx), dz),
-                           gfx::Color{kRitual.r, kRitual.g, kRitual.b, coreA});
     }
 }
 
@@ -2179,7 +2241,8 @@ void Interface::drawHud()
     const int ss = static_cast<int>(_elapsed) % 60;
     _engine.drawText(gfx::fmt("Speed (time unit): %d  [+/- to change]   Elapsed %02d:%02d", _state.frequency, mm, ss),
                      10, 32, 16, gfx::SKYBLUE);
-    _engine.drawText(gfx::fmt("Season: %s   Weather: %s", seasonLabel(_state.season), weatherLabel(_state.weather)),
+    _engine.drawText(gfx::fmt("Season: %s   Weather: %s   FX: %s", seasonLabel(_state.season),
+                              weatherLabel(_state.weather), _weatherVisible ? "on" : "off"),
                      10, 52, 16, seasonColor(_state.season));
 
     if (_followedPlayer >= 0)
@@ -2538,7 +2601,7 @@ void Interface::drawEndScreen()
 
 void Interface::drawHelpOverlay()
 {
-    static const std::array<const char *, 29> kHelp = {
+    static const std::array<const char *, 30> kHelp = {
         "CONTROLS  -  FREE CAMERA",
         "Mouse           look around freely",
         "ZQSD / Arrows   fly (Shift = faster)",
@@ -2554,6 +2617,7 @@ void Interface::drawHelpOverlay()
         "End             jump back to live",
         "Tab             toggle global stats",
         "T               grid <-> torus world view",
+        "V               toggle weather visuals",
         "M               toggle music",
         "Enter           dismiss / show end screen (after a win)",
         "H / F1          this help",
@@ -2583,7 +2647,7 @@ void Interface::drawHelpOverlay()
     int ty = py + pad;
     for (size_t i = 0; i < kHelp.size(); ++i)
     {
-        const bool header = (i == 0 || i == 20); // section titles
+        const bool header = (i == 0 || i == 21); // section titles
         _engine.drawText(kHelp[i], px + pad, ty, header ? 20 : 16, header ? gfx::GOLD : gfx::RAYWHITE);
         ty += lineH;
     }
