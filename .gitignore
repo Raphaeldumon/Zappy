@@ -93,3 +93,6 @@ coverage*.css
 *.gcda
 *.gcno
 build_cov/
+
+presentation/out/
+presentation/.venv/

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  /* Anneau stylisé du monde-tore, derrière le titre */
+  .ring {
+    position: absolute; left: 960px; top: 480px; width: 980px; height: 420px;
+    transform: translate(-50%, -50%) rotate(-14deg);
+    border-radius: 50%;
+    border: 3px solid #F5C86655;
+    box-shadow: 0 0 60px #F5C86633, inset 0 0 60px #F5C86622;
+  }
+  .ring::before {
+    content: ""; position: absolute; inset: 54px 120px;
+    border-radius: 50%;
+    border: 2px solid #6FB7FF33;
+  }
+  .logo {
+    position: absolute; left: 0; right: 0; top: 360px;
+    text-align: center;
+    font-family: "Toxigenesis", sans-serif;
+    font-size: 220px; letter-spacing: 26px; color: #FFFFFF;
+    text-shadow: 0 0 60px #F5C86688, 0 0 160px #F5C86644;
+  }
+  .luan {
+    position: absolute; left: 1490px; top: 220px; width: 90px; height: 90px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #FFE9B8, #F5C866 60%, #B8862F);
+    box-shadow: 0 0 50px #F5C86699;
+  }
+  .palasse {
+    position: absolute; left: 330px; top: 700px; width: 56px; height: 56px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 40% 35%, #D8E4FF, #8FA8D8 65%, #4A5C85);
+    box-shadow: 0 0 34px #8FA8D866;
+  }
+</style>
+</head>
+<body>
+<div class="slide act-gold">
+  <div class="stars"></div>
+  <div class="ring"></div>
+  <div class="luan"></div>
+  <div class="palasse"></div>
+  <div class="logo">ZAPPY</div>
+  <!-- Zones natives (éditables dans le PPTX) -->
+  <div class="native" style="left:310px; top:640px; width:1300px; height:60px;
+       font-size:40px; text-align:center; color:#EAF0FF;">Une course d’intelligences artificielles sur un monde-anneau</div>
+  <div class="native" style="left:210px; top:950px; width:1500px; height:44px;
+       font-size:28px; text-align:center; color:#8E9BC0;">Raphael Dumon · Clément Fabre · Mathéo Emma · Léo Cazabat · Joachim Ismael</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>
