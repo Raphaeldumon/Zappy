@@ -1740,12 +1740,13 @@ void Interface::render()
     // 360 background d'abord, pour que la scène se dessine devant.
     const gfx::Vec3 toSun = gfx::scale(es.sunDir, -1.0f);
     const gfx::Vec3 toMoon = gfx::scale(es.moonDir, -1.0f);
-    _engine.setSkyParams(_elapsed, toSun, toMoon, es.sunColor, es.skyHorizon, es.skyZenith, es.nebulaTint,
-                         es.starIntensity, _weatherVisible ? es.auroraIntensity : 0.0f, es.lightningFlash);
+    _engine.setSkyParams(_elapsed, toSun, toMoon, es.sunColor, es.skyHorizon, es.skyZenith, es.skyDayTint,
+                         es.nebulaTint, es.starIntensity, _weatherVisible ? es.auroraIntensity : 0.0f,
+                         es.lightningFlash);
     _engine.drawSkybox();
     // Astres : la lune d'abord, le soleil par-dessus en cas de chevauchement.
-    _engine.drawCelestial(_moonTexture, _camera, toMoon, 7.0f, {1.25f, 1.35f, 1.6f}, es.moonVisibility, true);
-    _engine.drawCelestial(_sunTexture, _camera, toSun, 9.0f, {2.4f, 2.1f, 1.5f}, es.sunVisibility, false);
+    _engine.drawCelestial(_moonTexture, _camera, toMoon, 9.0f, {0.72f, 0.80f, 1.05f}, es.moonVisibility, true);
+    _engine.drawCelestial(_sunTexture, _camera, toSun, 12.0f, {2.5f, 2.0f, 1.25f}, es.sunVisibility, false);
 
     drawWorld3D(false);
     drawIncantationRings();

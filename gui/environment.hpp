@@ -26,6 +26,7 @@ struct Profile
     gfx::Vec3 sunTint{1, 1, 1};     // multiplie la courbe jour/nuit du soleil
     gfx::Vec3 ambientTint{1, 1, 1};
     gfx::Vec3 skyHorizon{}, skyZenith{}, nebulaTint{};
+    gfx::Vec3 skyDayTint{0.18f, 0.38f, 0.75f}; // zénith du ciel diurne (par saison)
     gfx::Vec3 fogColor{};
     float fogDensity{0};            // fog exponentiel: transmit = exp(-d * dist)
     gfx::Vec3 gradeLift{0, 0, 0}, gradeGain{1, 1, 1};
@@ -47,6 +48,7 @@ struct Snapshot
     gfx::Vec3 ambient{};
     float sunVisibility{0}, moonVisibility{0}; // alpha des billboards, 0..1
     gfx::Vec3 skyHorizon{}, skyZenith{}, nebulaTint{};
+    gfx::Vec3 skyDayTint{0.18f, 0.38f, 0.75f};
     float starIntensity{0}, auroraIntensity{0}, lightningFlash{0};
     gfx::Vec3 fogColor{};
     float fogDensity{0};

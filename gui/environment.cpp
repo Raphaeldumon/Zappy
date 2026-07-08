@@ -8,7 +8,7 @@ namespace
 {
 
 constexpr float kPi = 3.14159265358979f;
-constexpr float kDayLengthSeconds = 180.0f; // un cycle jour+nuit complet
+constexpr float kDayLengthSeconds = 240.0f; // un cycle jour+nuit complet
 constexpr float kBlendTau = 1.2f;           // constante de temps du fondu de profil
 constexpr float kMaxSunElevation = 1.13f;   // ~65 deg, modulé par sunArcHeight
 
@@ -38,14 +38,16 @@ Profile seasonBase(const std::string &s)
         p.sunTint = {1.08f, 1.00f, 0.88f};
         p.skyHorizon = {0.20f, 0.12f, 0.10f};
         p.skyZenith = {0.04f, 0.03f, 0.06f};
+        p.skyDayTint = {0.13f, 0.30f, 0.68f}; // bleu profond d'été
         p.nebulaTint = {0.75f, 0.55f, 0.22f};
         p.fogColor = {0.55f, 0.50f, 0.40f};
-        p.fogDensity = 0.00025f;
+        p.fogDensity = 0.00009f;
         p.gradeGain = {1.06f, 1.00f, 0.94f};
         p.groundOverlay = {0.80f, 0.72f, 0.30f};
         p.groundMix = 0.35f;
         p.dayFraction = 0.68f;
         p.sunArcHeight = 1.15f;
+        p.auroraMax = 0.25f;
         p.particles.dust = 0.45f;
         p.particles.wind = {3, 0, 1};
         return p;
@@ -55,14 +57,16 @@ Profile seasonBase(const std::string &s)
         p.sunTint = {1.12f, 0.85f, 0.60f};
         p.skyHorizon = {0.22f, 0.10f, 0.06f};
         p.skyZenith = {0.04f, 0.02f, 0.06f};
+        p.skyDayTint = {0.26f, 0.38f, 0.60f}; // bleu délavé d'automne
         p.nebulaTint = {0.70f, 0.32f, 0.14f};
         p.fogColor = {0.50f, 0.42f, 0.35f};
-        p.fogDensity = 0.0005f;
+        p.fogDensity = 0.00018f;
         p.gradeGain = {1.08f, 0.96f, 0.86f};
         p.groundOverlay = {0.72f, 0.45f, 0.18f};
         p.groundMix = 0.45f;
         p.dayFraction = 0.45f;
         p.sunArcHeight = 0.70f;
+        p.auroraMax = 0.45f;
         p.particles.leaves = 0.7f;
         p.particles.wind = {14, 0, 5};
         return p;
@@ -73,16 +77,17 @@ Profile seasonBase(const std::string &s)
         p.ambientTint = {0.95f, 1.0f, 1.1f};
         p.skyHorizon = {0.10f, 0.14f, 0.22f};
         p.skyZenith = {0.02f, 0.03f, 0.07f};
+        p.skyDayTint = {0.38f, 0.48f, 0.66f}; // ciel laiteux d'hiver
         p.nebulaTint = {0.25f, 0.45f, 0.75f};
         p.fogColor = {0.60f, 0.68f, 0.78f};
-        p.fogDensity = 0.0009f;
+        p.fogDensity = 0.00030f;
         p.gradeLift = {0.02f, 0.03f, 0.05f};
         p.gradeGain = {0.94f, 0.98f, 1.06f};
         p.groundOverlay = {0.92f, 0.95f, 1.00f};
         p.groundMix = 0.78f;
         p.dayFraction = 0.35f;
         p.sunArcHeight = 0.45f;
-        p.auroraMax = 0.8f;
+        p.auroraMax = 1.0f;
         p.particles.snow = 0.6f;
         p.particles.wind = {8, 0, 3};
         return p;
@@ -91,15 +96,17 @@ Profile seasonBase(const std::string &s)
     p.sunTint = {1.00f, 0.98f, 0.95f};
     p.skyHorizon = {0.16f, 0.10f, 0.22f};
     p.skyZenith = {0.03f, 0.02f, 0.08f};
+    p.skyDayTint = {0.18f, 0.38f, 0.75f}; // bleu franc de printemps
     p.nebulaTint = {0.45f, 0.20f, 0.55f};
     p.fogColor = {0.45f, 0.50f, 0.60f};
-    p.fogDensity = 0.00035f;
+    p.fogDensity = 0.00012f;
     p.gradeLift = {0.01f, 0.00f, 0.02f};
     p.gradeGain = {1.03f, 1.00f, 1.04f};
     p.groundOverlay = {0.30f, 0.55f, 0.25f};
     p.groundMix = 0.12f;
     p.dayFraction = 0.55f;
     p.sunArcHeight = 1.0f;
+    p.auroraMax = 0.35f;
     p.particles.petals = 0.5f;
     p.particles.fireflies = 0.6f;
     p.particles.wind = {6, 0, 2};
@@ -113,7 +120,7 @@ void applyWeather(Profile &p, const std::string &w)
         p.particles.rain = 0.7f;
         p.sunTint = gfx::scale(p.sunTint, 0.55f);
         p.ambientTint = gfx::scale(p.ambientTint, 0.80f);
-        p.fogDensity += 0.0006f;
+        p.fogDensity += 0.00020f;
         p.fogColor = {0.30f, 0.34f, 0.40f};
         p.gradeGain = mul3(p.gradeGain, {0.90f, 0.95f, 1.00f});
     }
@@ -123,13 +130,13 @@ void applyWeather(Profile &p, const std::string &w)
         p.particles.wind = gfx::add(p.particles.wind, {18, 0, 6});
         p.sunTint = gfx::scale(p.sunTint, 0.30f);
         p.ambientTint = gfx::scale(p.ambientTint, 0.60f);
-        p.fogDensity += 0.0010f;
+        p.fogDensity += 0.00035f;
         p.fogColor = {0.16f, 0.17f, 0.24f};
         p.gradeGain = mul3(p.gradeGain, {0.80f, 0.85f, 0.95f});
     }
     else if (w == "fog")
     {
-        p.fogDensity += 0.0022f;
+        p.fogDensity += 0.0011f;
         p.fogColor = {0.75f, 0.78f, 0.80f};
         p.skyHorizon = lerp3(p.skyHorizon, p.fogColor, 0.7f);
         p.sunTint = gfx::scale(p.sunTint, 0.70f);
@@ -169,6 +176,7 @@ void lerpProfile(Profile &c, const Profile &t, float k)
     c.ambientTint = lerp3(c.ambientTint, t.ambientTint, k);
     c.skyHorizon = lerp3(c.skyHorizon, t.skyHorizon, k);
     c.skyZenith = lerp3(c.skyZenith, t.skyZenith, k);
+    c.skyDayTint = lerp3(c.skyDayTint, t.skyDayTint, k);
     c.nebulaTint = lerp3(c.nebulaTint, t.nebulaTint, k);
     c.fogColor = lerp3(c.fogColor, t.fogColor, k);
     c.fogDensity = lerpf(c.fogDensity, t.fogDensity, k);
@@ -281,9 +289,11 @@ void EnvironmentState::update(float dt)
     s.auroraIntensity = _cur.auroraMax * (1.0f - s.sunVisibility);
     s.lightningFlash = _flash;
 
-    // Le ciel s'éclaircit (chaud à l'horizon) quand le soleil est levé.
-    s.skyHorizon = gfx::add(_cur.skyHorizon, gfx::scale({0.30f, 0.18f, 0.08f}, s.sunVisibility));
-    s.skyZenith = gfx::add(_cur.skyZenith, gfx::scale({0.06f, 0.08f, 0.12f}, s.sunVisibility));
+    // Palette de nuit de la saison ; le ciel diurne (bleu + lueur directionnelle
+    // autour du soleil) est calculé dans sky_procedural.fs depuis toSun.
+    s.skyHorizon = _cur.skyHorizon;
+    s.skyZenith = _cur.skyZenith;
+    s.skyDayTint = _cur.skyDayTint;
     s.nebulaTint = _cur.nebulaTint;
 
     s.fogColor = gfx::scale(_cur.fogColor, 0.35f + 0.65f * s.sunVisibility);

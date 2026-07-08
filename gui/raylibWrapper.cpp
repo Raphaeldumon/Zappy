@@ -257,7 +257,8 @@ struct RaylibEngine::Impl
     // Ciel procédural : locations des uniforms de sky_procedural.fs.
     struct SkyLocs
     {
-        int time{-1}, toSun{-1}, toMoon{-1}, sunGlow{-1}, horizon{-1}, zenith{-1}, nebula{-1}, stars{-1}, aurora{-1},
+        int time{-1}, toSun{-1}, toMoon{-1}, sunGlow{-1}, horizon{-1}, zenith{-1}, dayTint{-1}, nebula{-1}, stars{-1},
+            aurora{-1},
             lightning{-1};
     };
     SkyLocs skyLocs{};
@@ -265,7 +266,7 @@ struct RaylibEngine::Impl
 
     Shader celestialShader{};
     bool celestialLoaded{false};
-    int celEmissiveLoc{-1}, celAlphaLoc{-1}, celMaskLoc{-1};
+    int celEmissiveLoc{-1}, celAlphaLoc{-1}, celMoonLoc{-1}, celTimeLoc{-1};
 
     // UI font, used by drawText/measureText when loaded (built-in otherwise).
     Font uiFont{};
@@ -339,6 +340,9 @@ RaylibEngine::RaylibEngine(int width, int height, const std::string &title) : _i
     InitWindow(width, height, title.c_str());
     SetExitKey(KEY_NULL);
     SetTargetFPS(60);
+    // Far plane généreux : la carte fait ~1600 unités de côté et la caméra
+    // libre monte haut — le défaut (4000) coupait les coins en vue lointaine.
+    rlSetClipPlanes(RL_CULL_DISTANCE_NEAR, 12000.0);
 }
 
 RaylibEngine::~RaylibEngine()
@@ -1458,6 +1462,7 @@ bool RaylibEngine::loadProceduralSky(const std::string &vs, const std::string &f
     _impl->skyLocs.sunGlow = GetShaderLocation(s, "sunGlowColor");
     _impl->skyLocs.horizon = GetShaderLocation(s, "horizonColor");
     _impl->skyLocs.zenith = GetShaderLocation(s, "zenithColor");
+    _impl->skyLocs.dayTint = GetShaderLocation(s, "skyDayColor");
     _impl->skyLocs.nebula = GetShaderLocation(s, "nebulaTint");
     _impl->skyLocs.stars = GetShaderLocation(s, "starIntensity");
     _impl->skyLocs.aurora = GetShaderLocation(s, "auroraIntensity");
@@ -1469,14 +1474,14 @@ bool RaylibEngine::loadProceduralSky(const std::string &vs, const std::string &f
 }
 
 void RaylibEngine::setSkyParams(float time, gfx::Vec3 toSun, gfx::Vec3 toMoon, gfx::Vec3 sunGlowColor,
-                                gfx::Vec3 horizon, gfx::Vec3 zenith, gfx::Vec3 nebula, float stars, float aurora,
-                                float lightning)
+                                gfx::Vec3 horizon, gfx::Vec3 zenith, gfx::Vec3 dayTint, gfx::Vec3 nebula, float stars,
+                                float aurora, float lightning)
 {
     if (!_impl->skyProcedural)
         return;
     const Shader &s = _impl->skyShader;
     const Vector3 ts = toRl(toSun), tm = toRl(toMoon), sg = toRl(sunGlowColor), ho = toRl(horizon), ze = toRl(zenith),
-                  ne = toRl(nebula);
+                  dt = toRl(dayTint), ne = toRl(nebula);
     const auto &l = _impl->skyLocs;
     if (l.time >= 0)
         SetShaderValue(s, l.time, &time, SHADER_UNIFORM_FLOAT);
@@ -1490,6 +1495,8 @@ void RaylibEngine::setSkyParams(float time, gfx::Vec3 toSun, gfx::Vec3 toMoon, g
         SetShaderValue(s, l.horizon, &ho, SHADER_UNIFORM_VEC3);
     if (l.zenith >= 0)
         SetShaderValue(s, l.zenith, &ze, SHADER_UNIFORM_VEC3);
+    if (l.dayTint >= 0)
+        SetShaderValue(s, l.dayTint, &dt, SHADER_UNIFORM_VEC3);
     if (l.nebula >= 0)
         SetShaderValue(s, l.nebula, &ne, SHADER_UNIFORM_VEC3);
     if (l.stars >= 0)
@@ -1516,14 +1523,15 @@ bool RaylibEngine::loadCelestialShader(const std::string &fs)
     _impl->celestialShader = s;
     _impl->celEmissiveLoc = GetShaderLocation(s, "emissive");
     _impl->celAlphaLoc = GetShaderLocation(s, "bodyAlpha");
-    _impl->celMaskLoc = GetShaderLocation(s, "circleMask");
+    _impl->celMoonLoc = GetShaderLocation(s, "isMoon");
+    _impl->celTimeLoc = GetShaderLocation(s, "time");
     _impl->celestialLoaded = true;
     TraceLog(LOG_INFO, "loadCelestialShader: ready");
     return true;
 }
 
 void RaylibEngine::drawCelestial(gfx::TextureHandle tex, const gfx::Camera &cam, gfx::Vec3 toBody,
-                                 float angularSizeDeg, gfx::Vec3 emissive, float alpha, bool circleMask)
+                                 float angularSizeDeg, gfx::Vec3 emissive, float alpha, bool isMoon)
 {
     if (!_impl->celestialLoaded || !_impl->valid(tex, _impl->textures.size()) || alpha <= 0.01f)
         return;
@@ -1536,21 +1544,26 @@ void RaylibEngine::drawCelestial(gfx::TextureHandle tex, const gfx::Camera &cam,
     gfx::Vec3 right = gfx::normalize({-dir.z, 0.0f, dir.x}); // horizontal, perpendiculaire à dir
     if (gfx::length(right) < 0.5f)
         right = {1, 0, 0};
-    const gfx::Vec3 up = gfx::normalize(gfx::Vec3{dir.y * right.z - dir.z * right.y, dir.z * right.x - dir.x * right.z,
-                                                  dir.x * right.y - dir.y * right.x});
+    // up = right x dir (et non dir x right, qui pointe vers le BAS et
+    // affichait Luan/Palasse tête en bas).
+    const gfx::Vec3 up = gfx::normalize(gfx::Vec3{right.y * dir.z - right.z * dir.y, right.z * dir.x - right.x * dir.z,
+                                                  right.x * dir.y - right.y * dir.x});
     const gfx::Vec3 a = gfx::add(gfx::add(centre, gfx::scale(right, -half)), gfx::scale(up, half));
     const gfx::Vec3 b = gfx::add(gfx::add(centre, gfx::scale(right, -half)), gfx::scale(up, -half));
     const gfx::Vec3 c = gfx::add(gfx::add(centre, gfx::scale(right, half)), gfx::scale(up, -half));
     const gfx::Vec3 d = gfx::add(gfx::add(centre, gfx::scale(right, half)), gfx::scale(up, half));
 
     const Vector3 em = toRl(emissive);
-    const int mask = circleMask ? 1 : 0;
+    const int moon = isMoon ? 1 : 0;
+    const float now = static_cast<float>(GetTime());
     if (_impl->celEmissiveLoc >= 0)
         SetShaderValue(_impl->celestialShader, _impl->celEmissiveLoc, &em, SHADER_UNIFORM_VEC3);
     if (_impl->celAlphaLoc >= 0)
         SetShaderValue(_impl->celestialShader, _impl->celAlphaLoc, &alpha, SHADER_UNIFORM_FLOAT);
-    if (_impl->celMaskLoc >= 0)
-        SetShaderValue(_impl->celestialShader, _impl->celMaskLoc, &mask, SHADER_UNIFORM_INT);
+    if (_impl->celMoonLoc >= 0)
+        SetShaderValue(_impl->celestialShader, _impl->celMoonLoc, &moon, SHADER_UNIFORM_INT);
+    if (_impl->celTimeLoc >= 0)
+        SetShaderValue(_impl->celestialShader, _impl->celTimeLoc, &now, SHADER_UNIFORM_FLOAT);
 
     // Derrière tout : depth off, comme le skybox.
     rlDisableDepthMask();
