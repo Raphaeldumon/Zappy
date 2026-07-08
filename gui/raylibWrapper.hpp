@@ -169,6 +169,14 @@ class RaylibEngine
     bool loadFloorShader(const std::string &vs, const std::string &fs);
     void beginFloorShading();
     void endFloorShading();
+    // Shadow mapping : passe de profondeur ortho depuis la lumière active.
+    // Usage par frame : beginShadowPass -> (draws du monde) -> endShadowPass,
+    // puis rendu normal ; endShadowPass pousse lightVP + la depth map (slot 10)
+    // sur les shaders lighting / instancing / floor.
+    bool enableShadows(int resolution);
+    bool shadowsReady() const;
+    void beginShadowPass(gfx::Vec3 lightDir, gfx::Vec3 sceneCentre, float sceneRadius);
+    void endShadowPass();
 
     // --- Composite scene primitives (raylib/rlgl-coupled, owned here) ---
     bool loadSkybox(const std::string &png, const std::string &vs, const std::string &fs);

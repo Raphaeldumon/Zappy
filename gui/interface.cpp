@@ -33,6 +33,7 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     _engine.loadInstancingShader("assets/shaders/lighting_instancing.vs", "assets/shaders/lighting.fs");
     _engine.enablePostFx("assets/shaders/bloom_extract.fs", "assets/shaders/post_composite.fs");
     _engine.loadFloorShader("assets/shaders/floor.vs", "assets/shaders/floor.fs");
+    _engine.enableShadows(4096);
     // Global UI font: every drawText/measureText call goes through it once
     // loaded; on failure the engine silently keeps raylib's built-in font.
     if (!_engine.loadUiFont("assets/toxigenesis bd.otf"))
@@ -1298,13 +1299,6 @@ constexpr std::array<gfx::Color, MAP_RESOURCE_COUNT> kResourceLodColors{{
 constexpr int kMaxVisiblePlayers = 4;
 constexpr float kPlayerSpacing = TILE_SIZE * 0.28f;
 
-struct CountLabel
-{
-    gfx::Vec3 worldPos;
-    int count;
-    gfx::Color color;
-};
-
 // Eight fixed team colours, indexed by team slot (server `tna` order). The
 // game caps at 8 teams, so every team gets its own distinct hue regardless
 // of the team name.
@@ -1398,10 +1392,10 @@ gfx::Color seasonColor(const std::string &season)
 }
 } // namespace
 
-void Interface::render()
+void Interface::drawWorld3D(bool depthPass)
 {
-    _stats = {};
-    std::vector<CountLabel> labels;
+    if (!depthPass)
+        _frameLabels.clear();
 
     // Player/ghost draws are collected first, then sorted so one pose upload
     // (CPU skinning) serves every model sharing the same clip + frame bucket.
@@ -1417,43 +1411,6 @@ void Interface::render()
 
     // Per-resource-type placements, flushed as one instanced call per type.
     std::vector<std::vector<gfx::InstanceXform>> itemXf(_resourceModels.size());
-
-    const env::Snapshot &es = _env.snap();
-    // Flash d'éclair : boost bref de la lumière 3D entière.
-    const gfx::Vec3 flashAdd = gfx::scale({1.8f, 1.8f, 2.2f}, es.lightningFlash);
-    _engine.setSceneLighting(es.activeLightDir, gfx::add(es.sunColor, flashAdd),
-                             gfx::add(es.ambient, gfx::scale(flashAdd, 0.3f)), es.fogColor,
-                             _weatherVisible ? es.fogDensity : 0.0f);
-    _engine.setGroundSeason(es.groundOverlay, _weatherVisible ? es.groundMix : 0.0f);
-
-    // God rays depuis la position écran du soleil (0 si dos au soleil).
-    const gfx::Vec3 toSunW = gfx::scale(es.sunDir, -1.0f);
-    const gfx::Vec3 camFwdPre = gfx::normalize(gfx::sub(_camera.target, _camera.position));
-    float godray = 0.0f;
-    gfx::Vec2 sunScreen01{0.5f, 0.5f};
-    const float facing = gfx::dot(camFwdPre, toSunW);
-    if (facing > 0.05f && es.sunVisibility > 0.01f)
-    {
-        const gfx::Vec2 sp = _engine.worldToScreen(_camera, gfx::add(_camera.position, gfx::scale(toSunW, 500.0f)));
-        sunScreen01 = {sp.x / static_cast<float>(_engine.screenWidth()),
-                       sp.y / static_cast<float>(_engine.screenHeight())};
-        godray = es.sunVisibility * std::min(facing * 1.5f, 1.0f) * 0.8f;
-    }
-    const bool fx = _weatherVisible;
-    _engine.setPostFxParams(sunScreen01, fx ? godray : 0.0f, fx ? es.gradeLift : gfx::Vec3{0, 0, 0},
-                            fx ? es.gradeGain : gfx::Vec3{1, 1, 1}, fx ? es.heatDistort : 0.0f, _elapsed);
-
-    _engine.beginMode3D(_camera);
-
-    // 360 background d'abord, pour que la scène se dessine devant.
-    const gfx::Vec3 toSun = gfx::scale(es.sunDir, -1.0f);
-    const gfx::Vec3 toMoon = gfx::scale(es.moonDir, -1.0f);
-    _engine.setSkyParams(_elapsed, toSun, toMoon, es.sunColor, es.skyHorizon, es.skyZenith, es.nebulaTint,
-                         es.starIntensity, _weatherVisible ? es.auroraIntensity : 0.0f, es.lightningFlash);
-    _engine.drawSkybox();
-    // Astres : la lune d'abord, le soleil par-dessus en cas de chevauchement.
-    _engine.drawCelestial(_moonTexture, _camera, toMoon, 7.0f, {1.25f, 1.35f, 1.6f}, es.moonVisibility, true);
-    _engine.drawCelestial(_sunTexture, _camera, toSun, 9.0f, {2.4f, 2.1f, 1.5f}, es.sunVisibility, false);
 
     // Floor: two batched draws (dark + orange) instead of one per tile.
     // In torus view the checkerboard is painted on the torus surface instead.
@@ -1480,6 +1437,8 @@ void Interface::render()
     const float halfDiag = std::atan(tanHalfV * std::sqrt(1.0f + aspect * aspect));
     const float cosCone = std::cos(std::min(halfDiag + 0.10f, 1.5f));
     auto tileVisible = [&](gfx::Vec3 c) {
+        if (depthPass)
+            return true; // la lumière voit tout : les ombres du hors-champ comptent
         const gfx::Vec3 d = gfx::sub(c, _camera.position);
         const float dist = gfx::length(d);
         if (dist < TILE_SIZE * 3.0f)
@@ -1500,7 +1459,8 @@ void Interface::render()
                 ++_stats.tilesCulled;
                 continue;
             }
-            ++_stats.tilesDrawn;
+            if (!depthPass)
+                ++_stats.tilesDrawn;
             const bool lodTile = gfx::length(gfx::sub(surf.pos, _camera.position)) > kItemLodDist;
 
             const MapTile &tile = _map.getTile(x, y);
@@ -1509,7 +1469,8 @@ void Interface::render()
             if (!_torusView && !floorTextured)
                 _engine.drawPlane({worldX, kTileTopY, worldZ}, {TILE_SIZE - kTileMargin, TILE_SIZE - kTileMargin},
                                   gfx::WHITE);
-            drawTileEdges(x, y, 0.02f, gfx::BLACK);
+            if (!depthPass)
+                drawTileEdges(x, y, 0.02f, gfx::BLACK);
 
             // Players: draw up to four robots side by side, then show a count label.
             const int playerCount = static_cast<int>(tile.players.size());
@@ -1558,9 +1519,10 @@ void Interface::render()
                                          kPlayerHeight, kPlayerBaseSize, teamColor(player.getTeam()));
                     }
                 }
-                if (playerCount > kMaxVisiblePlayers)
-                    labels.push_back({gfx::add(surf.pos, gfx::scale(surf.up, kPlayerY + kPlayerHeight - kTileTopY)),
-                                      playerCount, gfx::YELLOW});
+                if (!depthPass && playerCount > kMaxVisiblePlayers)
+                    _frameLabels.push_back(
+                        {gfx::add(surf.pos, gfx::scale(surf.up, kPlayerY + kPlayerHeight - kTileTopY)), playerCount,
+                         gfx::YELLOW});
             }
 
             // Resources render only on empty tiles; occupied tiles show the player model alone.
@@ -1602,13 +1564,15 @@ void Interface::render()
                             // Too far for the mesh to read: small tinted cube.
                             _engine.drawCube(gfx::add(is.pos, gfx::scale(is.up, kItemWidth * 0.5f)), kItemWidth,
                                              kItemWidth, kItemWidth, kResourceLodColors[static_cast<std::size_t>(i)]);
-                            ++_stats.itemsLod;
+                            if (!depthPass)
+                                ++_stats.itemsLod;
                         }
                         else if (hasModel)
                         {
                             itemXf[static_cast<std::size_t>(i)].push_back(
                                 {is.pos, is.right, is.up, is.back, angle, _resourceModels[static_cast<std::size_t>(i)].scale});
-                            ++_stats.itemsModel;
+                            if (!depthPass)
+                                ++_stats.itemsModel;
                         }
                         else
                         {
@@ -1633,7 +1597,8 @@ void Interface::render()
         if (!tileVisible(es.pos))
             continue;
         _engine.drawSphere(es.pos, TILE_SIZE * 0.08f, gfx::BEIGE);
-        ++_stats.eggs;
+        if (!depthPass)
+            ++_stats.eggs;
     }
 
     // Death ghosts: players already erased from the world, replaying the Death
@@ -1658,7 +1623,8 @@ void Interface::render()
     // Flush players: sort by (clip, half-frame bucket) so one CPU-skinning
     // upload poses every model in the bucket. Unposed entries (clip -1) sort
     // first and draw with whatever pose the mesh currently holds.
-    _stats.players = static_cast<int>(playerDraws.size());
+    if (!depthPass)
+        _stats.players = static_cast<int>(playerDraws.size());
     if (_playerModel.loaded && !playerDraws.empty())
     {
         std::sort(playerDraws.begin(), playerDraws.end(), [](const PlayerDrawCmd &a, const PlayerDrawCmd &b) {
@@ -1670,7 +1636,8 @@ void Interface::render()
             if (pd.clip >= 0 && (pd.clip != lastClip || pd.bucket != lastBucket))
             {
                 _engine.applyPose(_playerModel.handle, _playerAnims, pd.clip, static_cast<float>(pd.bucket) * 0.5f);
-                ++_stats.poseUploads;
+                if (!depthPass)
+                    ++_stats.poseUploads;
                 lastClip = pd.clip;
                 lastBucket = pd.bucket;
             }
@@ -1684,7 +1651,90 @@ void Interface::render()
         if (!itemXf[i].empty())
             _engine.drawModelInstanced(_resourceModels[i].handle, itemXf[i], gfx::WHITE);
 
-    drawMeteorites();
+    drawMeteorites(depthPass);
+
+    // Modèles d'incantation : ils projettent une ombre ; les anneaux (glow)
+    // restent sur la passe principale (drawIncantationRings).
+    if (_incantationModel.loaded)
+    {
+        for (const long long key : _state.incanting)
+        {
+            const int tx = static_cast<int>(key % _map.getWidth());
+            const int ty = static_cast<int>(key / _map.getWidth());
+            const Surface s =
+                surfaceAt(tx * TILE_SIZE + TILE_SIZE / 2.0f, ty * TILE_SIZE + TILE_SIZE / 2.0f, 0.25f);
+            const float spin = std::fmod(_elapsed * kIncantationSpin, 360.0f);
+            _engine.drawModelOriented(_incantationModel.handle, s.pos, s.right, s.up, s.back, spin,
+                                      _incantationModel.scale, gfx::WHITE);
+        }
+    }
+}
+
+void Interface::render()
+{
+    _stats = {};
+    const env::Snapshot &es = _env.snap();
+
+    // Flash d'éclair : boost bref de la lumière 3D entière.
+    const gfx::Vec3 flashAdd = gfx::scale({1.8f, 1.8f, 2.2f}, es.lightningFlash);
+    _engine.setSceneLighting(es.activeLightDir, gfx::add(es.sunColor, flashAdd),
+                             gfx::add(es.ambient, gfx::scale(flashAdd, 0.3f)), es.fogColor,
+                             _weatherVisible ? es.fogDensity : 0.0f);
+    _engine.setGroundSeason(es.groundOverlay, _weatherVisible ? es.groundMix : 0.0f);
+
+    // God rays depuis la position écran du soleil (0 si dos au soleil).
+    const gfx::Vec3 toSunW = gfx::scale(es.sunDir, -1.0f);
+    const gfx::Vec3 camFwdPre = gfx::normalize(gfx::sub(_camera.target, _camera.position));
+    float godray = 0.0f;
+    gfx::Vec2 sunScreen01{0.5f, 0.5f};
+    const float facing = gfx::dot(camFwdPre, toSunW);
+    if (facing > 0.05f && es.sunVisibility > 0.01f)
+    {
+        const gfx::Vec2 sp = _engine.worldToScreen(_camera, gfx::add(_camera.position, gfx::scale(toSunW, 500.0f)));
+        sunScreen01 = {sp.x / static_cast<float>(_engine.screenWidth()),
+                       sp.y / static_cast<float>(_engine.screenHeight())};
+        godray = es.sunVisibility * std::min(facing * 1.5f, 1.0f) * 0.8f;
+    }
+    const bool fx = _weatherVisible;
+    _engine.setPostFxParams(sunScreen01, fx ? godray : 0.0f, fx ? es.gradeLift : gfx::Vec3{0, 0, 0},
+                            fx ? es.gradeGain : gfx::Vec3{1, 1, 1}, fx ? es.heatDistort : 0.0f, _elapsed);
+
+    // Passe 1 : profondeur depuis la lumière active (soleil ou lune).
+    if (_engine.shadowsReady())
+    {
+        gfx::Vec3 centre;
+        float radius;
+        if (_torusView)
+        {
+            const TorusGeom g = torusGeom();
+            centre = g.c;
+            radius = g.R + g.r + TILE_SIZE;
+        }
+        else
+        {
+            const float w = _map.getWidth() * TILE_SIZE, h = _map.getHeight() * TILE_SIZE;
+            centre = {w * 0.5f, 0.0f, h * 0.5f};
+            radius = 0.5f * std::sqrt(w * w + h * h) + TILE_SIZE * 2.0f;
+        }
+        _engine.beginShadowPass(es.activeLightDir, centre, radius);
+        drawWorld3D(true);
+        _engine.endShadowPass();
+    }
+
+    // Passe 2 : scène complète.
+    _engine.beginMode3D(_camera);
+
+    // 360 background d'abord, pour que la scène se dessine devant.
+    const gfx::Vec3 toSun = gfx::scale(es.sunDir, -1.0f);
+    const gfx::Vec3 toMoon = gfx::scale(es.moonDir, -1.0f);
+    _engine.setSkyParams(_elapsed, toSun, toMoon, es.sunColor, es.skyHorizon, es.skyZenith, es.nebulaTint,
+                         es.starIntensity, _weatherVisible ? es.auroraIntensity : 0.0f, es.lightningFlash);
+    _engine.drawSkybox();
+    // Astres : la lune d'abord, le soleil par-dessus en cas de chevauchement.
+    _engine.drawCelestial(_moonTexture, _camera, toMoon, 7.0f, {1.25f, 1.35f, 1.6f}, es.moonVisibility, true);
+    _engine.drawCelestial(_sunTexture, _camera, toSun, 9.0f, {2.4f, 2.1f, 1.5f}, es.sunVisibility, false);
+
+    drawWorld3D(false);
     drawIncantationRings();
     drawHoverHighlight();
     drawSelectionHighlight();
@@ -1695,7 +1745,7 @@ void Interface::render()
 
     // Player head-count labels, projected to screen space now that we're out
     // of 3D mode. Resources are always drawn in full, so they need no label.
-    for (const auto &label : labels)
+    for (const auto &label : _frameLabels)
     {
         gfx::Vec2 screenPos = _engine.worldToScreen(_camera, label.worldPos);
         _engine.drawText(gfx::fmt("x%d", label.count), static_cast<int>(screenPos.x), static_cast<int>(screenPos.y), 14,
@@ -1799,7 +1849,7 @@ void Interface::pickTile()
     }
 }
 
-void Interface::drawMeteorites()
+void Interface::drawMeteorites(bool depthPass)
 {
     for (const auto &m : _meteorites)
     {
@@ -1822,12 +1872,16 @@ void Interface::drawMeteorites()
                                    gfx::Color{140, 95, 60, 255});
 
             // Short fire trail above the rock; bright enough for the bloom pass.
-            for (int i = 1; i <= 3; ++i)
+            // (Glow only — pointless in the shadow depth pass.)
+            if (!depthPass)
             {
-                const float ta = 1.0f - static_cast<float>(i) * 0.28f;
-                _engine.drawSphere(gfx::add(pos, gfx::scale(s.up, kMeteorSize * 0.5f + i * TILE_SIZE * 0.45f)),
-                                   kMeteorSize * (0.30f - 0.06f * i),
-                                   gfx::Color{255, 170, 70, static_cast<std::uint8_t>(220.0f * ta)});
+                for (int i = 1; i <= 3; ++i)
+                {
+                    const float ta = 1.0f - static_cast<float>(i) * 0.28f;
+                    _engine.drawSphere(gfx::add(pos, gfx::scale(s.up, kMeteorSize * 0.5f + i * TILE_SIZE * 0.45f)),
+                                       kMeteorSize * (0.30f - 0.06f * i),
+                                       gfx::Color{255, 170, 70, static_cast<std::uint8_t>(220.0f * ta)});
+                }
             }
         }
         else
@@ -1844,15 +1898,18 @@ void Interface::drawMeteorites()
                 _engine.drawSphere(gfx::add(s.pos, gfx::scale(s.up, kMeteorSize * 0.3f)), kMeteorSize * 0.5f,
                                    gfx::Color{140, 95, 60, 255});
 
-            const gfx::Vec3 ringPos = gfx::add(s.pos, gfx::scale(s.up, 0.3f));
-            _engine.drawCircle3D(ringPos, TILE_SIZE * (0.2f + 0.9f * g), s.up, gfx::Color{255, 160, 60, fade});
-            _engine.drawCircle3D(ringPos, TILE_SIZE * (0.1f + 0.6f * g), s.up, gfx::Color{255, 210, 120, fade});
+            if (!depthPass)
+            {
+                const gfx::Vec3 ringPos = gfx::add(s.pos, gfx::scale(s.up, 0.3f));
+                _engine.drawCircle3D(ringPos, TILE_SIZE * (0.2f + 0.9f * g), s.up, gfx::Color{255, 160, 60, fade});
+                _engine.drawCircle3D(ringPos, TILE_SIZE * (0.1f + 0.6f * g), s.up, gfx::Color{255, 210, 120, fade});
 
-            const float hs = TILE_SIZE * 0.35f * (1.0f - 0.4f * g);
-            const gfx::Vec3 dx = gfx::scale(s.right, hs), dz = gfx::scale(s.back, hs);
-            _engine.drawQuad3D(gfx::sub(gfx::sub(ringPos, dx), dz), gfx::sub(gfx::add(ringPos, dx), dz),
-                               gfx::add(gfx::add(ringPos, dx), dz), gfx::add(gfx::sub(ringPos, dx), dz),
-                               gfx::Color{255, 190, 90, static_cast<std::uint8_t>(fade * 0.7f)});
+                const float hs = TILE_SIZE * 0.35f * (1.0f - 0.4f * g);
+                const gfx::Vec3 dx = gfx::scale(s.right, hs), dz = gfx::scale(s.back, hs);
+                _engine.drawQuad3D(gfx::sub(gfx::sub(ringPos, dx), dz), gfx::sub(gfx::add(ringPos, dx), dz),
+                                   gfx::add(gfx::add(ringPos, dx), dz), gfx::add(gfx::sub(ringPos, dx), dz),
+                                   gfx::Color{255, 190, 90, static_cast<std::uint8_t>(fade * 0.7f)});
+            }
         }
     }
 }
@@ -1875,13 +1932,8 @@ void Interface::drawIncantationRings()
         const Surface s =
             surfaceAt(tx * TILE_SIZE + TILE_SIZE / 2.0f, ty * TILE_SIZE + TILE_SIZE / 2.0f, 0.25f);
 
-        if (_incantationModel.loaded)
-        {
-            const float spin = std::fmod(_elapsed * kIncantationSpin, 360.0f);
-            _engine.drawModelOriented(_incantationModel.handle, s.pos, s.right, s.up, s.back, spin,
-                                      _incantationModel.scale, gfx::WHITE);
-        }
-
+        // (Le modèle tournoyant est dessiné par drawWorld3D — il projette une
+        // ombre ; ici uniquement les anneaux émissifs.)
         for (int i = 0; i < kRings; ++i)
         {
             // Phase-offset sawtooth: each ring grows 0 -> maxR then wraps.

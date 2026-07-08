@@ -210,7 +210,7 @@ class Interface
     void loadIncantationModel();
     void unloadIncantationModel();
     void updateRandomEvents(float dt); // roll the dice + advance active events
-    void drawMeteorites();             // call inside Mode3D
+    void drawMeteorites(bool depthPass); // call inside Mode3D (glow skipped in depth pass)
 
     // --- Torus view ---
     // T switches the world between the flat grid and a real torus: the map
@@ -242,6 +242,19 @@ class Interface
     void drawTorusFloor(); // checkerboard painted on the torus (call inside Mode3D)
     // Tile border at height h above the surface; curvature-subdivided on the torus.
     void drawTileEdges(int x, int y, float h, gfx::Color c);
+
+    // --- World pass (shared by the shadow depth pass and the main pass) ---
+    // Draws floor + tiles + players + resources + eggs + meteorites +
+    // incantation models. depthPass skips everything cosmetic (edges, labels,
+    // highlights, glow) and the frame stats.
+    void drawWorld3D(bool depthPass);
+    struct CountLabel
+    {
+        gfx::Vec3 worldPos;
+        int count;
+        gfx::Color color;
+    };
+    std::vector<CountLabel> _frameLabels; // rempli par drawWorld3D(false)
 
     // --- Perf overlay (F3) ---
     // Per-frame render counters, reset at the top of render(), so every

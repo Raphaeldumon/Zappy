@@ -221,6 +221,12 @@ struct SceneLocs
 {
     int sunDir{-1}, sunColor{-1}, ambient{-1}, fogColor{-1}, fogDensity{-1};
 };
+
+// Locations des uniforms d'ombre par shader (lighting / instancing / floor).
+struct ShadowLocs
+{
+    int map{-1}, vp{-1}, on{-1}, res{-1};
+};
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -284,6 +290,13 @@ struct RaylibEngine::Impl
     int floorViewPosLoc{-1};
     int floorOverlayLoc{-1}, floorMixLoc{-1};
 
+    // Shadow map (FBO depth-only) + locations par shader.
+    RenderTexture2D shadowRT{};
+    bool shadowsLoaded{false};
+    int shadowRes{0};
+    Matrix lightVP{};
+    ShadowLocs lightShadow{}, instShadow{}, floorShadow{};
+
     // Bloom post FX: the 3D scene renders into full-res sceneRT; endMode3D
     // extracts+blurs the bright parts into half-res bloomRT (quarter of the
     // heavy taps), then composites both to the screen.
@@ -341,6 +354,8 @@ RaylibEngine::~RaylibEngine()
         UnloadShader(_impl->floorShader);
     if (_impl->celestialLoaded)
         UnloadShader(_impl->celestialShader);
+    if (_impl->shadowsLoaded)
+        UnloadRenderTexture(_impl->shadowRT);
     if (_impl->bloomLoaded)
     {
         UnloadShader(_impl->bloomExtract);
@@ -711,6 +726,121 @@ void RaylibEngine::endFloorShading()
 {
     if (_impl->floorLoaded)
         EndShaderMode();
+}
+
+namespace
+{
+// FBO sans couleur : seulement une texture de profondeur échantillonnable.
+RenderTexture2D loadShadowmapRT(int width, int height)
+{
+    RenderTexture2D target{};
+    target.id = rlLoadFramebuffer();
+    if (target.id == 0)
+        return target;
+    target.texture.width = width;
+    target.texture.height = height;
+    rlEnableFramebuffer(target.id);
+    target.depth.id = rlLoadTextureDepth(width, height, false); // texture, pas renderbuffer
+    target.depth.width = width;
+    target.depth.height = height;
+    target.depth.format = 19;
+    target.depth.mipmaps = 1;
+    rlFramebufferAttach(target.id, target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_TEXTURE2D, 0);
+    if (!rlFramebufferComplete(target.id))
+    {
+        rlUnloadFramebuffer(target.id);
+        target.id = 0;
+    }
+    rlDisableFramebuffer();
+    return target;
+}
+
+ShadowLocs cacheShadowLocs(Shader s)
+{
+    ShadowLocs l;
+    l.map = GetShaderLocation(s, "shadowMap");
+    l.vp = GetShaderLocation(s, "lightVP");
+    l.on = GetShaderLocation(s, "shadowsOn");
+    l.res = GetShaderLocation(s, "shadowMapRes");
+    return l;
+}
+} // namespace
+
+bool RaylibEngine::enableShadows(int resolution)
+{
+    _impl->shadowRT = loadShadowmapRT(resolution, resolution);
+    if (_impl->shadowRT.id == 0)
+    {
+        TraceLog(LOG_WARNING, "enableShadows: depth FBO failed — no shadows");
+        return false;
+    }
+    _impl->shadowRes = resolution;
+    _impl->shadowsLoaded = true;
+    if (_impl->lightLoaded)
+        _impl->lightShadow = cacheShadowLocs(_impl->lightShader);
+    if (_impl->instLoaded)
+        _impl->instShadow = cacheShadowLocs(_impl->instShader);
+    if (_impl->floorLoaded)
+        _impl->floorShadow = cacheShadowLocs(_impl->floorShader);
+    TraceLog(LOG_INFO, "enableShadows: %dx%d depth map ready", resolution, resolution);
+    return true;
+}
+
+bool RaylibEngine::shadowsReady() const
+{
+    return _impl->shadowsLoaded;
+}
+
+void RaylibEngine::beginShadowPass(gfx::Vec3 lightDir, gfx::Vec3 sceneCentre, float sceneRadius)
+{
+    if (!_impl->shadowsLoaded)
+        return;
+    Camera3D lightCam{};
+    const gfx::Vec3 d = gfx::normalize(lightDir);
+    lightCam.position = toRl(gfx::sub(sceneCentre, gfx::scale(d, sceneRadius * 1.8f)));
+    lightCam.target = toRl(sceneCentre);
+    lightCam.up = std::fabs(d.y) > 0.95f ? Vector3{1, 0, 0} : Vector3{0, 1, 0};
+    lightCam.fovy = sceneRadius * 2.0f; // largeur du volume ortho
+    lightCam.projection = CAMERA_ORTHOGRAPHIC;
+
+    BeginTextureMode(_impl->shadowRT); // fixe viewport + framebuffer taille shadowRes
+    ClearBackground(WHITE);            // depth clear (la couleur n'existe pas)
+    BeginMode3D(lightCam);
+    _impl->lightVP = MatrixMultiply(rlGetMatrixModelview(), rlGetMatrixProjection());
+}
+
+void RaylibEngine::endShadowPass()
+{
+    if (!_impl->shadowsLoaded)
+        return;
+    EndMode3D();
+    EndTextureMode();
+
+    // Publier la depth map (slot 10) + lightVP sur les trois shaders scène.
+    const int slot = 10;
+    const int on = 1;
+    auto push = [&](Shader s, const ShadowLocs &l) {
+        if (l.vp >= 0)
+            SetShaderValueMatrix(s, l.vp, _impl->lightVP);
+        if (l.on >= 0)
+            SetShaderValue(s, l.on, &on, SHADER_UNIFORM_INT);
+        if (l.res >= 0)
+            SetShaderValue(s, l.res, &_impl->shadowRes, SHADER_UNIFORM_INT);
+        if (l.map >= 0)
+        {
+            rlEnableShader(s.id);
+            rlActiveTextureSlot(slot);
+            rlEnableTexture(_impl->shadowRT.depth.id);
+            rlSetUniform(l.map, &slot, SHADER_UNIFORM_INT, 1);
+            rlActiveTextureSlot(0);
+        }
+    };
+    if (_impl->lightLoaded)
+        push(_impl->lightShader, _impl->lightShadow);
+    if (_impl->instLoaded)
+        push(_impl->instShader, _impl->instShadow);
+    if (_impl->floorLoaded)
+        push(_impl->floorShader, _impl->floorShadow);
 }
 
 namespace
