@@ -248,6 +248,28 @@ static void test_taken_food_no_longer_expires_on_tile()
     assert(p.inventory[0] == 1);
 }
 
+static void test_meteor_strike_clears_tile_and_blocks_respawn()
+{
+    WorldState w(1, 1);
+    Player &p = w.add_player(0, 0, 0, Orientation::North);
+    EggId egg = w.add_egg(p.id, 0, 0, 0);
+    w.at(0, 0).resources[0] = 4;
+    w.at(0, 0).resources[1] = 2;
+    w.at(0, 0).food_expirations = {10, 20};
+
+    auto result = w.meteor_strike(0, 0);
+
+    assert(result.players_hit.size() == 1 && result.players_hit[0] == p.id);
+    assert(result.eggs_destroyed.size() == 1 && result.eggs_destroyed[0] == egg);
+    for (int q : w.at(0, 0).resources)
+        assert(q == 0);
+    assert(w.at(0, 0).food_expirations.empty());
+    assert(w.find_egg(egg)->hatched);
+    assert(w.respawn_resources(/*now_tick=*/100).empty());
+    for (int q : w.at(0, 0).resources)
+        assert(q == 0);
+}
+
 static void test_check_win()
 {
     WorldState w(10, 10);
@@ -293,6 +315,7 @@ int main()
     test_respawn_reports_changed_tiles_only();
     test_food_expires_after_ground_lifetime();
     test_taken_food_no_longer_expires_on_tile();
+    test_meteor_strike_clears_tile_and_blocks_respawn();
     test_check_win();
     test_check_win_needs_six();
     std::cout << "world_state tests OK\n";

@@ -94,11 +94,9 @@ constexpr float kMusicVolume = 0.45f;
 
 constexpr float kPi = 3.14159265358979f;
 
-// Meteorite random event: cadence + odds + look.
+// Meteorite event visuals.
 constexpr const char *kMeteoriteModelPath = "assets/meteorite.glb";
 constexpr const char *kIncantationModelPath = "assets/incantation.glb";
-constexpr float kMeteorRollTicks = 60.0f;               // roll every N game ticks
-constexpr int kMeteorChance = 100;                      // 1-in-N per roll
 constexpr float kMeteorFallSeconds = 1.2f;              // sky -> ground
 constexpr float kMeteorGlowSeconds = 1.6f;              // impact shockwave fade
 constexpr float kMeteorFallHeight = TILE_SIZE * 10.0f;  // spawn altitude
@@ -1231,25 +1229,6 @@ void Interface::updateRandomEvents(float dt)
                                          return m.age >= kMeteorFallSeconds + kMeteorGlowSeconds;
                                      }),
                       _meteorites.end());
-
-    // Game-tick accumulator: frequency is server time units per second, so
-    // the roll cadence tracks sst speed changes. Paused scrubbing still ticks
-    // — these are ambience, not simulation state.
-    _tickAccum += dt * static_cast<float>(std::max(1, _state.frequency));
-    while (_tickAccum >= kMeteorRollTicks)
-    {
-        _tickAccum -= kMeteorRollTicks;
-        std::uniform_int_distribution<int> dice(1, kMeteorChance);
-        if (dice(_rng) != 1)
-            continue;
-
-        std::uniform_int_distribution<int> rx(0, _map.getWidth() - 1);
-        std::uniform_int_distribution<int> ry(0, _map.getHeight() - 1);
-        const Meteorite m{rx(_rng), ry(_rng), 0.0f};
-        _meteorites.push_back(m);
-        _feed.push_back({_elapsed, gfx::Color{255, 130, 50, 255}, gfx::fmt("Meteorite strike at (%d, %d)!", m.x, m.y)});
-        gfx::logInfo("updateRandomEvents: meteorite at (%d, %d)", m.x, m.y);
-    }
 }
 
 namespace
@@ -2058,6 +2037,12 @@ void Interface::drainFeedEvents()
         case GameEventKind::Eject:
             text = gfx::fmt("#%u (%s) ejected the tile", ev.id, ev.text.c_str());
             color = gfx::Color{255, 145, 55, 255};
+            break;
+        case GameEventKind::Meteor:
+            text = gfx::fmt("Meteorite strike at (%d, %d)!", ev.x, ev.y);
+            color = gfx::Color{255, 130, 50, 255};
+            _meteorites.push_back({ev.x, ev.y, 0.0f});
+            gfx::logInfo("meteorite event at (%d, %d)", ev.x, ev.y);
             break;
         case GameEventKind::Weather:
         {

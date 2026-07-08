@@ -53,6 +53,7 @@ enum class GameEventKind : std::uint8_t
     IncantEnd,   // pie: x/y set, value = result (1 ok, 0 failed, -1 unknown)
     Fork,        // pfk: player laid an egg
     Eject,       // pex: player ejected others
+    Meteor,      // smg meteor: x/y set
     Weather,     // wth: text = weather, value = duration ticks
     Win          // seg: text = winning team
 };

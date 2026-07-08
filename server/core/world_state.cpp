@@ -446,7 +446,15 @@ static constexpr double RESOURCE_DENSITIES[RESOURCE_COUNT] = {0.5, 0.3, 0.15, 0.
 std::vector<std::pair<int, int>> WorldState::respawn_resources(std::uint64_t now_tick)
 {
     int total_tiles = width_ * height_;
-    std::uniform_int_distribution<int> tile_dist(0, total_tiles - 1);
+    std::vector<int> spawnable_tiles;
+    spawnable_tiles.reserve(static_cast<std::size_t>(total_tiles));
+    for (int idx = 0; idx < total_tiles; ++idx)
+        if (!tiles_[static_cast<std::size_t>(idx)].resource_spawn_blocked)
+            spawnable_tiles.push_back(idx);
+    if (spawnable_tiles.empty())
+        return {};
+
+    std::uniform_int_distribution<std::size_t> tile_dist(0, spawnable_tiles.size() - 1);
 
     // Track which tile indices we bump so the caller can emit bct only for those.
     // A tile touched several times is reported once: a per-tile flag plus an
@@ -463,7 +471,7 @@ std::vector<std::pair<int, int>> WorldState::respawn_resources(std::uint64_t now
         int to_add = std::max(0, target - current);
         for (int i = 0; i < to_add; ++i)
         {
-            int idx = tile_dist(rng_);
+            int idx = spawnable_tiles[tile_dist(rng_)];
             auto &tile = tiles_[static_cast<std::size_t>(idx)];
             ++tile.resources[r];
             if (r == 0)
@@ -481,6 +489,33 @@ std::vector<std::pair<int, int>> WorldState::respawn_resources(std::uint64_t now
     for (int idx : changed_idx)
         changed.emplace_back(idx % width_, idx / width_); // (x, y), row-major
     return changed;
+}
+
+WorldState::MeteorStrikeResult WorldState::meteor_strike(int x, int y)
+{
+    const int wx = wrap_x(x);
+    const int wy = wrap_y(y);
+    auto &tile = at(wx, wy);
+    MeteorStrikeResult result;
+
+    tile.resources = {};
+    tile.food_expirations.clear();
+    tile.resource_spawn_blocked = true;
+
+    for (const auto &[pid, p] : players_)
+        if (p.alive && p.x == wx && p.y == wy)
+            result.players_hit.push_back(pid);
+
+    for (auto &egg : eggs_)
+    {
+        if (!egg.hatched && egg.x == wx && egg.y == wy)
+        {
+            egg.hatched = true;
+            result.eggs_destroyed.push_back(egg.id);
+        }
+    }
+
+    return result;
 }
 
 std::vector<std::pair<int, int>> WorldState::expire_food(std::uint64_t now_tick)

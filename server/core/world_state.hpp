@@ -121,6 +121,15 @@ class WorldState
     // modified tile coordinates for GUI `bct` updates.
     std::vector<std::pair<int, int>> expire_food(std::uint64_t now_tick);
 
+    // Meteorite impact: clears the tile, prevents future natural resource
+    // respawns on it, and reports live entities the runtime must notify/kill.
+    struct MeteorStrikeResult
+    {
+        std::vector<PlayerId> players_hit;
+        std::vector<EggId> eggs_destroyed;
+    };
+    MeteorStrikeResult meteor_strike(int x, int y);
+
     // --- Win condition ----------------------------------------------------------
     [[nodiscard]] std::optional<TeamId> check_win() const;
 

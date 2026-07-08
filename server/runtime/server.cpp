@@ -44,6 +44,7 @@ void Server::run()
     season_until_tick_ = now_ticks() + 2400;
     set_season_weather("spring", "clear", 600);
     schedule_weather_change();
+    schedule_meteor_strike();
 
     while (running_.load(std::memory_order_relaxed))
     {
@@ -159,6 +160,35 @@ void Server::schedule_weather_change()
         set_season_weather(season_, std::string(next), duration);
         schedule_weather_change();
     });
+}
+
+void Server::schedule_meteor_strike()
+{
+    constexpr core::EventScheduler::Tick kMeteorRollTicks = 60;
+    scheduler_.schedule(now_ticks() + kMeteorRollTicks, [this]() {
+        constexpr int kMeteorChance = 100;
+        std::uniform_int_distribution<int> dice(1, kMeteorChance);
+        if (dice(rng_) == 1)
+            trigger_meteor_strike();
+        schedule_meteor_strike();
+    });
+}
+
+void Server::trigger_meteor_strike()
+{
+    std::uniform_int_distribution<int> rx(0, world_.width() - 1);
+    std::uniform_int_distribution<int> ry(0, world_.height() - 1);
+    const int x = rx(rng_);
+    const int y = ry(rng_);
+
+    net_.broadcast_gui(protocol::GuiEmitter::smg("meteor " + std::to_string(x) + " " + std::to_string(y)));
+
+    auto result = world_.meteor_strike(x, y);
+    for (auto player_id : result.players_hit)
+        kill_player(player_id);
+    for (auto egg_id : result.eggs_destroyed)
+        net_.broadcast_gui(protocol::GuiEmitter::edi(egg_id));
+    net_.broadcast_gui(protocol::GuiEmitter::bct(x, y, world_.at(x, y).resources));
 }
 
 void Server::set_season_weather(std::string season, std::string weather, int duration_ticks)

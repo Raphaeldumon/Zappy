@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <deque>
 #include <memory>
-#include <random>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -190,11 +189,9 @@ class Interface
     };
     std::unordered_map<std::uint32_t, Bubble> _bubbles;
 
-    // --- Random events (GUI-side, visual only) ---
-    // First member of the future random-event system: every 60 game ticks a
-    // d100 rolls; on a 1 a meteorite falls onto a random tile (fall, impact
-    // shockwave + glow, gone). Ticks come from the server frequency, so the
-    // cadence follows sst speed changes.
+    // --- Random events ---
+    // Meteorites are driven by the authoritative server through `smg meteor`
+    // events; the GUI keeps only the active fall/glow animations.
     struct Meteorite
     {
         int x{0};
@@ -204,8 +201,6 @@ class Interface
     std::vector<Meteorite> _meteorites;
     ResourceModel _meteoriteModel{};
     ResourceModel _incantationModel{};
-    float _tickAccum{0.0f};                    // fractional game ticks toward the next roll
-    std::mt19937 _rng{std::random_device{}()}; // shared by future random events
     void loadMeteoriteModel();
     void unloadMeteoriteModel();
     void loadIncantationModel();

@@ -329,6 +329,16 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
         return;
     }
 
+    if (tag == "smg")
+    {
+        std::string kind;
+        int x = 0;
+        int y = 0;
+        if ((iss >> kind >> x >> y) && kind == "meteor" && inBounds(map, x, y))
+            state.feedEvents.push_back({GameEventKind::Meteor, 0, x, y, 0, {}});
+        return;
+    }
+
     // msz: map already sized at construction. Everything else (pin/pdr/
-    // smg/suc/sbp) is cosmetic — bct/ppo already keep the model correct.
+    // suc/sbp) is cosmetic — bct/ppo already keep the model correct.
 }

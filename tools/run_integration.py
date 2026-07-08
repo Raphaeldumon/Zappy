@@ -58,6 +58,7 @@ GUI_KNOWN_TAGS = {
     "edi",
     "sgt",
     "sst",
+    "wth",
     "seg",
     "smg",
     "suc",

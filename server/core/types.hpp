@@ -32,6 +32,7 @@ struct Tile
 {
     ResourceSet resources{};
     std::vector<std::uint64_t> food_expirations{};
+    bool resource_spawn_blocked{false};
 };
 
 // A team registered with the server.

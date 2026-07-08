@@ -32,6 +32,8 @@ class Server
     void schedule_resource_respawn();
     void schedule_food_consumption(core::PlayerId id);
     void schedule_weather_change();
+    void schedule_meteor_strike();
+    void trigger_meteor_strike();
     void set_season_weather(std::string season, std::string weather, int duration_ticks);
 
     // Network callbacks
