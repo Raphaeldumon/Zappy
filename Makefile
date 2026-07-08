@@ -32,7 +32,7 @@ HOST         ?= 127.0.0.1
 # Mandatory Epitech rules: all, clean, fclean, re — plus the subject-mandated
 # per-binary rules zappy_server / zappy_gui / zappy_ai (eponymous to the bins).
 .PHONY: all build zappy_server zappy_gui zappy_ai clean fclean re \
-        tests_run config coverage format help demo
+        tests_run config coverage format help demo keynote
 
 all: zappy_server zappy_gui zappy_ai
 
@@ -101,6 +101,16 @@ demo: all
 	sleep 0.3; \
 	( cd gui && exec ../$(GUI_BIN) -p $(PORT) -h $(HOST) )
 
+## Regénère Keynote.pptx depuis presentation/ (rendu Chrome + assemblage pptx).
+PRESENTATION_PY := presentation/.venv/bin/python
+
+keynote:
+	@test -x $(PRESENTATION_PY) || { \
+		python3 -m venv presentation/.venv && \
+		presentation/.venv/bin/pip install --quiet python-pptx pillow; }
+	@./presentation/render.sh
+	@$(PRESENTATION_PY) presentation/build_pptx.py
+
 format:
 	@bash tools/format_all.sh
 
@@ -120,3 +130,4 @@ help:
 	@echo "Builds : ./zappy_server  ./zappy_gui  ./zappy_ai"
 	@echo "Vars   : BUILD_TYPE=$(BUILD_TYPE) JOBS=$(JOBS) BUILD_DIR=$(BUILD_DIR)"
 	@echo "demo   : PORT=$(PORT) MAP_W=$(MAP_W) MAP_H=$(MAP_H) TEAMS='$(TEAMS)' CLIENTS=$(CLIENTS) FREQ=$(FREQ) BOTS=$(BOTS) HOST=$(HOST)"
+	@echo "keynote: régénère Keynote.pptx depuis presentation/"
