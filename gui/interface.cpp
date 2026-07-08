@@ -30,7 +30,7 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     // pick the shader up at load time; both fail soft to the flat look.
     _engine.loadLightingShader("assets/shaders/lighting.vs", "assets/shaders/lighting.fs");
     _engine.loadInstancingShader("assets/shaders/lighting_instancing.vs", "assets/shaders/lighting.fs");
-    _engine.enableBloom("assets/shaders/bloom_extract.fs", "assets/shaders/bloom_combine.fs");
+    _engine.enablePostFx("assets/shaders/bloom_extract.fs", "assets/shaders/post_composite.fs");
     _engine.loadFloorShader("assets/shaders/floor.vs", "assets/shaders/floor.fs");
     // Global UI font: every drawText/measureText call goes through it once
     // loaded; on failure the engine silently keeps raylib's built-in font.
@@ -1421,6 +1421,23 @@ void Interface::render()
                              gfx::add(es.ambient, gfx::scale(flashAdd, 0.3f)), es.fogColor,
                              _weatherVisible ? es.fogDensity : 0.0f);
     _engine.setGroundSeason(es.groundOverlay, _weatherVisible ? es.groundMix : 0.0f);
+
+    // God rays depuis la position écran du soleil (0 si dos au soleil).
+    const gfx::Vec3 toSunW = gfx::scale(es.sunDir, -1.0f);
+    const gfx::Vec3 camFwdPre = gfx::normalize(gfx::sub(_camera.target, _camera.position));
+    float godray = 0.0f;
+    gfx::Vec2 sunScreen01{0.5f, 0.5f};
+    const float facing = gfx::dot(camFwdPre, toSunW);
+    if (facing > 0.05f && es.sunVisibility > 0.01f)
+    {
+        const gfx::Vec2 sp = _engine.worldToScreen(_camera, gfx::add(_camera.position, gfx::scale(toSunW, 500.0f)));
+        sunScreen01 = {sp.x / static_cast<float>(_engine.screenWidth()),
+                       sp.y / static_cast<float>(_engine.screenHeight())};
+        godray = es.sunVisibility * std::min(facing * 1.5f, 1.0f) * 0.8f;
+    }
+    const bool fx = _weatherVisible;
+    _engine.setPostFxParams(sunScreen01, fx ? godray : 0.0f, fx ? es.gradeLift : gfx::Vec3{0, 0, 0},
+                            fx ? es.gradeGain : gfx::Vec3{1, 1, 1}, fx ? es.heatDistort : 0.0f, _elapsed);
 
     _engine.beginMode3D(_camera);
 

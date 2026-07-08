@@ -291,10 +291,26 @@ struct RaylibEngine::Impl
     Shader bloomCombine{};
     bool bloomLoaded{false};
     int bloomResLoc{-1};    // "resolution" on the extract shader
-    int bloomGlowLoc{-1};   // "glowTex" sampler on the combine shader
     RenderTexture2D sceneRT{};
     RenderTexture2D bloomRT{}; // half of sceneRT
     bool sceneRTActive{false};
+
+    // Locations du composite + valeurs par frame (appliquées dans endMode3D).
+    struct PostLocs
+    {
+        int glowTex{-1}, sunScreen{-1}, godray{-1}, lift{-1}, gain{-1}, heat{-1}, time{-1};
+    };
+    PostLocs postLocs{};
+    struct PostParams
+    {
+        Vector2 sunScreen{0.5f, 0.5f};
+        float godray{0};
+        Vector3 lift{0, 0, 0};
+        Vector3 gain{1, 1, 1};
+        float heat{0};
+        float time{0};
+    };
+    PostParams post{};
 
     bool valid(int h, std::size_t n) const
     {
@@ -697,31 +713,79 @@ void RaylibEngine::endFloorShading()
         EndShaderMode();
 }
 
-bool RaylibEngine::enableBloom(const std::string &extractFs, const std::string &combineFs)
+namespace
 {
-    if (!FileExists(extractFs.c_str()) || !FileExists(combineFs.c_str()))
+// LoadRenderTexture force RGBA8 ; pour un pipeline HDR (valeurs > 1 pour le
+// bloom/ACES) on assemble un FBO avec une texture couleur RGBA16F à la main.
+RenderTexture2D loadRenderTexture16F(int width, int height)
+{
+    RenderTexture2D target{};
+    target.id = rlLoadFramebuffer();
+    if (target.id == 0)
+        return target;
+    rlEnableFramebuffer(target.id);
+
+    target.texture.id = rlLoadTexture(nullptr, width, height, PIXELFORMAT_UNCOMPRESSED_R16G16B16A16, 1);
+    target.texture.width = width;
+    target.texture.height = height;
+    target.texture.format = PIXELFORMAT_UNCOMPRESSED_R16G16B16A16;
+    target.texture.mipmaps = 1;
+
+    target.depth.id = rlLoadTextureDepth(width, height, true);
+    target.depth.width = width;
+    target.depth.height = height;
+    target.depth.format = 19; // DEPTH_COMPONENT_24BIT (valeur raylib interne)
+    target.depth.mipmaps = 1;
+
+    rlFramebufferAttach(target.id, target.texture.id, RL_ATTACHMENT_COLOR_CHANNEL0, RL_ATTACHMENT_TEXTURE2D, 0);
+    rlFramebufferAttach(target.id, target.depth.id, RL_ATTACHMENT_DEPTH, RL_ATTACHMENT_RENDERBUFFER, 0);
+    if (!rlFramebufferComplete(target.id))
     {
-        TraceLog(LOG_WARNING, "enableBloom: missing shader files — no post FX");
+        rlUnloadFramebuffer(target.id);
+        target.id = 0;
+    }
+    rlDisableFramebuffer();
+    return target;
+}
+
+// RT HDR si le GPU le permet, sinon LDR classique (post FX conservés en 8 bits).
+RenderTexture2D loadPostRT(int width, int height)
+{
+    RenderTexture2D rt = loadRenderTexture16F(width, height);
+    if (rt.id == 0)
+    {
+        TraceLog(LOG_WARNING, "enablePostFx: 16F unsupported — LDR post FX");
+        rt = LoadRenderTexture(width, height);
+    }
+    return rt;
+}
+} // namespace
+
+bool RaylibEngine::enablePostFx(const std::string &extractFs, const std::string &compositeFs)
+{
+    if (!FileExists(extractFs.c_str()) || !FileExists(compositeFs.c_str()))
+    {
+        TraceLog(LOG_WARNING, "enablePostFx: missing shader files — no post FX");
         return false;
     }
     Shader ext = LoadShader(nullptr, extractFs.c_str()); // default fullscreen vs
     if (ext.id == 0)
     {
-        TraceLog(LOG_WARNING, "enableBloom: extract shader failed to compile — no post FX");
+        TraceLog(LOG_WARNING, "enablePostFx: extract shader failed to compile — no post FX");
         return false;
     }
-    Shader comb = LoadShader(nullptr, combineFs.c_str());
+    Shader comb = LoadShader(nullptr, compositeFs.c_str());
     if (comb.id == 0)
     {
-        TraceLog(LOG_WARNING, "enableBloom: combine shader failed to compile — no post FX");
+        TraceLog(LOG_WARNING, "enablePostFx: composite shader failed to compile — no post FX");
         UnloadShader(ext);
         return false;
     }
-    _impl->sceneRT = LoadRenderTexture(GetScreenWidth(), GetScreenHeight());
-    _impl->bloomRT = LoadRenderTexture(GetScreenWidth() / 2, GetScreenHeight() / 2);
+    _impl->sceneRT = loadPostRT(GetScreenWidth(), GetScreenHeight());
+    _impl->bloomRT = loadPostRT(GetScreenWidth() / 2, GetScreenHeight() / 2);
     if (_impl->sceneRT.texture.id == 0 || _impl->bloomRT.texture.id == 0)
     {
-        TraceLog(LOG_WARNING, "enableBloom: render texture failed — no post FX");
+        TraceLog(LOG_WARNING, "enablePostFx: render texture failed — no post FX");
         UnloadShader(ext);
         UnloadShader(comb);
         return false;
@@ -731,10 +795,27 @@ bool RaylibEngine::enableBloom(const std::string &extractFs, const std::string &
     _impl->bloomExtract = ext;
     _impl->bloomCombine = comb;
     _impl->bloomResLoc = GetShaderLocation(ext, "resolution");
-    _impl->bloomGlowLoc = GetShaderLocation(comb, "glowTex");
+    _impl->postLocs.glowTex = GetShaderLocation(comb, "glowTex");
+    _impl->postLocs.sunScreen = GetShaderLocation(comb, "sunScreen");
+    _impl->postLocs.godray = GetShaderLocation(comb, "godray");
+    _impl->postLocs.lift = GetShaderLocation(comb, "gradeLift");
+    _impl->postLocs.gain = GetShaderLocation(comb, "gradeGain");
+    _impl->postLocs.heat = GetShaderLocation(comb, "heat");
+    _impl->postLocs.time = GetShaderLocation(comb, "time");
     _impl->bloomLoaded = true;
-    TraceLog(LOG_INFO, "enableBloom: '%s' + '%s' ready (half-res glow)", extractFs.c_str(), combineFs.c_str());
+    TraceLog(LOG_INFO, "enablePostFx: '%s' + '%s' ready (half-res glow)", extractFs.c_str(), compositeFs.c_str());
     return true;
+}
+
+void RaylibEngine::setPostFxParams(gfx::Vec2 sunScreen01, float godrayStrength, gfx::Vec3 gradeLift,
+                                   gfx::Vec3 gradeGain, float heat, float time)
+{
+    _impl->post.sunScreen = Vector2{sunScreen01.x, sunScreen01.y};
+    _impl->post.godray = godrayStrength;
+    _impl->post.lift = toRl(gradeLift);
+    _impl->post.gain = toRl(gradeGain);
+    _impl->post.heat = heat;
+    _impl->post.time = time;
 }
 
 gfx::BBox RaylibEngine::modelBounds(gfx::ModelHandle h) const
@@ -834,8 +915,8 @@ void RaylibEngine::beginMode3D(const gfx::Camera &cam)
         {
             UnloadRenderTexture(_impl->sceneRT);
             UnloadRenderTexture(_impl->bloomRT);
-            _impl->sceneRT = LoadRenderTexture(GetScreenWidth(), GetScreenHeight());
-            _impl->bloomRT = LoadRenderTexture(GetScreenWidth() / 2, GetScreenHeight() / 2);
+            _impl->sceneRT = loadPostRT(GetScreenWidth(), GetScreenHeight());
+            _impl->bloomRT = loadPostRT(GetScreenWidth() / 2, GetScreenHeight() / 2);
             SetTextureFilter(_impl->bloomRT.texture, TEXTURE_FILTER_BILINEAR);
         }
         BeginTextureMode(_impl->sceneRT);
@@ -876,10 +957,24 @@ void RaylibEngine::endMode3D()
         EndShaderMode();
         EndTextureMode();
 
-        // Pass 2: composite the scene with the upscaled glow.
+        // Pass 2: composite the scene with the upscaled glow + per-frame params.
+        const auto &pl = _impl->postLocs;
+        const auto &pp = _impl->post;
         BeginShaderMode(_impl->bloomCombine);
-        if (_impl->bloomGlowLoc >= 0)
-            SetShaderValueTexture(_impl->bloomCombine, _impl->bloomGlowLoc, _impl->bloomRT.texture);
+        if (pl.glowTex >= 0)
+            SetShaderValueTexture(_impl->bloomCombine, pl.glowTex, _impl->bloomRT.texture);
+        if (pl.sunScreen >= 0)
+            SetShaderValue(_impl->bloomCombine, pl.sunScreen, &pp.sunScreen, SHADER_UNIFORM_VEC2);
+        if (pl.godray >= 0)
+            SetShaderValue(_impl->bloomCombine, pl.godray, &pp.godray, SHADER_UNIFORM_FLOAT);
+        if (pl.lift >= 0)
+            SetShaderValue(_impl->bloomCombine, pl.lift, &pp.lift, SHADER_UNIFORM_VEC3);
+        if (pl.gain >= 0)
+            SetShaderValue(_impl->bloomCombine, pl.gain, &pp.gain, SHADER_UNIFORM_VEC3);
+        if (pl.heat >= 0)
+            SetShaderValue(_impl->bloomCombine, pl.heat, &pp.heat, SHADER_UNIFORM_FLOAT);
+        if (pl.time >= 0)
+            SetShaderValue(_impl->bloomCombine, pl.time, &pp.time, SHADER_UNIFORM_FLOAT);
         DrawTextureRec(_impl->sceneRT.texture, Rectangle{0.0f, 0.0f, res[0], -res[1]}, Vector2{0.0f, 0.0f}, WHITE);
         EndShaderMode();
     }

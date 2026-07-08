@@ -145,12 +145,15 @@ class RaylibEngine
     // Instanced variant (usually the same fs as the lighting shader with a
     // per-instance-transform vs). Enables the fast path of drawModelInstanced.
     bool loadInstancingShader(const std::string &vs, const std::string &fs);
-    // Bloom: the 3D scene renders into an offscreen target; endMode3D runs
-    // the extract shader into a half-res glow target (quarter of the heavy
-    // taps), then the combine shader composites scene + glow to the screen.
+    // Post FX : scène rendue dans un RT HDR (RGBA16F) ; endMode3D extrait le
+    // bloom en demi-res puis composite (ACES, god rays, grading, vignette).
     // 2D UI drawn afterwards stays crisp. Optional — missing files just skip
     // the effect.
-    bool enableBloom(const std::string &extractFs, const std::string &combineFs);
+    bool enablePostFx(const std::string &extractFs, const std::string &compositeFs);
+    // Paramètres par frame du composite. sunScreen01 en UV écran (0..1, origine
+    // en haut à gauche) ; godrayStrength 0 quand le soleil est hors champ.
+    void setPostFxParams(gfx::Vec2 sunScreen01, float godrayStrength, gfx::Vec3 gradeLift, gfx::Vec3 gradeGain,
+                         float heat, float time);
     // Uniforms d'éclairage/fog, à pousser une fois par frame (avant beginMode3D)
     // sur les shaders lighting / instancing / floor. No-op si rien n'est chargé.
     void setSceneLighting(gfx::Vec3 lightDir, gfx::Vec3 lightColor, gfx::Vec3 ambient, gfx::Vec3 fogColor,
