@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  .card {
+    position: absolute; top: 330px; width: 500px; height: 600px;
+    padding: 34px 40px;
+    display: flex; flex-direction: column; align-items: center; gap: 22px;
+  }
+  .card .icon { height: 74px; display: flex; align-items: center; justify-content: center; }
+  .card .head {
+    font-family: "Toxigenesis", sans-serif; font-size: 34px; color: #FFFFFF;
+    text-align: center; line-height: 1.15;
+  }
+  .c1 { left: 110px; }
+  .c2 { left: 680px; }
+  .c3 { left: 1250px; }
+  /* cadenas + brouillage */
+  .scramble {
+    position: absolute; bottom: 44px; left: 0; right: 0; text-align: center;
+    font-family: "Liberation Mono", monospace; font-size: 20px; color: #8E9BC0;
+    letter-spacing: 2px;
+  }
+  /* curseurs */
+  .sliders { display: flex; flex-direction: column; gap: 14px; width: 150px; }
+  .sl { position: relative; height: 6px; border-radius: 3px; background: #FFFFFF22; }
+  .sl::after {
+    content: ""; position: absolute; top: 50%; width: 18px; height: 18px;
+    transform: translate(-50%, -50%); border-radius: 50%;
+    background: #EAF0FF; box-shadow: 0 0 12px #EAF0FF66;
+  }
+  .sl.a::after { left: 70%; }
+  .sl.b::after { left: 30%; }
+  .sl.c::after { left: 55%; }
+  .term {
+    font-family: "Liberation Mono", monospace; font-size: 34px; color: #EAF0FF;
+    border: 2px solid #EAF0FF55; border-radius: 10px; padding: 8px 16px;
+    box-shadow: 0 0 20px #EAF0FF22;
+  }
+</style>
+</head>
+<body>
+<div class="slide act-neutral">
+  <div class="stars"></div>
+  <div class="kicker">Acte V — Pour finir</div>
+  <div class="title">Et aussi…</div>
+
+  <div class="card panel c1">
+    <div class="icon">
+      <svg width="62" height="70" viewBox="0 0 24 26" fill="none" stroke="#EAF0FF" stroke-width="1.6">
+        <rect x="4" y="11" width="16" height="12" rx="2"/>
+        <path d="M8 11V7a4 4 0 0 1 8 0v4"/>
+        <circle cx="12" cy="17" r="1.8" fill="#EAF0FF"/>
+      </svg>
+    </div>
+    <div class="head">MESSAGES CHIFFRÉS</div>
+    <div class="scramble">⌁x91·k#f2…∅Δq§7</div>
+  </div>
+
+  <div class="card panel c2">
+    <div class="icon"><span class="term">&gt;_</span></div>
+    <div class="head">CONSOLE ADMIN</div>
+  </div>
+
+  <div class="card panel c3">
+    <div class="icon">
+      <div class="sliders"><span class="sl a"></span><span class="sl b"></span><span class="sl c"></span></div>
+    </div>
+    <div class="head">RÉGLAGES À CHAUD</div>
+  </div>
+
+  <div class="native" style="left:140px; top:560px; width:500px; height:300px;
+       font-size:32px;">Les équipes parlent en code : un octet magique + un contenu illisible.
+Les adversaires n’entendent que du bruit.</div>
+  <div class="native" style="left:710px; top:560px; width:500px; height:300px;
+       font-size:32px;">Pause, reprise, changement de vitesse, apparition d’objets, en pleine partie.
+Sur un port séparé, protégé par jeton.</div>
+  <div class="native" style="left:1280px; top:560px; width:500px; height:300px;
+       font-size:32px;">Densités, coûts, durées : un fichier de configuration rechargeable sans redémarrer le serveur.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>

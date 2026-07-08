@@ -159,6 +159,32 @@ SLIDES = [
              "text": "Idéal pour comprendre une défaite… ou savourer une victoire image par image."},
         ],
     },
+    {
+        "n": "14",
+        "zones": [
+            {"px": (140, 560, 500, 300), "pt": 16,
+             "text": "Les équipes parlent en code : un octet magique + un contenu illisible.\n"
+                     "Les adversaires n’entendent que du bruit."},
+            {"px": (710, 560, 500, 300), "pt": 16,
+             "text": "Pause, reprise, changement de vitesse, apparition d’objets, "
+                     "en pleine partie.\n"
+                     "Sur un port séparé, protégé par jeton."},
+            {"px": (1280, 560, 500, 300), "pt": 16,
+             "text": "Densités, coûts, durées : un fichier de configuration "
+                     "rechargeable sans redémarrer le serveur."},
+        ],
+    },
+    {
+        "n": "15",
+        "zones": [
+            {"px": (260, 560, 1400, 120), "pt": 18, "align": "center",
+             "text": "Réseau, architecture, coordination distribuée, 3D temps réel — "
+                     "et beaucoup de travail d’équipe.\n"
+                     "Une démo tourne juste à côté : venez voir le monde vivre."},
+            {"px": (210, 930, 1500, 44), "pt": 14, "align": "center", "color": "8E9BC0",
+             "text": "Raphael Dumon · Clément Fabre · Mathéo Emma · Léo Cazabat · Joachim Ismael"},
+        ],
+    },
 ]
 
 

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  .ring {
+    position: absolute; left: 960px; top: 470px; width: 1050px; height: 440px;
+    transform: translate(-50%, -50%) rotate(-14deg);
+    border-radius: 50%;
+    border: 2px solid #EAF0FF2A;
+    box-shadow: 0 0 40px #EAF0FF14, inset 0 0 40px #EAF0FF0E;
+    opacity: .7;
+  }
+  .merci {
+    position: absolute; left: 0; right: 0; top: 330px;
+    text-align: center;
+    font-family: "Toxigenesis", sans-serif;
+    font-size: 120px; letter-spacing: 20px; color: #FFFFFF;
+    text-shadow: 0 0 50px #EAF0FF55, 0 0 140px #EAF0FF2A;
+  }
+  .luan {
+    position: absolute; left: 1600px; top: 160px; width: 74px; height: 74px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #FFE9B8, #F5C866 60%, #B8862F);
+    box-shadow: 0 0 40px #F5C86677;
+  }
+  .palasse {
+    position: absolute; left: 250px; top: 840px; width: 48px; height: 48px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 40% 35%, #D8E4FF, #8FA8D8 65%, #4A5C85);
+    box-shadow: 0 0 28px #8FA8D855;
+  }
+  .team-dots {
+    position: absolute; left: 0; right: 0; bottom: 150px;
+    display: flex; justify-content: center; gap: 60px;
+  }
+  .team-dots span {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #EAF0FF; box-shadow: 0 0 14px #EAF0FF88;
+  }
+</style>
+</head>
+<body>
+<div class="slide act-neutral">
+  <div class="stars"></div>
+  <div class="ring"></div>
+  <div class="luan"></div>
+  <div class="palasse"></div>
+  <div class="merci">MERCI</div>
+  <div class="team-dots"><span></span><span></span><span></span><span></span><span></span></div>
+
+  <div class="native" style="left:260px; top:560px; width:1400px; height:120px;
+       font-size:36px; text-align:center;">Réseau, architecture, coordination distribuée, 3D temps réel — et beaucoup de travail d’équipe.
+Une démo tourne juste à côté : venez voir le monde vivre.</div>
+  <div class="native" style="left:210px; top:930px; width:1500px; height:44px;
+       font-size:28px; text-align:center; color:#8E9BC0;">Raphael Dumon · Clément Fabre · Mathéo Emma · Léo Cazabat · Joachim Ismael</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>
