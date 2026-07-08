@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gameMap.hpp"
+#include "environment.hpp"
 #include "guiState.hpp"
 #include "netClient.hpp"
 #include "protocolParser.hpp"
@@ -260,6 +261,11 @@ class Interface
     bool _showStats{false};           // Tab: global environment stats panel
     bool _showHelp{false};            // H / F1: full controls overlay
     bool _weatherVisible{true};       // V: visual weather/season overlay
+
+    // --- Environnement (saison / météo / jour-nuit) ---
+    env::EnvironmentState _env;   // source unique des paramètres visuels ambiants
+    int _forceSeason{-1};         // F5: index dans kDebugSeasons, -1 = serveur
+    int _forceWeather{-1};        // F6: index dans kDebugWeathers, -1 = serveur
     bool _endHidden{false};           // Enter: dismiss the end screen to keep using the GUI
     bool _mouseCaptured{true};        // Esc releases; click inside captures for free-look
     float _endScroll{0.0f};           // mouse-wheel offset for the end-screen player list

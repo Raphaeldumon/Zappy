@@ -22,6 +22,7 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     _engine.loadLightingShader("assets/shaders/lighting.vs", "assets/shaders/lighting.fs");
     _engine.loadInstancingShader("assets/shaders/lighting_instancing.vs", "assets/shaders/lighting.fs");
     _engine.enableBloom("assets/shaders/bloom_extract.fs", "assets/shaders/bloom_combine.fs");
+    _engine.loadFloorShader("assets/shaders/floor.vs", "assets/shaders/floor.fs");
     // Global UI font: every drawText/measureText call goes through it once
     // loaded; on failure the engine silently keeps raylib's built-in font.
     if (!_engine.loadUiFont("assets/toxigenesis bd.otf"))
@@ -93,6 +94,10 @@ constexpr const char *kMusicPath = "assets/music_back.mp3";
 constexpr float kMusicVolume = 0.45f;
 
 constexpr float kPi = 3.14159265358979f;
+
+// Cycles F5/F6 : valeurs de forçage debug de la saison et de la météo.
+constexpr const char *kDebugSeasons[] = {"spring", "summer", "autumn", "winter"};
+constexpr const char *kDebugWeathers[] = {"clear", "rain", "storm", "fog", "heat", "fertile"};
 
 // Meteorite event visuals.
 constexpr const char *kMeteoriteModelPath = "assets/meteorite.glb";
@@ -996,6 +1001,14 @@ void Interface::handleInput()
     if (_engine.keyPressed(gfx::Key::V))
         _weatherVisible = !_weatherVisible;
 
+    // ---- Debug environnement : forcer saison / météo, accélérer l'horloge.
+    if (_engine.keyPressed(gfx::Key::F5))
+        _forceSeason = _forceSeason >= 3 ? -1 : _forceSeason + 1;
+    if (_engine.keyPressed(gfx::Key::F6))
+        _forceWeather = _forceWeather >= 5 ? -1 : _forceWeather + 1;
+    if (_engine.keyPressed(gfx::Key::F7))
+        _env.setTimeScale(_env.timeScale() > 1.0f ? 1.0f : 40.0f);
+
     // ---- F: toggle riding along with the selected player (grid view only:
     // the follow anchor is a flat-world position).
     if (!_torusView && (_engine.keyPressed(gfx::Key::F) || _engine.padPressed(gfx::PadBtn::FaceUp)))
@@ -1179,6 +1192,10 @@ void Interface::update()
         _engine.updateMusic(_backgroundMusic);
 
     _elapsed += _engine.frameTime();
+    const std::string envSeason = _forceSeason >= 0 ? kDebugSeasons[_forceSeason] : _state.season;
+    const std::string envWeather = _forceWeather >= 0 ? kDebugWeathers[_forceWeather] : _state.weather;
+    _env.setSeason(envSeason, envWeather);
+    _env.update(_engine.frameTime());
     updateRandomEvents(_engine.frameTime());
 
     // Record whatever the server pushed since last frame; in live mode it is
@@ -1387,6 +1404,14 @@ void Interface::render()
 
     // Per-resource-type placements, flushed as one instanced call per type.
     std::vector<std::vector<gfx::InstanceXform>> itemXf(_resourceModels.size());
+
+    const env::Snapshot &es = _env.snap();
+    // Flash d'éclair : boost bref de la lumière 3D entière.
+    const gfx::Vec3 flashAdd = gfx::scale({1.8f, 1.8f, 2.2f}, es.lightningFlash);
+    _engine.setSceneLighting(es.activeLightDir, gfx::add(es.sunColor, flashAdd),
+                             gfx::add(es.ambient, gfx::scale(flashAdd, 0.3f)), es.fogColor,
+                             _weatherVisible ? es.fogDensity : 0.0f);
+    _engine.setGroundSeason(es.groundOverlay, _weatherVisible ? es.groundMix : 0.0f);
 
     _engine.beginMode3D(_camera);
 
@@ -2241,8 +2266,11 @@ void Interface::drawHud()
     const int ss = static_cast<int>(_elapsed) % 60;
     _engine.drawText(gfx::fmt("Speed (time unit): %d  [+/- to change]   Elapsed %02d:%02d", _state.frequency, mm, ss),
                      10, 32, 16, gfx::SKYBLUE);
-    _engine.drawText(gfx::fmt("Season: %s   Weather: %s   FX: %s", seasonLabel(_state.season),
-                              weatherLabel(_state.weather), _weatherVisible ? "on" : "off"),
+    const float hours = _env.snap().timeOfDay * 24.0f;
+    _engine.drawText(gfx::fmt("Season: %s%s   Weather: %s%s   %02dh%02d   FX: %s", seasonLabel(_state.season),
+                              _forceSeason >= 0 ? "*" : "", weatherLabel(_state.weather),
+                              _forceWeather >= 0 ? "*" : "", static_cast<int>(hours),
+                              static_cast<int>(std::fmod(hours, 1.0f) * 60.0f), _weatherVisible ? "on" : "off"),
                      10, 52, 16, seasonColor(_state.season));
 
     if (_followedPlayer >= 0)

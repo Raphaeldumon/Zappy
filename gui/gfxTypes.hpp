@@ -113,6 +113,9 @@ enum class Key
     Escape,
     F1,
     F3,
+    F5,
+    F6,
+    F7,
 };
 enum class MouseBtn
 {

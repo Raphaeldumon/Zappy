@@ -118,6 +118,12 @@ int toRlKey(gfx::Key k)
         return KEY_F1;
     case gfx::Key::F3:
         return KEY_F3;
+    case gfx::Key::F5:
+        return KEY_F5;
+    case gfx::Key::F6:
+        return KEY_F6;
+    case gfx::Key::F7:
+        return KEY_F7;
     }
     return KEY_NULL;
 }
@@ -208,6 +214,15 @@ void logInfo(const char *fmt, ...)
 
 } // namespace gfx
 
+namespace
+{
+// Locations des uniforms scène partagés par les shaders light / inst / floor.
+struct SceneLocs
+{
+    int sunDir{-1}, sunColor{-1}, ambient{-1}, fogColor{-1}, fogDensity{-1};
+};
+} // namespace
+
 // ---------------------------------------------------------------------------
 // Impl — owns every raylib resource (kept out of the header behind PIMPL).
 // Handles are indices; entries are never moved/removed mid-run, so a handle
@@ -248,6 +263,14 @@ struct RaylibEngine::Impl
     bool instLoaded{false};
     int instViewPosLoc{-1};
 
+    // Scene lighting/fog uniforms shared by the light / inst / floor shaders,
+    // plus the dedicated batched-floor shader (seasonal ground tint).
+    SceneLocs lightScene{}, instScene{}, floorScene{};
+    Shader floorShader{};
+    bool floorLoaded{false};
+    int floorViewPosLoc{-1};
+    int floorOverlayLoc{-1}, floorMixLoc{-1};
+
     // Bloom post FX: the 3D scene renders into full-res sceneRT; endMode3D
     // extracts+blurs the bright parts into half-res bloomRT (quarter of the
     // heavy taps), then composites both to the screen.
@@ -285,6 +308,8 @@ RaylibEngine::~RaylibEngine()
         UnloadShader(_impl->lightShader);
     if (_impl->instLoaded)
         UnloadShader(_impl->instShader);
+    if (_impl->floorLoaded)
+        UnloadShader(_impl->floorShader);
     if (_impl->bloomLoaded)
     {
         UnloadShader(_impl->bloomExtract);
@@ -510,6 +535,35 @@ gfx::ModelHandle RaylibEngine::loadModel(const std::string &path)
     return static_cast<gfx::ModelHandle>(_impl->models.size() - 1);
 }
 
+namespace
+{
+SceneLocs cacheSceneLocs(Shader s)
+{
+    SceneLocs l;
+    l.sunDir = GetShaderLocation(s, "sunDir");
+    l.sunColor = GetShaderLocation(s, "sunColor");
+    l.ambient = GetShaderLocation(s, "ambientColor");
+    l.fogColor = GetShaderLocation(s, "fogColor");
+    l.fogDensity = GetShaderLocation(s, "fogDensity");
+    return l;
+}
+
+void applySceneUniforms(Shader s, const SceneLocs &l, Vector3 dir, Vector3 col, Vector3 amb,
+                        Vector3 fog, float fogD)
+{
+    if (l.sunDir >= 0)
+        SetShaderValue(s, l.sunDir, &dir, SHADER_UNIFORM_VEC3);
+    if (l.sunColor >= 0)
+        SetShaderValue(s, l.sunColor, &col, SHADER_UNIFORM_VEC3);
+    if (l.ambient >= 0)
+        SetShaderValue(s, l.ambient, &amb, SHADER_UNIFORM_VEC3);
+    if (l.fogColor >= 0)
+        SetShaderValue(s, l.fogColor, &fog, SHADER_UNIFORM_VEC3);
+    if (l.fogDensity >= 0)
+        SetShaderValue(s, l.fogDensity, &fogD, SHADER_UNIFORM_FLOAT);
+}
+} // namespace
+
 bool RaylibEngine::loadLightingShader(const std::string &vs, const std::string &fs)
 {
     if (!FileExists(vs.c_str()) || !FileExists(fs.c_str()))
@@ -531,6 +585,12 @@ bool RaylibEngine::loadLightingShader(const std::string &vs, const std::string &
     for (auto &m : _impl->models)
         for (int i = 0; i < m.materialCount; ++i)
             m.materials[i].shader = s;
+
+    // Défauts équivalents aux anciennes constantes : jamais de rendu noir si
+    // setSceneLighting n'est pas appelé.
+    _impl->lightScene = cacheSceneLocs(s);
+    applySceneUniforms(s, _impl->lightScene, Vector3{-0.30f, -0.86f, -0.39f}, Vector3{1.00f, 0.96f, 0.88f},
+                       Vector3{0.42f, 0.44f, 0.52f}, Vector3{0, 0, 0}, 0.0f);
 
     TraceLog(LOG_INFO, "loadLightingShader: '%s' ready", fs.c_str());
     return true;
@@ -554,8 +614,72 @@ bool RaylibEngine::loadInstancingShader(const std::string &vs, const std::string
     _impl->instShader = s;
     _impl->instViewPosLoc = GetShaderLocation(s, "viewPos");
     _impl->instLoaded = true;
+    _impl->instScene = cacheSceneLocs(s);
+    applySceneUniforms(s, _impl->instScene, Vector3{-0.30f, -0.86f, -0.39f}, Vector3{1.00f, 0.96f, 0.88f},
+                       Vector3{0.42f, 0.44f, 0.52f}, Vector3{0, 0, 0}, 0.0f);
     TraceLog(LOG_INFO, "loadInstancingShader: '%s' ready", vs.c_str());
     return true;
+}
+
+bool RaylibEngine::loadFloorShader(const std::string &vs, const std::string &fs)
+{
+    if (!FileExists(vs.c_str()) || !FileExists(fs.c_str()))
+    {
+        TraceLog(LOG_WARNING, "loadFloorShader: missing shader files — flat floor kept");
+        return false;
+    }
+    Shader s = LoadShader(vs.c_str(), fs.c_str());
+    if (s.id == 0)
+    {
+        TraceLog(LOG_WARNING, "loadFloorShader: compile failed — flat floor kept");
+        return false;
+    }
+    _impl->floorShader = s;
+    _impl->floorLoaded = true;
+    _impl->floorViewPosLoc = GetShaderLocation(s, "viewPos");
+    _impl->floorScene = cacheSceneLocs(s);
+    _impl->floorOverlayLoc = GetShaderLocation(s, "groundOverlay");
+    _impl->floorMixLoc = GetShaderLocation(s, "groundMix");
+    applySceneUniforms(s, _impl->floorScene, Vector3{-0.30f, -0.86f, -0.39f}, Vector3{1.00f, 0.96f, 0.88f},
+                       Vector3{0.42f, 0.44f, 0.52f}, Vector3{0, 0, 0}, 0.0f);
+    setGroundSeason({1, 1, 1}, 0.0f);
+    TraceLog(LOG_INFO, "loadFloorShader: '%s' ready", fs.c_str());
+    return true;
+}
+
+void RaylibEngine::setSceneLighting(gfx::Vec3 lightDir, gfx::Vec3 lightColor, gfx::Vec3 ambient, gfx::Vec3 fogColor,
+                                    float fogDensity)
+{
+    const Vector3 d = toRl(lightDir), c = toRl(lightColor), a = toRl(ambient), f = toRl(fogColor);
+    if (_impl->lightLoaded)
+        applySceneUniforms(_impl->lightShader, _impl->lightScene, d, c, a, f, fogDensity);
+    if (_impl->instLoaded)
+        applySceneUniforms(_impl->instShader, _impl->instScene, d, c, a, f, fogDensity);
+    if (_impl->floorLoaded)
+        applySceneUniforms(_impl->floorShader, _impl->floorScene, d, c, a, f, fogDensity);
+}
+
+void RaylibEngine::setGroundSeason(gfx::Vec3 overlay, float mix)
+{
+    if (!_impl->floorLoaded)
+        return;
+    const Vector3 o = toRl(overlay);
+    if (_impl->floorOverlayLoc >= 0)
+        SetShaderValue(_impl->floorShader, _impl->floorOverlayLoc, &o, SHADER_UNIFORM_VEC3);
+    if (_impl->floorMixLoc >= 0)
+        SetShaderValue(_impl->floorShader, _impl->floorMixLoc, &mix, SHADER_UNIFORM_FLOAT);
+}
+
+void RaylibEngine::beginFloorShading()
+{
+    if (_impl->floorLoaded)
+        BeginShaderMode(_impl->floorShader);
+}
+
+void RaylibEngine::endFloorShading()
+{
+    if (_impl->floorLoaded)
+        EndShaderMode();
 }
 
 bool RaylibEngine::enableBloom(const std::string &extractFs, const std::string &combineFs)
@@ -708,6 +832,8 @@ void RaylibEngine::beginMode3D(const gfx::Camera &cam)
         SetShaderValue(_impl->lightShader, _impl->lightViewPosLoc, &eye, SHADER_UNIFORM_VEC3);
     if (_impl->instLoaded && _impl->instViewPosLoc >= 0)
         SetShaderValue(_impl->instShader, _impl->instViewPosLoc, &eye, SHADER_UNIFORM_VEC3);
+    if (_impl->floorLoaded && _impl->floorViewPosLoc >= 0)
+        SetShaderValue(_impl->floorShader, _impl->floorViewPosLoc, &eye, SHADER_UNIFORM_VEC3);
     BeginMode3D(toRlCamera(cam));
 }
 void RaylibEngine::endMode3D()
@@ -1106,8 +1232,10 @@ void drawFloorBatch(Texture2D tex, bool wantDark, int w, int h, float tileSize, 
 void RaylibEngine::drawCheckerFloor(gfx::TextureHandle dark, gfx::TextureHandle light, int w, int h, float tileSize,
                                     float quadSize, float surfaceY)
 {
+    beginFloorShading();
     if (_impl->valid(dark, _impl->textures.size()))
         drawFloorBatch(_impl->textures[dark], true, w, h, tileSize, quadSize, surfaceY);
     if (_impl->valid(light, _impl->textures.size()))
         drawFloorBatch(_impl->textures[light], false, w, h, tileSize, quadSize, surfaceY);
+    endFloorShading();
 }

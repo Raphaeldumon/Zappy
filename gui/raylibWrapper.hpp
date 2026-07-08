@@ -151,6 +151,17 @@ class RaylibEngine
     // 2D UI drawn afterwards stays crisp. Optional — missing files just skip
     // the effect.
     bool enableBloom(const std::string &extractFs, const std::string &combineFs);
+    // Uniforms d'éclairage/fog, à pousser une fois par frame (avant beginMode3D)
+    // sur les shaders lighting / instancing / floor. No-op si rien n'est chargé.
+    void setSceneLighting(gfx::Vec3 lightDir, gfx::Vec3 lightColor, gfx::Vec3 ambient, gfx::Vec3 fogColor,
+                          float fogDensity);
+    // Teinte saisonnière du sol (floor shader uniquement).
+    void setGroundSeason(gfx::Vec3 overlay, float mix);
+    // Shader dédié au sol batché (drawCheckerFloor l'active tout seul ; le sol
+    // torique immédiat se bracket via begin/endFloorShading).
+    bool loadFloorShader(const std::string &vs, const std::string &fs);
+    void beginFloorShading();
+    void endFloorShading();
 
     // --- Composite scene primitives (raylib/rlgl-coupled, owned here) ---
     bool loadSkybox(const std::string &png, const std::string &vs, const std::string &fs);

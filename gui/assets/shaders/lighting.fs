@@ -1,24 +1,25 @@
 #version 330
 
-// Blinn-Phong with one fixed directional "sun" plus a cool sky ambient.
-// Applied to every loaded model (players, resources); the skybox and the
-// batched floor keep their own paths.
+// Blinn-Phong + rim light + fog exponentiel. La direction/couleur du soleil,
+// l'ambiant et le fog arrivent en uniforms pilotés par EnvironmentState
+// (cycle jour/nuit + saison + météo). Défauts posés côté C++ au chargement.
 
 in vec3 fragPosition;
 in vec2 fragTexCoord;
 in vec3 fragNormal;
 in vec4 fragColor;
 
-uniform sampler2D texture0; // material diffuse map
-uniform vec4 colDiffuse;    // DrawModelEx tint (team glow comes through here)
-uniform vec3 viewPos;       // camera eye, for the specular term
+uniform sampler2D texture0;
+uniform vec4 colDiffuse;
+uniform vec3 viewPos;
+uniform vec3 sunDir;       // direction de propagation de la lumière
+uniform vec3 sunColor;     // HDR (peut dépasser 1)
+uniform vec3 ambientColor;
+uniform vec3 fogColor;
+uniform float fogDensity;
 
 out vec4 finalColor;
 
-// Sun from high south-east; warm light, cool ambient — cheap "space daylight".
-const vec3 kSunDir = normalize(vec3(-0.35, -1.0, -0.45));
-const vec3 kSunColor = vec3(1.00, 0.96, 0.88);
-const vec3 kAmbient = vec3(0.42, 0.44, 0.52);
 const float kSpecStrength = 0.22;
 const float kShininess = 24.0;
 
@@ -29,14 +30,20 @@ void main()
         discard;
 
     vec3 n = normalize(fragNormal);
-    vec3 l = -kSunDir;
-
+    vec3 l = -normalize(sunDir);
     float diff = max(dot(n, l), 0.0);
 
     vec3 v = normalize(viewPos - fragPosition);
     vec3 h = normalize(l + v);
     float spec = pow(max(dot(n, h), 0.0), kShininess) * kSpecStrength * diff;
 
-    vec3 lit = texel.rgb * (kAmbient + kSunColor * diff) + kSunColor * spec;
-    finalColor = vec4(lit, texel.a);
+    // Rim : contre-jour doux pour détacher les silhouettes du ciel sombre.
+    float rim = pow(1.0 - max(dot(n, v), 0.0), 3.0);
+    vec3 lit = texel.rgb * (ambientColor + sunColor * diff)
+             + sunColor * (spec + 0.18 * rim * diff)
+             + ambientColor * 0.35 * rim;
+
+    float dist = length(viewPos - fragPosition);
+    float fogT = clamp(exp(-fogDensity * dist), 0.0, 1.0);
+    finalColor = vec4(mix(fogColor, lit, fogT), texel.a);
 }
