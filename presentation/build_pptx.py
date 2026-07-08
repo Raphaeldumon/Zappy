@@ -136,6 +136,29 @@ SLIDES = [
              "text": "Du niveau 2 au niveau 8 : environ 3 secondes. Partie gagnée en ~30."},
         ],
     },
+    {
+        "n": "11",
+        "zones": [
+            {"px": (110, 400, 800, 300), "pt": 20,
+             "text": "Au branchement : le serveur envoie un instantané complet du monde.\n"
+                     "Ensuite : chaque changement arrive en temps réel, message par message…\n"
+                     "…et la 3D le traduit aussitôt — déplacements, rituels, naissances, morts."},
+            {"px": (110, 760, 800, 90), "pt": 16, "color": "8E9BC0",
+             "text": "La GUI observe tout mais ne joue jamais : spectatrice, pas arbitre."},
+        ],
+    },
+    {
+        "n": "13",
+        "zones": [
+            {"px": (110, 400, 900, 300), "pt": 20,
+             "text": "Chaque message reçu est daté et archivé.\n"
+                     "Tirer la timeline en arrière reconstruit le monde à cet instant "
+                     "précis — en rejouant son histoire.\n"
+                     "Une partie entière s’enregistre dans un fichier .zrec, et se revoit plus tard."},
+            {"px": (110, 760, 900, 80), "pt": 16, "color": "8E9BC0",
+             "text": "Idéal pour comprendre une défaite… ou savourer une victoire image par image."},
+        ],
+    },
 ]
 
 

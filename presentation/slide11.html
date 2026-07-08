@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  .srv-node {
+    position: absolute; left: 1010px; top: 460px; width: 200px; height: 110px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Toxigenesis", sans-serif; font-size: 30px; color: #B58CFF;
+    text-shadow: 0 0 20px #B58CFF77;
+  }
+  /* Écran GUI : cadre + mini-grille iso */
+  .screen {
+    position: absolute; left: 1470px; top: 330px; width: 360px; height: 360px;
+    padding: 18px;
+  }
+  /* Flux d'étiquettes wire */
+  .flow {
+    position: absolute; left: 1180px; top: 380px; width: 320px; height: 300px;
+    display: flex; flex-direction: column; gap: 16px; align-items: flex-start;
+    justify-content: center;
+  }
+  .tag {
+    font-family: "Liberation Mono", monospace; font-size: 22px;
+    color: #EAF0FF; padding: 4px 14px; border-radius: 8px;
+    border: 1px solid #B58CFF55; background: #B58CFF12;
+  }
+  .tag.first {
+    font-size: 24px; color: #B58CFF; border-color: #B58CFF99;
+    box-shadow: 0 0 18px #B58CFF44;
+  }
+</style>
+</head>
+<body>
+<div class="slide act-violet">
+  <div class="stars"></div>
+  <div class="kicker">Acte IV — La fenêtre</div>
+  <div class="title">Le spectateur branché en direct</div>
+
+  <div class="srv-node panel">SERVEUR</div>
+  <div class="flow">
+    <span class="tag first">instantané complet</span>
+    <span class="tag" style="margin-left:36px;">pnw</span>
+    <span class="tag" style="margin-left:72px; opacity:.85;">ppo</span>
+    <span class="tag" style="margin-left:108px; opacity:.7;">pic</span>
+    <span class="tag" style="margin-left:144px; opacity:.55;">pdi</span>
+    <span class="tag" style="margin-left:180px; opacity:.4;">seg</span>
+  </div>
+  <div class="screen panel">
+    <svg width="324" height="324" viewBox="0 0 324 324">
+      <!-- mini-grille 3D : losanges iso 4x4 -->
+      <g fill="none" stroke="#B58CFF66" stroke-width="1.6">
+        <path d="M162 40 L242 80 L162 120 L82 80 Z"/>
+        <path d="M242 80 L322 120 L242 160 L162 120 Z" transform="translate(-40,20)"/>
+        <path d="M82 80 L162 120 L82 160 L2 120 Z" transform="translate(40,20)"/>
+        <path d="M162 120 L242 160 L162 200 L82 160 Z" transform="translate(0,40)"/>
+        <path d="M162 40 L242 80 L162 120 L82 80 Z" transform="translate(-80,80)"/>
+        <path d="M162 40 L242 80 L162 120 L82 80 Z" transform="translate(80,80)"/>
+        <path d="M162 40 L242 80 L162 120 L82 80 Z" transform="translate(0,160)"/>
+      </g>
+      <!-- petits habitants -->
+      <circle cx="162" cy="115" r="8" fill="#B58CFF" style="filter: drop-shadow(0 0 8px #B58CFF)"/>
+      <circle cx="122" cy="195" r="8" fill="#5CE8B5" style="filter: drop-shadow(0 0 8px #5CE8B5)"/>
+      <circle cx="202" cy="195" r="8" fill="#F5C866" style="filter: drop-shadow(0 0 8px #F5C866)"/>
+    </svg>
+  </div>
+
+  <div class="native" style="left:110px; top:400px; width:800px; height:300px;
+       font-size:40px;">Au branchement : le serveur envoie un instantané complet du monde.
+Ensuite : chaque changement arrive en temps réel, message par message…
+…et la 3D le traduit aussitôt — déplacements, rituels, naissances, morts.</div>
+  <div class="native" style="left:110px; top:760px; width:800px; height:90px;
+       font-size:32px; color:#8E9BC0;">La GUI observe tout mais ne joue jamais : spectatrice, pas arbitre.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>
