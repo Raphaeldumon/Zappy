@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  /* Bulle de dialogue */
+  .bubble {
+    position: absolute; left: 1150px; top: 252px; width: 620px; height: 96px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 26px;
+    border: 1px solid #6FB7FF66;
+    background: #6FB7FF14;
+    font-style: italic; font-size: 27px; color: #EAF0FF;
+  }
+  .bubble::after {
+    content: ""; position: absolute; left: 120px; bottom: -18px;
+    border: 10px solid transparent; border-top-color: #6FB7FF66;
+  }
+  /* Carte MENU */
+  .menu {
+    position: absolute; left: 1180px; top: 392px; width: 460px; height: 460px;
+    padding: 40px 48px;
+    display: flex; flex-direction: column; gap: 22px;
+  }
+  .menu .head {
+    font-family: "Toxigenesis", sans-serif; font-size: 44px; color: #6FB7FF;
+    text-align: center; letter-spacing: 10px; margin-bottom: 10px;
+    text-shadow: 0 0 26px #6FB7FF77;
+  }
+  .menu .item {
+    font-family: "Toxigenesis", sans-serif; font-size: 28px; color: #EAF0FF;
+    display: flex; justify-content: space-between;
+  }
+  .menu .item .dots { color: #8E9BC0; font-family: "Liberation Sans", Arial, sans-serif; }
+  /* Tampons ok / ko */
+  .stamp {
+    position: absolute; width: 150px; height: 74px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: "Toxigenesis", sans-serif; font-size: 44px;
+    border: 4px solid currentColor; border-radius: 14px;
+  }
+  .stamp.ok { left: 1150px; top: 900px; color: #5CE8B5; transform: rotate(-7deg);
+              box-shadow: 0 0 26px #5CE8B544, inset 0 0 20px #5CE8B522; }
+  .stamp.ko { left: 1480px; top: 910px; color: #FF7A7A; transform: rotate(5deg);
+              box-shadow: 0 0 26px #FF7A7A44, inset 0 0 20px #FF7A7A22; }
+</style>
+</head>
+<body>
+<div class="slide act-blue">
+  <div class="stars"></div>
+  <div class="kicker">Acte II — Le serveur</div>
+  <div class="title">Le serveur : un restaurant</div>
+
+  <div class="bubble">« Bonjour, un Forward et une grande frite »</div>
+  <div class="menu panel">
+    <div class="head">MENU</div>
+    <div class="item"><span>Forward</span><span class="dots">déplacement</span></div>
+    <div class="item"><span>Look</span><span class="dots">vision</span></div>
+    <div class="item"><span>Take</span><span class="dots">ramasser</span></div>
+    <div class="item"><span>Broadcast</span><span class="dots">crier</span></div>
+    <div class="item"><span>Incantation…</span><span class="dots">s’élever</span></div>
+  </div>
+  <div class="stamp ok">ok</div>
+  <div class="stamp ko">ko</div>
+
+  <div class="native" style="left:110px; top:400px; width:800px; height:300px;
+       font-size:40px;">Les IA et la GUI sont les clients : ils passent commande.
+Le serveur vérifie que c’est au menu, répond ok ou ko…
+…puis sert chaque plat au bon moment — pas avant.</div>
+  <div class="native" style="left:110px; top:760px; width:800px; height:90px;
+       font-size:32px; color:#8E9BC0;">Hors menu ? « ko », et on passe à la commande suivante.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>

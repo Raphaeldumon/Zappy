@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  .big {
+    position: absolute; right: 130px; top: 196px; width: 620px;
+    text-align: right;
+    font-size: 150px;
+  }
+  .big-sub {
+    position: absolute; right: 134px; top: 372px; width: 620px;
+    text-align: right; font-size: 24px; color: #8E9BC0;
+  }
+  /* Agenda vertical */
+  .agenda {
+    position: absolute; left: 1230px; top: 440px; width: 520px; height: 520px;
+    padding: 34px 40px;
+    display: flex; flex-direction: column; gap: 26px;
+  }
+  .agenda .row {
+    display: flex; align-items: center; gap: 20px;
+    font-size: 26px; color: #EAF0FF;
+  }
+  .agenda .h {
+    font-family: "Toxigenesis", sans-serif; font-size: 22px; color: #8E9BC0; width: 90px;
+  }
+  .agenda .dot {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: #6FB7FF; box-shadow: 0 0 16px #6FB7FF99;
+  }
+  .agenda .now {
+    display: flex; align-items: center; gap: 14px;
+    color: #6FB7FF; font-weight: bold; font-size: 24px;
+  }
+  .agenda .now::before, .agenda .now::after {
+    content: ""; flex: 1; height: 2px; background: #6FB7FF88;
+  }
+  .sleep {
+    position: absolute; left: 1050px; top: 650px; width: 140px;
+    text-align: center;
+  }
+  .moon {
+    display: inline-block; width: 54px; height: 54px; border-radius: 50%;
+    background: transparent;
+    box-shadow: inset -14px -8px 0 0 #6FB7FF;
+    transform: rotate(-24deg);
+  }
+  .zzz {
+    font-family: "Toxigenesis", sans-serif; color: #6FB7FF; font-size: 30px;
+    letter-spacing: 4px; opacity: .8;
+  }
+</style>
+</head>
+<body>
+<div class="slide act-blue">
+  <div class="stars"></div>
+  <div class="kicker">Acte II — Le serveur</div>
+  <div class="title">800 clients, un seul serveur</div>
+
+  <div class="big glow-number">806</div>
+  <div class="big-sub">clients simultanés au maximum</div>
+
+  <div class="sleep"><span class="moon"></span><div class="zzz">zzz</div></div>
+  <div class="agenda panel">
+    <div class="row"><span class="h">t+12</span><span class="dot"></span><span>repas</span></div>
+    <div class="row now">maintenant</div>
+    <div class="row"><span class="h">t+96</span><span class="dot"></span><span>fin d’incantation</span></div>
+    <div class="row"><span class="h">t+204</span><span class="dot"></span><span>éclosion</span></div>
+    <div class="row"><span class="h">t+330</span><span class="dot"></span><span>repas</span></div>
+  </div>
+
+  <div class="native" style="left:110px; top:400px; width:800px; height:320px;
+       font-size:40px;">Un seul programme, un seul fil d’exécution — et aucune attente active.
+poll() surveille toutes les tables à la fois.
+Un agenda d’événements planifie chaque échéance : le serveur dort, puis se réveille exactement quand il faut.</div>
+  <div class="native" style="left:110px; top:790px; width:800px; height:90px;
+       font-size:32px; color:#8E9BC0;">Réveillé par un paquet réseau ou par l’échéance suivante — jamais pour rien.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>

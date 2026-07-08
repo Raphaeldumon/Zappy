@@ -66,6 +66,29 @@ SLIDES = [
              "text": "f = 1 → une unité de temps par seconde. f = 1000 → mille fois plus vite."},
         ],
     },
+    {
+        "n": "05",
+        "zones": [
+            {"px": (110, 400, 800, 300), "pt": 20,
+             "text": "Les IA et la GUI sont les clients : ils passent commande.\n"
+                     "Le serveur vérifie que c’est au menu, répond ok ou ko…\n"
+                     "…puis sert chaque plat au bon moment — pas avant."},
+            {"px": (110, 760, 800, 90), "pt": 16, "color": "8E9BC0",
+             "text": "Hors menu ? « ko », et on passe à la commande suivante."},
+        ],
+    },
+    {
+        "n": "06",
+        "zones": [
+            {"px": (110, 400, 800, 320), "pt": 20,
+             "text": "Un seul programme, un seul fil d’exécution — et aucune attente active.\n"
+                     "poll() surveille toutes les tables à la fois.\n"
+                     "Un agenda d’événements planifie chaque échéance : le serveur dort, "
+                     "puis se réveille exactement quand il faut."},
+            {"px": (110, 790, 800, 90), "pt": 16, "color": "8E9BC0",
+             "text": "Réveillé par un paquet réseau ou par l’échéance suivante — jamais pour rien."},
+        ],
+    },
 ]
 
 
