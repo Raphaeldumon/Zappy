@@ -1132,6 +1132,24 @@ void RaylibEngine::drawTexturedQuad3D(gfx::TextureHandle tex, gfx::Vec3 a, gfx::
     rlSetTexture(0);
 }
 
+void RaylibEngine::setAdditiveBlend(bool on)
+{
+    rlDrawRenderBatchActive(); // flush du batch courant avant le changement d'état
+    rlSetBlendMode(on ? RL_BLEND_ADDITIVE : RL_BLEND_ALPHA);
+}
+
+gfx::TextureHandle RaylibEngine::createRadialTexture(int size)
+{
+    Image img = GenImageGradientRadial(size, size, 0.0f, WHITE, BLANK);
+    Texture2D t = LoadTextureFromImage(img);
+    UnloadImage(img);
+    if (t.id == 0)
+        return gfx::NoHandle;
+    SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+    _impl->textures.push_back(t);
+    return static_cast<gfx::TextureHandle>(_impl->textures.size() - 1);
+}
+
 gfx::Vec2 RaylibEngine::worldToScreen(const gfx::Camera &cam, gfx::Vec3 world) const
 {
     return fromRl(GetWorldToScreen(toRl(world), toRlCamera(cam)));

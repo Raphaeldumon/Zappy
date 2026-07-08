@@ -25,6 +25,7 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
         _engine.setTextureBilinear(_sunTexture);
     if (_moonTexture != gfx::NoHandle)
         _engine.setTextureBilinear(_moonTexture);
+    _particleDot = _engine.createRadialTexture(64);
     // Scene shading: per-pixel sun lighting on every model + bloom over the 3D
     // pass (UI drawn after stays crisp). Load before the models so materials
     // pick the shader up at load time; both fail soft to the flat look.
@@ -1205,6 +1206,9 @@ void Interface::update()
     const std::string envWeather = _forceWeather >= 0 ? kDebugWeathers[_forceWeather] : _state.weather;
     _env.setSeason(envSeason, envWeather);
     _env.update(_engine.frameTime());
+    if (_weatherVisible)
+        _particles.update(_engine.frameTime(), _env.snap().particles, _camera.position, kTileTopY, !_torusView,
+                          _elapsed);
     updateRandomEvents(_engine.frameTime());
 
     // Record whatever the server pushed since last frame; in live mode it is
@@ -1684,6 +1688,8 @@ void Interface::render()
     drawIncantationRings();
     drawHoverHighlight();
     drawSelectionHighlight();
+    if (_weatherVisible)
+        _particles.draw(_engine, _camera, _particleDot);
 
     _engine.endMode3D();
 
@@ -1696,8 +1702,6 @@ void Interface::render()
                          label.color);
     }
 
-    if (_weatherVisible)
-        drawWeatherOverlay();
     drawSpeechBubbles();
     drawHud();
     drawTimeline();
@@ -2319,131 +2323,6 @@ void Interface::drawHud()
     _engine.drawLine(cx, cy - 8, cx, cy + 8, gfx::Color{255, 255, 255, 160});
 }
 
-void Interface::drawWeatherOverlay()
-{
-    const std::string &weather = _state.weather;
-    const std::string &season = _state.season;
-
-    const int sw = _engine.screenWidth();
-    const int sh = _engine.screenHeight();
-    const float t = _elapsed;
-
-    if (season == "spring")
-    {
-        const auto alpha = static_cast<std::uint8_t>(weather == "clear" ? 18 : 28);
-        _engine.drawRect(0, 0, sw, sh, gfx::Color{35, 115, 70, alpha});
-        for (int i = 0; i < 34; ++i)
-        {
-            const float phase = t * (14.0f + (i % 5)) + static_cast<float>(i * 61);
-            const int x = static_cast<int>(std::fmod(phase * 1.9f + std::sin(phase * 0.07f) * 55.0f,
-                                                     static_cast<float>(sw)));
-            const int y = static_cast<int>(std::fmod(phase * 0.65f + i * 91.0f, static_cast<float>(sh)));
-            const gfx::Color c = i % 3 == 0 ? gfx::Color{255, 220, 130, 80} : gfx::Color{145, 255, 165, 65};
-            _engine.drawCircle(x, y, 1.5f + static_cast<float>(i % 3), c);
-        }
-    }
-    else if (season == "summer")
-    {
-        const auto alpha = static_cast<std::uint8_t>(weather == "heat" ? 38 : 22);
-        _engine.drawRect(0, 0, sw, sh, gfx::Color{255, 170, 45, alpha});
-        _engine.drawCircle(sw - 92, 88, 38.0f + std::sin(t * 1.4f) * 4.0f, gfx::Color{255, 220, 95, 90});
-        _engine.drawCircle(sw - 92, 88, 58.0f + std::sin(t * 1.1f) * 5.0f, gfx::Color{255, 180, 55, 38});
-    }
-    else if (season == "autumn")
-    {
-        _engine.drawRect(0, 0, sw, sh, gfx::Color{150, 80, 35, 34});
-        for (int i = 0; i < 30; ++i)
-        {
-            const float fall = std::fmod(t * (24.0f + i % 7) + static_cast<float>(i * 41), static_cast<float>(sh + 80));
-            const int x = static_cast<int>(std::fmod(i * 97.0f + std::sin(t * 1.8f + i) * 72.0f + fall * 0.28f,
-                                                     static_cast<float>(sw)));
-            const int y = static_cast<int>(fall) - 40;
-            const gfx::Color leaf = i % 3 == 0 ? gfx::Color{235, 105, 45, 115}
-                                   : i % 3 == 1 ? gfx::Color{215, 155, 55, 110}
-                                                : gfx::Color{145, 82, 42, 105};
-            _engine.drawRect(x, y, 7 + i % 4, 3 + i % 3, leaf);
-        }
-    }
-    else if (season == "winter")
-    {
-        const auto alpha = static_cast<std::uint8_t>(weather == "fog" ? 55 : 34);
-        _engine.drawRect(0, 0, sw, sh, gfx::Color{135, 175, 205, alpha});
-        for (int i = 0; i < 24; ++i)
-        {
-            const float fall = std::fmod(t * (18.0f + i % 5) + static_cast<float>(i * 83), static_cast<float>(sh + 30));
-            const int x = static_cast<int>(std::fmod(i * 121.0f + std::sin(t + i) * 35.0f,
-                                                     static_cast<float>(sw)));
-            _engine.drawCircle(x, static_cast<int>(fall) - 15, 1.4f + static_cast<float>(i % 2),
-                               gfx::Color{235, 245, 255, 72});
-        }
-    }
-
-    if (weather == "clear")
-        return;
-
-    if (weather == "rain" || weather == "storm")
-    {
-        const bool storm = weather == "storm";
-        _engine.drawRect(0, 0, sw, sh, storm ? gfx::Color{18, 18, 42, 102} : gfx::Color{28, 55, 85, 58});
-        const int step = storm ? 24 : 34;
-        const int slant = storm ? 24 : 15;
-        const int len = storm ? 34 : 24;
-        const int fall = static_cast<int>(std::fmod(t * (storm ? 520.0f : 360.0f), static_cast<float>(step)));
-        const gfx::Color drop = storm ? gfx::Color{185, 190, 255, 190} : gfx::Color{150, 205, 255, 150};
-        for (int y = -step; y < sh + step; y += step)
-        {
-            for (int x = -step; x < sw + step; x += step)
-            {
-                const int jitter = ((x * 17 + y * 31) & 15) - 8;
-                const int sx = x + jitter + fall;
-                const int sy = y + fall;
-                _engine.drawLine(sx, sy, sx - slant, sy + len, drop);
-            }
-        }
-        if (storm && std::fmod(t, 5.5f) < 0.16f)
-            _engine.drawRect(0, 0, sw, sh, gfx::Color{230, 230, 255, 70});
-        return;
-    }
-
-    if (weather == "fog")
-    {
-        _engine.drawRect(0, 0, sw, sh, gfx::Color{190, 200, 205, 88});
-        for (int i = 0; i < 10; ++i)
-        {
-            const float drift = std::fmod(t * (16.0f + i * 3.0f), static_cast<float>(sw + 340));
-            const int x = static_cast<int>(drift) - 340;
-            const int y = 55 + i * (sh / 11);
-            _engine.drawRect(x, y, 340, 22 + (i % 3) * 6, gfx::Color{225, 230, 232, 42});
-        }
-        return;
-    }
-
-    if (weather == "heat")
-    {
-        _engine.drawRect(0, 0, sw, sh, gfx::Color{255, 95, 20, 48});
-        for (int y = 80; y < sh; y += 55)
-        {
-            const int offset = static_cast<int>(std::sin(t * 3.0f + y * 0.04f) * 18.0f);
-            _engine.drawLine(0, y, sw, y + offset, gfx::Color{255, 205, 95, 50});
-            _engine.drawLine(0, y + 12, sw, y + 12 - offset, gfx::Color{255, 150, 70, 35});
-        }
-        return;
-    }
-
-    if (weather == "fertile")
-    {
-        _engine.drawRect(0, 0, sw, sh, gfx::Color{25, 150, 65, 42});
-        for (int i = 0; i < 44; ++i)
-        {
-            const float phase = t * 26.0f + static_cast<float>(i * 47);
-            const int x = static_cast<int>(std::fmod(phase * 1.55f + std::cos(phase * 0.09f) * 42.0f,
-                                                     static_cast<float>(sw)));
-            const int y = static_cast<int>(std::fmod(phase * 0.82f + i * 83.0f, static_cast<float>(sh)));
-            _engine.drawCircle(x, y, 2.0f + static_cast<float>(i % 4), gfx::Color{135, 255, 150, 92});
-        }
-    }
-}
-
 void Interface::drawStatsPanel()
 {
     // --- Aggregate the whole environment from the live model. ---
@@ -2717,12 +2596,13 @@ void Interface::drawHelpOverlay()
 
 void Interface::drawPerfOverlay()
 {
-    const std::array<std::string, 7> lines = {
+    const std::array<std::string, 8> lines = {
         gfx::fmt("frame        %5.2f ms", _engine.frameTime() * 1000.0f),
         gfx::fmt("tiles        %d drawn / %d culled", _stats.tilesDrawn, _stats.tilesCulled),
         gfx::fmt("players      %d (poses %d)", _stats.players, _stats.poseUploads),
         gfx::fmt("items        %d mesh / %d lod", _stats.itemsModel, _stats.itemsLod),
         gfx::fmt("eggs         %d", _stats.eggs),
+        gfx::fmt("particles    %d", _particles.aliveCount()),
         gfx::fmt("view         %s", _torusView ? "torus" : "grid"),
         "F3 to close",
     };

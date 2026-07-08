@@ -32,7 +32,8 @@ add_executable(zappy_gui
     gameMap.cpp
     netClient.cpp
     protocolParser.cpp
-    environment.cpp)
+    environment.cpp
+    particles.cpp)
 
 set_target_properties(zappy_gui PROPERTIES
     CXX_STANDARD 17

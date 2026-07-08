@@ -3,6 +3,7 @@
 #include "gameMap.hpp"
 #include "environment.hpp"
 #include "guiState.hpp"
+#include "particles.hpp"
 #include "netClient.hpp"
 #include "protocolParser.hpp"
 #include "raylibWrapper.hpp"
@@ -268,6 +269,8 @@ class Interface
     env::EnvironmentState _env;   // source unique des paramètres visuels ambiants
     int _forceSeason{-1};         // F5: index dans kDebugSeasons, -1 = serveur
     int _forceWeather{-1};        // F6: index dans kDebugWeathers, -1 = serveur
+    ParticleSystem _particles;
+    gfx::TextureHandle _particleDot{gfx::NoHandle}; // disque doux généré
     bool _endHidden{false};           // Enter: dismiss the end screen to keep using the GUI
     bool _mouseCaptured{true};        // Esc releases; click inside captures for free-look
     float _endScroll{0.0f};           // mouse-wheel offset for the end-screen player list
@@ -320,7 +323,6 @@ class Interface
     // --- Spectator helpers ---
     void requestTimeUnit(int freq);                      // send "sst T" to the server (speed control)
     void drawHud();                                      // permanent compact HUD (top-left)
-    void drawWeatherOverlay();                           // visual weather pass under the HUD
     void drawStatsPanel();                               // global environment stats (Tab)
     void drawHelpOverlay();                              // full controls list (H / F1)
     void drawEndScreen();                                // centered winner summary after seg
