@@ -32,7 +32,7 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     loadMeteoriteModel();
     loadIncantationModel();
     loadBackgroundMusic();
-    _engine.disableCursor(); // capture the mouse for free-look (Esc releases on close)
+    _engine.disableCursor(); // capture the mouse for free-look; Esc releases it
 }
 
 Interface::~Interface()
@@ -868,6 +868,19 @@ void Interface::handleInput()
 {
     const float dt = _engine.frameTime();
 
+    if (_engine.keyPressed(gfx::Key::Escape) && _mouseCaptured)
+    {
+        _mouseCaptured = false;
+        _engine.enableCursor();
+    }
+    else if (!_mouseCaptured && _engine.mousePressed(gfx::MouseBtn::Left))
+    {
+        _mouseCaptured = true;
+        _engine.disableCursor();
+        (void)_engine.mouseDelta(); // discard the re-capture jump
+        return;
+    }
+
     // ---- Gamepad (first pad, when plugged in) mirrors mouse+keyboard below:
     // sticks fly/look, triggers rise/sink, buttons map onto the key actions.
     const bool pad = _engine.padAvailable();
@@ -876,8 +889,10 @@ void Interface::handleInput()
         return std::fabs(v) < 0.15f ? 0.0f : v; // stick deadzone
     };
 
-    // ---- Free look: the captured mouse turns the head (yaw/pitch).
-    gfx::Vec2 md = _engine.mouseDelta();
+    // ---- Free look: captured mouse turns the head; Esc releases it for desktop use.
+    gfx::Vec2 md{};
+    if (_mouseCaptured)
+        md = _engine.mouseDelta();
     _camYaw -= md.x * 0.0030f + padStick(gfx::PadAxis::RightX) * 2.2f * dt;
     _camPitch -= md.y * 0.0030f + padStick(gfx::PadAxis::RightY) * 2.2f * dt;
     // Clamp pitch just shy of straight up/down so the view never flips.
@@ -1031,7 +1046,7 @@ void Interface::handleInput()
         toggleMusic();
 
     // ---- Left-click / A button (crosshair): select the aimed tile; double-click focuses.
-    if (_engine.mousePressed(gfx::MouseBtn::Left) || _engine.padPressed(gfx::PadBtn::FaceDown))
+    if ((_mouseCaptured && _engine.mousePressed(gfx::MouseBtn::Left)) || _engine.padPressed(gfx::PadBtn::FaceDown))
     {
         pickTile();
         const double now = _engine.time();
@@ -2586,9 +2601,10 @@ void Interface::drawEndScreen()
 
 void Interface::drawHelpOverlay()
 {
-    static const std::array<const char *, 30> kHelp = {
+    static const std::array<const char *, 31> kHelp = {
         "CONTROLS  -  FREE CAMERA",
         "Mouse           look around freely",
+        "Esc             release mouse (click game to capture)",
         "ZQSD / Arrows   fly (Shift = faster)",
         "Space / Ctrl    move up / down",
         "Mouse wheel     fly speed",

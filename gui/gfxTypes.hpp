@@ -110,6 +110,7 @@ enum class Key
     End,
     Tab,
     Enter,
+    Escape,
     F1,
     F3,
 };

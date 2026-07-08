@@ -261,6 +261,7 @@ class Interface
     bool _showHelp{false};            // H / F1: full controls overlay
     bool _weatherVisible{true};       // V: visual weather/season overlay
     bool _endHidden{false};           // Enter: dismiss the end screen to keep using the GUI
+    bool _mouseCaptured{true};        // Esc releases; click inside captures for free-look
     float _endScroll{0.0f};           // mouse-wheel offset for the end-screen player list
     std::int64_t _followedPlayer{-1}; // F: camera rides along this player id (-1 = none)
     gfx::Vec3 _followAnchor{};        // followed player's world pos last frame

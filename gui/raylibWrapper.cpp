@@ -74,6 +74,8 @@ int toRlKey(gfx::Key k)
         return KEY_SPACE;
     case gfx::Key::Enter:
         return KEY_ENTER;
+    case gfx::Key::Escape:
+        return KEY_ESCAPE;
     case gfx::Key::LeftShift:
         return KEY_LEFT_SHIFT;
     case gfx::Key::RightShift:
@@ -270,6 +272,7 @@ struct RaylibEngine::Impl
 RaylibEngine::RaylibEngine(int width, int height, const std::string &title) : _impl(std::make_unique<Impl>())
 {
     InitWindow(width, height, title.c_str());
+    SetExitKey(KEY_NULL);
     SetTargetFPS(60);
 }
 
