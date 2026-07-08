@@ -167,6 +167,14 @@ class RaylibEngine
     bool loadSkybox(const std::string &png, const std::string &vs, const std::string &fs);
     void drawSkybox(); // call first inside beginMode3D
     void unloadSkybox();
+    // Ciel procédural : mêmes géométrie/draw que loadSkybox, mais 100% shader.
+    bool loadProceduralSky(const std::string &vs, const std::string &fs);
+    void setSkyParams(float time, gfx::Vec3 toSun, gfx::Vec3 toMoon, gfx::Vec3 sunGlowColor, gfx::Vec3 horizon,
+                      gfx::Vec3 zenith, gfx::Vec3 nebula, float stars, float aurora, float lightning);
+    // Billboards soleil/lune, à dessiner juste après drawSkybox (depth off).
+    bool loadCelestialShader(const std::string &fs);
+    void drawCelestial(gfx::TextureHandle tex, const gfx::Camera &cam, gfx::Vec3 toBody, float angularSizeDeg,
+                       gfx::Vec3 emissive, float alpha, bool circleMask);
     // Two batched checkerboard passes (dark cells then light cells), each a
     // single rlBegin(RL_QUADS) chunked under the rlgl buffer.
     void drawCheckerFloor(gfx::TextureHandle dark, gfx::TextureHandle light, int w, int h, float tileSize,

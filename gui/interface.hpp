@@ -71,6 +71,8 @@ class Interface
     gfx::TextureHandle _orangeTileTexture{gfx::NoHandle};
     gfx::TextureHandle _grassTileTexture{gfx::NoHandle};
     gfx::TextureHandle _blackGrassTileTexture{gfx::NoHandle};
+    gfx::TextureHandle _sunTexture{gfx::NoHandle};  // Luan, notre astre du jour
+    gfx::TextureHandle _moonTexture{gfx::NoHandle}; // Palasse, veilleur de nuit
 
     // --- Skybox ---
     // A 360 equirectangular panorama sampled by view direction in a shader and

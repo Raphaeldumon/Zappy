@@ -248,6 +248,19 @@ struct RaylibEngine::Impl
     Shader skyShader{};
     bool skyboxLoaded{false};
 
+    // Ciel procédural : locations des uniforms de sky_procedural.fs.
+    struct SkyLocs
+    {
+        int time{-1}, toSun{-1}, toMoon{-1}, sunGlow{-1}, horizon{-1}, zenith{-1}, nebula{-1}, stars{-1}, aurora{-1},
+            lightning{-1};
+    };
+    SkyLocs skyLocs{};
+    bool skyProcedural{false};
+
+    Shader celestialShader{};
+    bool celestialLoaded{false};
+    int celEmissiveLoc{-1}, celAlphaLoc{-1}, celMaskLoc{-1};
+
     // UI font, used by drawText/measureText when loaded (built-in otherwise).
     Font uiFont{};
     bool uiFontLoaded{false};
@@ -310,6 +323,8 @@ RaylibEngine::~RaylibEngine()
         UnloadShader(_impl->instShader);
     if (_impl->floorLoaded)
         UnloadShader(_impl->floorShader);
+    if (_impl->celestialLoaded)
+        UnloadShader(_impl->celestialShader);
     if (_impl->bloomLoaded)
     {
         UnloadShader(_impl->bloomExtract);
@@ -1174,6 +1189,148 @@ void RaylibEngine::unloadSkybox()
         UnloadTexture(_impl->skyboxTex);
     _impl->skyboxTex = {};
     _impl->skyboxLoaded = false;
+    _impl->skyProcedural = false;
+}
+
+bool RaylibEngine::loadProceduralSky(const std::string &vs, const std::string &fs)
+{
+    if (!FileExists(vs.c_str()) || !FileExists(fs.c_str()))
+    {
+        TraceLog(LOG_WARNING, "loadProceduralSky: missing shader files");
+        return false;
+    }
+    Shader s = LoadShader(vs.c_str(), fs.c_str());
+    if (s.id == 0)
+    {
+        TraceLog(LOG_WARNING, "loadProceduralSky: compile failed");
+        return false;
+    }
+    unloadSkybox(); // remplace un éventuel skybox texturé déjà chargé
+    _impl->skyShader = s;
+    _impl->skybox = LoadModelFromMesh(GenMeshCube(1.0f, 1.0f, 1.0f));
+    _impl->skybox.materials[0].shader = s;
+    _impl->skyLocs.time = GetShaderLocation(s, "time");
+    _impl->skyLocs.toSun = GetShaderLocation(s, "toSun");
+    _impl->skyLocs.toMoon = GetShaderLocation(s, "toMoon");
+    _impl->skyLocs.sunGlow = GetShaderLocation(s, "sunGlowColor");
+    _impl->skyLocs.horizon = GetShaderLocation(s, "horizonColor");
+    _impl->skyLocs.zenith = GetShaderLocation(s, "zenithColor");
+    _impl->skyLocs.nebula = GetShaderLocation(s, "nebulaTint");
+    _impl->skyLocs.stars = GetShaderLocation(s, "starIntensity");
+    _impl->skyLocs.aurora = GetShaderLocation(s, "auroraIntensity");
+    _impl->skyLocs.lightning = GetShaderLocation(s, "lightning");
+    _impl->skyboxLoaded = true;
+    _impl->skyProcedural = true;
+    TraceLog(LOG_INFO, "loadProceduralSky: '%s' ready", fs.c_str());
+    return true;
+}
+
+void RaylibEngine::setSkyParams(float time, gfx::Vec3 toSun, gfx::Vec3 toMoon, gfx::Vec3 sunGlowColor,
+                                gfx::Vec3 horizon, gfx::Vec3 zenith, gfx::Vec3 nebula, float stars, float aurora,
+                                float lightning)
+{
+    if (!_impl->skyProcedural)
+        return;
+    const Shader &s = _impl->skyShader;
+    const Vector3 ts = toRl(toSun), tm = toRl(toMoon), sg = toRl(sunGlowColor), ho = toRl(horizon), ze = toRl(zenith),
+                  ne = toRl(nebula);
+    const auto &l = _impl->skyLocs;
+    if (l.time >= 0)
+        SetShaderValue(s, l.time, &time, SHADER_UNIFORM_FLOAT);
+    if (l.toSun >= 0)
+        SetShaderValue(s, l.toSun, &ts, SHADER_UNIFORM_VEC3);
+    if (l.toMoon >= 0)
+        SetShaderValue(s, l.toMoon, &tm, SHADER_UNIFORM_VEC3);
+    if (l.sunGlow >= 0)
+        SetShaderValue(s, l.sunGlow, &sg, SHADER_UNIFORM_VEC3);
+    if (l.horizon >= 0)
+        SetShaderValue(s, l.horizon, &ho, SHADER_UNIFORM_VEC3);
+    if (l.zenith >= 0)
+        SetShaderValue(s, l.zenith, &ze, SHADER_UNIFORM_VEC3);
+    if (l.nebula >= 0)
+        SetShaderValue(s, l.nebula, &ne, SHADER_UNIFORM_VEC3);
+    if (l.stars >= 0)
+        SetShaderValue(s, l.stars, &stars, SHADER_UNIFORM_FLOAT);
+    if (l.aurora >= 0)
+        SetShaderValue(s, l.aurora, &aurora, SHADER_UNIFORM_FLOAT);
+    if (l.lightning >= 0)
+        SetShaderValue(s, l.lightning, &lightning, SHADER_UNIFORM_FLOAT);
+}
+
+bool RaylibEngine::loadCelestialShader(const std::string &fs)
+{
+    if (!FileExists(fs.c_str()))
+    {
+        TraceLog(LOG_WARNING, "loadCelestialShader: missing '%s'", fs.c_str());
+        return false;
+    }
+    Shader s = LoadShader(nullptr, fs.c_str());
+    if (s.id == 0)
+    {
+        TraceLog(LOG_WARNING, "loadCelestialShader: compile failed");
+        return false;
+    }
+    _impl->celestialShader = s;
+    _impl->celEmissiveLoc = GetShaderLocation(s, "emissive");
+    _impl->celAlphaLoc = GetShaderLocation(s, "bodyAlpha");
+    _impl->celMaskLoc = GetShaderLocation(s, "circleMask");
+    _impl->celestialLoaded = true;
+    TraceLog(LOG_INFO, "loadCelestialShader: ready");
+    return true;
+}
+
+void RaylibEngine::drawCelestial(gfx::TextureHandle tex, const gfx::Camera &cam, gfx::Vec3 toBody,
+                                 float angularSizeDeg, gfx::Vec3 emissive, float alpha, bool circleMask)
+{
+    if (!_impl->celestialLoaded || !_impl->valid(tex, _impl->textures.size()) || alpha <= 0.01f)
+        return;
+
+    // Quad à distance fixe (dans le far plane), taille depuis l'angle apparent.
+    const float dist = 800.0f;
+    const float half = dist * std::tan(angularSizeDeg * 0.5f * DEG2RAD);
+    const gfx::Vec3 dir = gfx::normalize(toBody);
+    const gfx::Vec3 centre = gfx::add(cam.position, gfx::scale(dir, dist));
+    gfx::Vec3 right = gfx::normalize({-dir.z, 0.0f, dir.x}); // horizontal, perpendiculaire à dir
+    if (gfx::length(right) < 0.5f)
+        right = {1, 0, 0};
+    const gfx::Vec3 up = gfx::normalize(gfx::Vec3{dir.y * right.z - dir.z * right.y, dir.z * right.x - dir.x * right.z,
+                                                  dir.x * right.y - dir.y * right.x});
+    const gfx::Vec3 a = gfx::add(gfx::add(centre, gfx::scale(right, -half)), gfx::scale(up, half));
+    const gfx::Vec3 b = gfx::add(gfx::add(centre, gfx::scale(right, -half)), gfx::scale(up, -half));
+    const gfx::Vec3 c = gfx::add(gfx::add(centre, gfx::scale(right, half)), gfx::scale(up, -half));
+    const gfx::Vec3 d = gfx::add(gfx::add(centre, gfx::scale(right, half)), gfx::scale(up, half));
+
+    const Vector3 em = toRl(emissive);
+    const int mask = circleMask ? 1 : 0;
+    if (_impl->celEmissiveLoc >= 0)
+        SetShaderValue(_impl->celestialShader, _impl->celEmissiveLoc, &em, SHADER_UNIFORM_VEC3);
+    if (_impl->celAlphaLoc >= 0)
+        SetShaderValue(_impl->celestialShader, _impl->celAlphaLoc, &alpha, SHADER_UNIFORM_FLOAT);
+    if (_impl->celMaskLoc >= 0)
+        SetShaderValue(_impl->celestialShader, _impl->celMaskLoc, &mask, SHADER_UNIFORM_INT);
+
+    // Derrière tout : depth off, comme le skybox.
+    rlDisableDepthMask();
+    rlDisableDepthTest();
+    BeginShaderMode(_impl->celestialShader);
+    Texture2D &t = _impl->textures[tex];
+    rlSetTexture(t.id);
+    rlBegin(RL_QUADS);
+    rlColor4ub(255, 255, 255, 255);
+    rlNormal3f(-dir.x, -dir.y, -dir.z);
+    rlTexCoord2f(0.0f, 0.0f);
+    rlVertex3f(a.x, a.y, a.z);
+    rlTexCoord2f(0.0f, 1.0f);
+    rlVertex3f(b.x, b.y, b.z);
+    rlTexCoord2f(1.0f, 1.0f);
+    rlVertex3f(c.x, c.y, c.z);
+    rlTexCoord2f(1.0f, 0.0f);
+    rlVertex3f(d.x, d.y, d.z);
+    rlEnd();
+    rlSetTexture(0);
+    EndShaderMode();
+    rlEnableDepthTest();
+    rlEnableDepthMask();
 }
 
 // ---------------------------------------------------------------------------

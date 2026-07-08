@@ -14,8 +14,17 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     : _engine(windowWidth, windowHeight, std::string(WINDOW_TITLE)), _map(mapWidth, mapHeight), _net(std::move(net))
 {
     initCamera();
-    // The skybox needs the GL context, so load it after the engine init.
-    _engine.loadSkybox("assets/Background.png", "assets/shaders/skybox.vs", "assets/shaders/skybox.fs");
+    // Ciel procédural (jour/nuit, nébuleuses, aurores) ; si le shader échoue,
+    // on retombe sur le panorama statique d'origine.
+    if (!_engine.loadProceduralSky("assets/shaders/skybox.vs", "assets/shaders/sky_procedural.fs"))
+        _engine.loadSkybox("assets/Background.png", "assets/shaders/skybox.vs", "assets/shaders/skybox.fs");
+    _engine.loadCelestialShader("assets/shaders/celestial.fs");
+    _sunTexture = _engine.loadTexture("assets/luan.png");
+    _moonTexture = _engine.loadTexture("assets/palasse.png");
+    if (_sunTexture != gfx::NoHandle)
+        _engine.setTextureBilinear(_sunTexture);
+    if (_moonTexture != gfx::NoHandle)
+        _engine.setTextureBilinear(_moonTexture);
     // Scene shading: per-pixel sun lighting on every model + bloom over the 3D
     // pass (UI drawn after stays crisp). Load before the models so materials
     // pick the shader up at load time; both fail soft to the flat look.
@@ -1415,8 +1424,15 @@ void Interface::render()
 
     _engine.beginMode3D(_camera);
 
-    // 360 background first, so the rest of the scene draws in front of it.
+    // 360 background d'abord, pour que la scène se dessine devant.
+    const gfx::Vec3 toSun = gfx::scale(es.sunDir, -1.0f);
+    const gfx::Vec3 toMoon = gfx::scale(es.moonDir, -1.0f);
+    _engine.setSkyParams(_elapsed, toSun, toMoon, es.sunColor, es.skyHorizon, es.skyZenith, es.nebulaTint,
+                         es.starIntensity, _weatherVisible ? es.auroraIntensity : 0.0f, es.lightningFlash);
     _engine.drawSkybox();
+    // Astres : la lune d'abord, le soleil par-dessus en cas de chevauchement.
+    _engine.drawCelestial(_moonTexture, _camera, toMoon, 7.0f, {1.25f, 1.35f, 1.6f}, es.moonVisibility, true);
+    _engine.drawCelestial(_sunTexture, _camera, toSun, 9.0f, {2.4f, 2.1f, 1.5f}, es.sunVisibility, false);
 
     // Floor: two batched draws (dark + orange) instead of one per tile.
     // In torus view the checkerboard is painted on the torus surface instead.
