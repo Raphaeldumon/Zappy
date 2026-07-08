@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  .torus-wrap { position: absolute; left: 1020px; top: 190px; width: 800px; height: 480px; }
+  .costs {
+    position: absolute; left: 1100px; top: 730px; width: 660px; height: 150px;
+    display: flex; align-items: center; justify-content: center; gap: 34px;
+    font-family: "Toxigenesis", sans-serif; font-size: 26px; color: #EAF0FF;
+  }
+  .costs .c { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .costs .v { color: #F5C866; font-size: 34px; text-shadow: 0 0 20px #F5C86688; }
+  .costs .v sup { font-family: "Liberation Sans", Arial, sans-serif; font-size: 15px; color: #8E9BC0; margin-left: 5px; }
+  .costs .k { font-size: 20px; color: #8E9BC0; font-family: "Liberation Sans", Arial, sans-serif; }
+</style>
+</head>
+<body>
+<div class="slide act-gold">
+  <div class="stars"></div>
+  <div class="kicker">Acte I — Le monde</div>
+  <div class="title">Un monde-anneau cadencé</div>
+
+  <div class="torus-wrap">
+    <svg width="800" height="480" viewBox="0 0 800 480">
+      <defs>
+        <marker id="tip" markerWidth="12" markerHeight="10" refX="9" refY="5" orient="auto">
+          <path d="M0,0 L12,5 L0,10 Z" fill="#F5C866"/>
+        </marker>
+      </defs>
+      <!-- tore vu de dessus : deux ellipses concentriques -->
+      <ellipse cx="400" cy="240" rx="330" ry="180" fill="none" stroke="#F5C86699" stroke-width="3"/>
+      <ellipse cx="400" cy="240" rx="150" ry="78" fill="none" stroke="#F5C86655" stroke-width="2"/>
+      <!-- grille suggérée : arcs radiaux -->
+      <path d="M 400 60 Q 380 150 400 162" stroke="#F5C86633" stroke-width="1.5" fill="none"/>
+      <path d="M 187 120 Q 240 190 275 205" stroke="#F5C86633" stroke-width="1.5" fill="none"/>
+      <path d="M 613 120 Q 560 190 525 205" stroke="#F5C86633" stroke-width="1.5" fill="none"/>
+      <path d="M 90 300 Q 190 290 258 273" stroke="#F5C86633" stroke-width="1.5" fill="none"/>
+      <path d="M 710 300 Q 610 290 542 273" stroke="#F5C86633" stroke-width="1.5" fill="none"/>
+      <path d="M 400 420 Q 390 350 400 318" stroke="#F5C86633" stroke-width="1.5" fill="none"/>
+      <!-- flèche qui sort à droite et revient à gauche -->
+      <path d="M 620 380 C 760 400 820 330 795 260" stroke="#EAF0FF" stroke-width="3"
+            stroke-dasharray="10 9" fill="none"/>
+      <path d="M 5 260 C -20 190 60 130 180 118" stroke="#EAF0FF" stroke-width="3"
+            stroke-dasharray="10 9" fill="none" marker-end="url(#tip)"/>
+    </svg>
+  </div>
+
+  <div class="costs panel">
+    <span class="c"><span class="v">7<sup>ticks</sup></span><span class="k">avancer</span></span>
+    <span class="c"><span class="v">7<sup>ticks</sup></span><span class="k">regarder</span></span>
+    <span class="c"><span class="v">42<sup>ticks</sup></span><span class="k">pondre</span></span>
+    <span class="c"><span class="v">300<sup>ticks</sup></span><span class="k">incanter</span></span>
+  </div>
+
+  <div class="native" style="left:110px; top:400px; width:800px; height:300px;
+       font-size:40px;">Sortir à droite, c’est revenir par la gauche : la carte est un tore.
+Le temps s’écoule en ticks : chaque action a un prix.
+La fréquence f accélère le monde entier — de la balade au sprint.</div>
+  <div class="native" style="left:110px; top:760px; width:800px; height:90px;
+       font-size:32px; color:#8E9BC0;">f = 1 → une unité de temps par seconde. f = 1000 → mille fois plus vite.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>

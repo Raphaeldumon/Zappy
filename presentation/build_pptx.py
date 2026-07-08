@@ -32,6 +32,40 @@ SLIDES = [
              "text": "Raphael Dumon · Clément Fabre · Mathéo Emma · Léo Cazabat · Joachim Ismael"},
         ],
     },
+    {
+        "n": "02",
+        "zones": [
+            {"px": (110, 400, 780, 300), "pt": 20,
+             "text": "Un serveur arbitre la partie et détient la seule vérité du monde.\n"
+                     "Des drones autonomes, chacun piloté par une IA.\n"
+                     "Une interface 3D qui montre tout, en direct."},
+            {"px": (110, 760, 780, 90), "pt": 16, "color": "8E9BC0",
+             "text": "Trois programmes séparés, écrits par nous, qui ne se parlent "
+                     "qu’en s’envoyant du texte sur le réseau."},
+        ],
+    },
+    {
+        "n": "03",
+        "zones": [
+            {"px": (110, 400, 800, 340), "pt": 20,
+             "text": "Manger pour survivre — la nourriture s’épuise en continu.\n"
+                     "Collecter six types de pierres précieuses.\n"
+                     "S’élever par des incantations — parfois à plusieurs."},
+            {"px": (110, 790, 800, 120), "pt": 22, "bold": True, "color": "F5C866",
+             "text": "Victoire : la première équipe qui amène 6 joueurs au niveau 8."},
+        ],
+    },
+    {
+        "n": "04",
+        "zones": [
+            {"px": (110, 400, 800, 300), "pt": 20,
+             "text": "Sortir à droite, c’est revenir par la gauche : la carte est un tore.\n"
+                     "Le temps s’écoule en ticks : chaque action a un prix.\n"
+                     "La fréquence f accélère le monde entier — de la balade au sprint."},
+            {"px": (110, 760, 800, 90), "pt": 16, "color": "8E9BC0",
+             "text": "f = 1 → une unité de temps par seconde. f = 1000 → mille fois plus vite."},
+        ],
+    },
 ]
 
 

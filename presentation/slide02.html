@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  /* Triangle serveur / IA / GUI, moitié droite */
+  .node {
+    position: absolute; width: 300px; height: 130px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 8px;
+  }
+  .node .name {
+    font-family: "Toxigenesis", sans-serif;
+    font-size: 40px; color: #FFFFFF;
+  }
+  .node .role { font-size: 24px; color: #8E9BC0; }
+  .srv  { left: 1290px; top: 260px; }
+  .srv .name { color: #F5C866; text-shadow: 0 0 26px #F5C86677; }
+  .ia   { left: 1040px; top: 700px; }
+  .guin { left: 1540px; top: 700px; }
+</style>
+</head>
+<body>
+<div class="slide act-gold">
+  <div class="stars"></div>
+  <div class="kicker">Acte I — Le monde</div>
+  <div class="title">Trois programmes, un monde</div>
+
+  <div class="node panel srv"><div class="name">SERVEUR</div><div class="role">la vérité du monde</div></div>
+  <div class="node panel ia"><div class="name">IA ×n</div><div class="role">les habitants</div></div>
+  <div class="node panel guin"><div class="name">GUI</div><div class="role">la fenêtre</div></div>
+
+  <svg style="position:absolute; left:1000px; top:240px;" width="900" height="680" viewBox="0 0 900 680">
+    <defs>
+      <marker id="arr" markerWidth="10" markerHeight="8" refX="8" refY="4" orient="auto">
+        <path d="M0,0 L10,4 L0,8 Z" fill="#8E9BC0"/>
+      </marker>
+    </defs>
+    <!-- IA <-> SERVEUR (double sens) -->
+    <line x1="230" y1="450" x2="390" y2="180" stroke="#8E9BC0" stroke-width="2.5"
+          marker-start="url(#arr)" marker-end="url(#arr)"/>
+    <text x="250" y="300" fill="#8E9BC0" font-size="24" font-family="Liberation Sans, Arial">TCP</text>
+    <!-- SERVEUR -> GUI (sens unique) -->
+    <line x1="510" y1="180" x2="670" y2="450" stroke="#8E9BC0" stroke-width="2.5"
+          marker-end="url(#arr)"/>
+    <text x="610" y="300" fill="#8E9BC0" font-size="24" font-family="Liberation Sans, Arial">TCP</text>
+  </svg>
+
+  <div class="native" style="left:110px; top:400px; width:780px; height:300px;
+       font-size:40px;">Un serveur arbitre la partie et détient la seule vérité du monde.
+Des drones autonomes, chacun piloté par une IA.
+Une interface 3D qui montre tout, en direct.</div>
+  <div class="native" style="left:110px; top:760px; width:780px; height:90px;
+       font-size:32px; color:#8E9BC0;">Trois programmes séparés, écrits par nous, qui ne se parlent qu’en s’envoyant du texte sur le réseau.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>

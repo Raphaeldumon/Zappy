@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  /* Échelle d'élévation, 8 barreaux */
+  .ladder {
+    position: absolute; left: 1120px; top: 210px; width: 430px; height: 620px;
+    padding: 26px 34px;
+    display: flex; flex-direction: column-reverse; gap: 10px;
+  }
+  .rung {
+    display: flex; align-items: center; gap: 18px;
+    height: 56px;
+  }
+  .rung .lvl {
+    font-family: "Toxigenesis", sans-serif;
+    font-size: 30px; color: #EAF0FF; width: 44px; text-align: right;
+  }
+  .rung .bar {
+    flex: 1; height: 14px; border-radius: 7px;
+    background: linear-gradient(90deg, #F5C86633, #F5C86677);
+  }
+  .rung .req {
+    width: 96px; font-size: 22px; color: #8E9BC0; text-align: left;
+  }
+  .rung.top .lvl {
+    color: #F5C866;
+    text-shadow: 0 0 24px #F5C866CC, 0 0 60px #F5C86666;
+  }
+  .rung.top .bar { background: linear-gradient(90deg, #F5C86688, #F5C866EE); box-shadow: 0 0 26px #F5C86688; }
+  .ladder-caption {
+    position: absolute; left: 1120px; top: 172px; width: 430px;
+    font-size: 22px; color: #8E9BC0; text-align: center;
+  }
+  /* Gemmes + nourriture */
+  .loot {
+    position: absolute; left: 1120px; top: 880px; width: 430px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .gem {
+    width: 40px; height: 40px; transform: rotate(45deg); border-radius: 8px;
+    box-shadow: 0 0 22px currentColor;
+  }
+  .food {
+    width: 46px; height: 46px; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #FFE9B8, #E8A24E 70%, #9C6323);
+    box-shadow: 0 0 20px #E8A24E88;
+  }
+</style>
+</head>
+<body>
+<div class="slide act-gold">
+  <div class="stars"></div>
+  <div class="kicker">Acte I — Le monde</div>
+  <div class="title">Les règles du jeu</div>
+
+  <div class="ladder-caption">niveaux — joueurs requis</div>
+  <div class="ladder panel">
+    <div class="rung top"><span class="lvl">8</span><span class="bar"></span><span class="req">6 joueurs</span></div>
+    <div class="rung"><span class="lvl">7</span><span class="bar"></span><span class="req">6 joueurs</span></div>
+    <div class="rung"><span class="lvl">6</span><span class="bar"></span><span class="req">4 joueurs</span></div>
+    <div class="rung"><span class="lvl">5</span><span class="bar"></span><span class="req">4 joueurs</span></div>
+    <div class="rung"><span class="lvl">4</span><span class="bar"></span><span class="req">2 joueurs</span></div>
+    <div class="rung"><span class="lvl">3</span><span class="bar"></span><span class="req">2 joueurs</span></div>
+    <div class="rung"><span class="lvl">2</span><span class="bar"></span><span class="req">1 joueur</span></div>
+    <div class="rung"><span class="lvl">1</span><span class="bar"></span><span class="req"></span></div>
+  </div>
+
+  <div class="loot">
+    <span class="gem" style="color:#7FE3A9; background:#7FE3A9;"></span>
+    <span class="gem" style="color:#6FB7FF; background:#6FB7FF;"></span>
+    <span class="gem" style="color:#B58CFF; background:#B58CFF;"></span>
+    <span class="gem" style="color:#FF9AC2; background:#FF9AC2;"></span>
+    <span class="gem" style="color:#F5C866; background:#F5C866;"></span>
+    <span class="gem" style="color:#8AF0E4; background:#8AF0E4;"></span>
+    <span class="food"></span>
+  </div>
+
+  <div class="native" style="left:110px; top:400px; width:800px; height:340px;
+       font-size:40px;">Manger pour survivre — la nourriture s’épuise en continu.
+Collecter six types de pierres précieuses.
+S’élever par des incantations — parfois à plusieurs.</div>
+  <div class="native" style="left:110px; top:790px; width:800px; height:120px;
+       font-size:44px; font-weight:bold; color:#F5C866;">Victoire : la première équipe qui amène 6 joueurs au niveau 8.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>
