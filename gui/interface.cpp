@@ -904,9 +904,23 @@ void Interface::handleInput()
     }
     else if (!_mouseCaptured && _engine.mousePressed(gfx::MouseBtn::Left))
     {
-        _mouseCaptured = true;
-        _engine.disableCursor();
-        (void)_engine.mouseDelta(); // discard the re-capture jump
+        if (!_state.bettingOpen)
+        {
+            _mouseCaptured = true;
+            _engine.disableCursor();
+            (void)_engine.mouseDelta(); // discard the re-capture jump
+            return;
+        }
+    }
+
+    if (_state.bettingOpen && !_state.bettingStarted)
+    {
+        if (_mouseCaptured)
+        {
+            _mouseCaptured = false;
+            _engine.enableCursor();
+        }
+        handleBettingInput();
         return;
     }
 
@@ -1780,6 +1794,8 @@ void Interface::render()
         drawHelpOverlay();
     if (_state.hasWinner && !_endHidden)
         drawEndScreen();
+    if (_state.bettingOpen && !_state.bettingStarted)
+        drawBettingOverlay();
 
     _engine.drawFps(_engine.screenWidth() - 90, 10);
 }
@@ -2480,6 +2496,127 @@ gfx::Color Interface::teamColor(const std::string &team) const
     return kTeamPalette[idx % kTeamPalette.size()];
 }
 
+namespace
+{
+struct BetCardRect
+{
+    int x;
+    int y;
+    int w;
+    int h;
+};
+
+BetCardRect bettingCardRect(int index, int count, int sw, int sh)
+{
+    const int cols = std::min(4, std::max(1, count));
+    const int rows = (count + cols - 1) / cols;
+    const int gap = 18;
+    const int cardW = std::min(210, std::max(150, (sw - 160 - (cols - 1) * gap) / cols));
+    const int cardH = 190;
+    const int gridW = cols * cardW + (cols - 1) * gap;
+    const int gridH = rows * cardH + (rows - 1) * gap;
+    const int startX = (sw - gridW) / 2;
+    const int startY = std::max(150, (sh - gridH) / 2 + 40);
+    const int col = index % cols;
+    const int row = index / cols;
+    return {startX + col * (cardW + gap), startY + row * (cardH + gap), cardW, cardH};
+}
+
+bool contains(BetCardRect r, gfx::Vec2 p)
+{
+    return p.x >= r.x && p.x <= r.x + r.w && p.y >= r.y && p.y <= r.y + r.h;
+}
+
+gfx::Color withAlpha(gfx::Color c, std::uint8_t a)
+{
+    c.a = a;
+    return c;
+}
+} // namespace
+
+void Interface::handleBettingInput()
+{
+    if (!_net || _state.teams.empty() || !_engine.mousePressed(gfx::MouseBtn::Left))
+        return;
+
+    const gfx::Vec2 mouse = _engine.mousePosition();
+    const int sw = _engine.screenWidth();
+    const int sh = _engine.screenHeight();
+    for (std::size_t i = 0; i < _state.teams.size(); ++i)
+    {
+        const BetCardRect r = bettingCardRect(static_cast<int>(i), static_cast<int>(_state.teams.size()), sw, sh);
+        if (!contains(r, mouse))
+            continue;
+        _state.bettingPick = _state.teams[i];
+        _net->send("bet " + _state.teams[i]);
+        return;
+    }
+}
+
+void Interface::drawBettingOverlay()
+{
+    const int sw = _engine.screenWidth();
+    const int sh = _engine.screenHeight();
+    _engine.drawRect(0, 0, sw, sh, gfx::Color{3, 5, 10, 214});
+
+    const int titleW = _engine.measureText("CHOISIS TON PARI", 44);
+    _engine.drawText("CHOISIS TON PARI", (sw - titleW) / 2, 42, 44, gfx::RAYWHITE);
+
+    const std::string subtitle = "La partie demarre quand tous les GUIs connectes ont valide une equipe.";
+    _engine.drawText(subtitle, (sw - _engine.measureText(subtitle, 18)) / 2, 96, 18, gfx::LIGHTGRAY);
+
+    const std::string status =
+        gfx::fmt("Paris valides: %d / %d", _state.bettingReady, std::max(1, _state.bettingTotal));
+    _engine.drawText(status, (sw - _engine.measureText(status, 20)) / 2, 124, 20, gfx::GOLD);
+
+    if (_state.teams.empty())
+    {
+        const std::string waiting = "En attente des equipes...";
+        _engine.drawText(waiting, (sw - _engine.measureText(waiting, 24)) / 2, sh / 2, 24, gfx::LIGHTGRAY);
+        return;
+    }
+
+    const gfx::Vec2 mouse = _engine.mousePosition();
+    for (std::size_t i = 0; i < _state.teams.size(); ++i)
+    {
+        const std::string &team = _state.teams[i];
+        const BetCardRect r = bettingCardRect(static_cast<int>(i), static_cast<int>(_state.teams.size()), sw, sh);
+        const gfx::Color c = teamColor(team);
+        const bool hover = contains(r, mouse);
+        const bool picked = _state.bettingPick == team;
+
+        _engine.drawRect(r.x, r.y, r.w, r.h, gfx::Color{0, 0, 0, static_cast<std::uint8_t>(hover ? 190 : 150)});
+        _engine.drawRect(r.x, r.y, r.w, 8, c);
+        _engine.drawRect(r.x, r.y + 8, r.w, r.h - 8, withAlpha(c, picked ? 70 : 36));
+        _engine.drawRectLines(r.x, r.y, r.w, r.h, picked ? gfx::GOLD : (hover ? gfx::RAYWHITE : c));
+
+        const int cx = r.x + r.w / 2;
+        const int previewX = r.x + 24;
+        const int previewY = r.y + 22;
+        const int previewW = r.w - 48;
+        const int previewH = 112;
+        if (_playerModel.loaded)
+        {
+            const float spin = 20.0f * std::sin(_elapsed * 1.7f + static_cast<float>(i));
+            _engine.drawModelPreview(_playerModel.handle, previewX, previewY, previewW, previewH,
+                                     gfx::scale(_playerModel.scale, 1.25f), glowTint(c), spin);
+        }
+        else
+        {
+            _engine.drawRect(cx - 38, previewY + 24, 76, 58, withAlpha(c, 230));
+            _engine.drawRect(cx - 26, previewY + 10, 52, 42, withAlpha(glowTint(c), 255));
+            _engine.drawCircle(cx - 14, previewY + 30, 5, gfx::BLACK);
+            _engine.drawCircle(cx + 14, previewY + 30, 5, gfx::BLACK);
+        }
+
+        const int nameW = _engine.measureText(team, 24);
+        _engine.drawText(team, cx - nameW / 2, r.y + r.h - 48, 24, gfx::RAYWHITE);
+        const std::string hint = picked ? "PARI VALIDE" : "cliquer pour parier";
+        _engine.drawText(hint, cx - _engine.measureText(hint, 15) / 2, r.y + r.h - 22, 15,
+                         picked ? gfx::GOLD : gfx::LIGHTGRAY);
+    }
+}
+
 void Interface::drawEndScreen()
 {
     struct TeamStats
@@ -2526,10 +2663,17 @@ void Interface::drawEndScreen()
     _engine.drawText("ENTER to dismiss", px + width - 190, py + 24, 16, gfx::LIGHTGRAY);
     _engine.drawText("VICTORY", px + pad, py + 18, 34, winnerColor);
     _engine.drawText(gfx::fmt("%s wins", _state.winner.c_str()), px + pad, py + 58, 22, gfx::RAYWHITE);
+    if (!_state.bettingPick.empty())
+    {
+        const bool wonBet = _state.bettingPick == _state.winner;
+        const std::string betLine =
+            gfx::fmt("Your bet: %s  -  %s", _state.bettingPick.c_str(), wonBet ? "WIN" : "LOST");
+        _engine.drawText(betLine, px + pad, py + 88, 18, wonBet ? gfx::GOLD : gfx::LIGHTGRAY);
+    }
     _engine.drawText(gfx::fmt("Alive players: %d   Eggs left: %d   Time unit: %d",
                               static_cast<int>(alivePlayers.size()), static_cast<int>(_state.eggs.size()),
                               _state.frequency),
-                     px + pad, py + 88, 18, gfx::LIGHTGRAY);
+                     px + pad, py + (_state.bettingPick.empty() ? 88 : 110), 18, gfx::LIGHTGRAY);
 
     const int statsY = py + 124;
     const int teamNameW = 170;

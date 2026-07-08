@@ -82,4 +82,9 @@ struct GuiState
     int weatherDurationTicks{0};
     bool hasWinner{false};
     std::string winner;
+    bool bettingOpen{false};
+    bool bettingStarted{false};
+    int bettingReady{0};
+    int bettingTotal{0};
+    std::string bettingPick;
 };

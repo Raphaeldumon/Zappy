@@ -339,6 +339,8 @@ class Interface
     void drawStatsPanel();                               // global environment stats (Tab)
     void drawHelpOverlay();                              // full controls list (H / F1)
     void drawEndScreen();                                // centered winner summary after seg
+    void handleBettingInput();                           // pre-game betting cards
+    void drawBettingOverlay();                           // pre-game betting lobby
     gfx::Color teamColor(const std::string &team) const; // palette by team slot (max 8)
 
     // --- Timeline helpers ---

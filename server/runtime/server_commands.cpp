@@ -35,6 +35,8 @@ void Server::execute_next_command(int fd)
     auto *client = net_.find_client(fd);
     if (!client || client->command_queue.empty())
         return;
+    if (!game_started_)
+        return;
 
     auto it = fd_to_player_.find(fd);
     if (it == fd_to_player_.end())
@@ -378,6 +380,9 @@ void Server::cmd_incantation_complete(core::PlayerId initiator_id, std::vector<c
 
 void Server::handle_gui_request(int fd, std::string_view line)
 {
+    if (handle_bet_request(fd, line))
+        return;
+
     auto req = protocol::parse_gui_request(line);
 
     switch (req.type)

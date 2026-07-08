@@ -332,10 +332,39 @@ void ProtocolParser::apply(const std::string &line, GameMap &map, GuiState &stat
     if (tag == "smg")
     {
         std::string kind;
-        int x = 0;
-        int y = 0;
-        if ((iss >> kind >> x >> y) && kind == "meteor" && inBounds(map, x, y))
-            state.feedEvents.push_back({GameEventKind::Meteor, 0, x, y, 0, {}});
+        if (!(iss >> kind))
+            return;
+        if (kind == "meteor")
+        {
+            int x = 0;
+            int y = 0;
+            if ((iss >> x >> y) && inBounds(map, x, y))
+                state.feedEvents.push_back({GameEventKind::Meteor, 0, x, y, 0, {}});
+            return;
+        }
+        if (kind == "bet_open")
+        {
+            state.bettingOpen = true;
+            state.bettingStarted = false;
+            return;
+        }
+        if (kind == "bet_wait")
+        {
+            iss >> state.bettingReady >> state.bettingTotal;
+            state.bettingOpen = !state.bettingStarted;
+            return;
+        }
+        if (kind == "bet_pick")
+        {
+            iss >> state.bettingPick;
+            return;
+        }
+        if (kind == "bet_start")
+        {
+            state.bettingStarted = true;
+            state.bettingOpen = false;
+            return;
+        }
         return;
     }
 

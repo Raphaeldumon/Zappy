@@ -25,7 +25,7 @@ MAP_W        ?= 25
 MAP_H        ?= 25
 TEAMS        ?= rouge bleu vert jaune
 CLIENTS      ?= 50
-FREQ         ?= 300
+FREQ         ?= 1000
 BOTS         ?= 1
 HOST         ?= 127.0.0.1
 

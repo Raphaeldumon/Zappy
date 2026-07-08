@@ -53,6 +53,7 @@ class RaylibEngine
     bool keyPressed(gfx::Key key) const;
     int charPressed() const; // 0 when the queue is empty
     bool mousePressed(gfx::MouseBtn btn) const;
+    gfx::Vec2 mousePosition() const;
     gfx::Vec2 mouseDelta() const;
     float mouseWheel() const;
     // Gamepad (first connected pad only). Axis values are raw raylib readings
@@ -102,6 +103,8 @@ class RaylibEngine
     void endMode3D();
     void drawModelEx(gfx::ModelHandle h, gfx::Vec3 pos, gfx::Vec3 axis, float angleDeg, gfx::Vec3 scale,
                      gfx::Color tint);
+    void drawModelPreview(gfx::ModelHandle h, int x, int y, int w, int hgt, gfx::Vec3 scale, gfx::Color tint,
+                          float yawDeg);
     // Draw a model in an arbitrary orthonormal frame: local X/Y/Z map onto
     // right/up/back, with an extra yaw (degrees) about the local up axis first.
     // Passing the identity basis reproduces drawModelEx(h, pos, +Y, yaw, ...).

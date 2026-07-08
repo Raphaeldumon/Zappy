@@ -46,6 +46,10 @@ class Server
     void complete_ai_handshake(int fd, core::TeamId team_id, std::string_view team_name);
     void complete_gui_handshake(int fd);
     void send_gui_snapshot(int fd);
+    void broadcast_betting_status();
+    bool handle_bet_request(int fd, std::string_view line);
+    void start_game_if_bets_complete();
+    void start_game();
 
     // AI command pipeline
     void enqueue_ai_command(int fd, std::string line);
@@ -97,6 +101,8 @@ class Server
     std::unordered_map<int, core::PlayerId> fd_to_player_;
     std::unordered_map<core::PlayerId, int> player_to_fd_;
     std::unordered_set<int> gui_fds_;
+    std::unordered_map<int, std::string> gui_bets_;
+    bool game_started_{false};
 
     struct IncantState
     {
