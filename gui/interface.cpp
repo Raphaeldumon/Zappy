@@ -755,11 +755,19 @@ static int torusSubdiv(int tiles)
 void Interface::drawTorusFloor()
 {
     // Checkerboard painted straight onto the torus. Textured immediate quads
-    // skip the lighting shader, so a cheap analytic lambert term stands in for it.
+    // skip the lighting shader, so the ambient/sun/season terms from the
+    // environment are folded into a per-sub-quad CPU tint instead.
     const int mapW = _map.getWidth(), mapH = _map.getHeight();
     const int subU = torusSubdiv(mapW);
     const int subV = torusSubdiv(mapH);
-    const gfx::Vec3 lightDir = gfx::normalize({0.35f, 0.85f, 0.30f});
+    const env::Snapshot &es = _env.snap();
+    // Lambert analytique sur la lumière active (les quads immédiats ne passent
+    // pas par le lighting shader).
+    const gfx::Vec3 lightDir = gfx::scale(gfx::normalize(es.activeLightDir), -1.0f);
+    const float lightLum = std::min(1.0f, (es.sunColor.x + es.sunColor.y + es.sunColor.z) / 3.0f + 0.15f);
+    const float ambLum = (es.ambient.x + es.ambient.y + es.ambient.z) / 3.0f;
+    const gfx::Vec3 overlay = es.groundOverlay;
+    const float mixAmt = _weatherVisible ? es.groundMix : 0.0f;
     const gfx::Color dark{55, 78, 54, 255}, light{122, 190, 82, 255};
 
     for (int y = 0; y < mapH; ++y)
@@ -779,22 +787,27 @@ void Interface::drawTorusFloor()
                     const float v1 = (y + static_cast<float>(j + 1) / subV) * TILE_SIZE;
 
                     const Surface mid = surfaceAt((u0 + u1) * 0.5f, (v0 + v1) * 0.5f, 0.0f);
-                    const float lum = 0.45f + 0.55f * std::max(0.0f, gfx::dot(mid.up, lightDir));
-                    const gfx::Color c{static_cast<std::uint8_t>(base.r * lum),
-                                       static_cast<std::uint8_t>(base.g * lum),
-                                       static_cast<std::uint8_t>(base.b * lum), 255};
+                    const float lum =
+                        std::min(1.0f, ambLum + lightLum * std::max(0.0f, gfx::dot(mid.up, lightDir)));
+
+                    // Teinte saison : texture -> overlay (neige, or, roux...).
+                    auto shade = [&](float channelBase, float overlayC) {
+                        const float c = channelBase * (1.0f - mixAmt) + overlayC * 255.0f * mixAmt;
+                        return static_cast<std::uint8_t>(std::min(255.0f, c * lum));
+                    };
+                    const gfx::Color texTint{shade(255.0f, overlay.x), shade(255.0f, overlay.y),
+                                             shade(255.0f, overlay.z), 255};
+                    const gfx::Color flatTint{shade(base.r, overlay.x), shade(base.g, overlay.y),
+                                              shade(base.b, overlay.z), 255};
 
                     const gfx::Vec3 a = surfaceAt(u0, v0, 0.0f).pos;
                     const gfx::Vec3 b = surfaceAt(u1, v0, 0.0f).pos;
                     const gfx::Vec3 cpos = surfaceAt(u1, v1, 0.0f).pos;
                     const gfx::Vec3 d = surfaceAt(u0, v1, 0.0f).pos;
                     if (tex != gfx::NoHandle)
-                        _engine.drawTexturedQuad3D(tex, a, b, cpos, d, mid.up,
-                                                   gfx::Color{static_cast<std::uint8_t>(255.0f * lum),
-                                                              static_cast<std::uint8_t>(255.0f * lum),
-                                                              static_cast<std::uint8_t>(255.0f * lum), 255});
+                        _engine.drawTexturedQuad3D(tex, a, b, cpos, d, mid.up, texTint);
                     else
-                        _engine.drawQuad3D(a, b, cpos, d, c);
+                        _engine.drawQuad3D(a, b, cpos, d, flatTint);
                 }
             }
         }
@@ -2593,7 +2606,7 @@ void Interface::drawEndScreen()
 
 void Interface::drawHelpOverlay()
 {
-    static const std::array<const char *, 31> kHelp = {
+    static const std::array<const char *, 33> kHelp = {
         "CONTROLS  -  FREE CAMERA",
         "Mouse           look around freely",
         "Esc             release mouse (click game to capture)",
@@ -2610,7 +2623,9 @@ void Interface::drawHelpOverlay()
         "End             jump back to live",
         "Tab             toggle global stats",
         "T               grid <-> torus world view",
-        "V               toggle weather visuals",
+        "V               toggle seasonal FX (particles, fog, grading)",
+        "F5 / F6         force season / weather (debug)",
+        "F7              time-lapse day/night x40",
         "M               toggle music",
         "Enter           dismiss / show end screen (after a win)",
         "H / F1          this help",
@@ -2640,7 +2655,7 @@ void Interface::drawHelpOverlay()
     int ty = py + pad;
     for (size_t i = 0; i < kHelp.size(); ++i)
     {
-        const bool header = (i == 0 || i == 21); // section titles
+        const bool header = (i == 0 || i == 24); // section titles
         _engine.drawText(kHelp[i], px + pad, ty, header ? 20 : 16, header ? gfx::GOLD : gfx::RAYWHITE);
         ty += lineH;
     }
