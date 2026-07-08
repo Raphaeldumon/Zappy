@@ -7,6 +7,16 @@
 # Kept off the strict zappy_compile_options: raylib's headers and the wrapper
 # trip -Wconversion / -Wpedantic, which aren't worth policing on GUI glue code.
 
+# Tests du module environnement (logique pure, aucune dépendance raylib).
+add_executable(zappy_gui_environment_tests
+    tests/test_environment.cpp
+    environment.cpp)
+set_target_properties(zappy_gui_environment_tests PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(zappy_gui_environment_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(zappy_gui_environment_tests PRIVATE -Wall -Wextra)
+add_test(NAME gui_environment COMMAND zappy_gui_environment_tests)
+
 find_library(RAYLIB_LIBRARY NAMES raylib)
 
 if(NOT RAYLIB_LIBRARY)
@@ -21,7 +31,8 @@ add_executable(zappy_gui
     raylibWrapper.cpp
     gameMap.cpp
     netClient.cpp
-    protocolParser.cpp)
+    protocolParser.cpp
+    environment.cpp)
 
 set_target_properties(zappy_gui PROPERTIES
     CXX_STANDARD 17
