@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  /* Fond plus sombre : overlay sur le dégradé */
+  .shade { position: absolute; inset: 0; background: #00000055; }
+  .handicaps {
+    position: absolute; left: 1080px; top: 300px; width: 680px;
+    display: flex; flex-direction: column; gap: 70px;
+  }
+  .h-item { display: flex; align-items: center; gap: 40px; }
+  .h-icon {
+    position: relative; width: 130px; height: 130px; border-radius: 50%;
+    background: #FFFFFF0A; flex-shrink: 0;
+  }
+  .h-icon svg { position: absolute; inset: 26px; }
+  /* croix diagonale */
+  .h-icon::after {
+    content: ""; position: absolute; left: 8px; right: 8px; top: 50%;
+    height: 5px; border-radius: 3px; background: #FF7A7A;
+    transform: rotate(-45deg);
+    box-shadow: 0 0 18px #FF7A7A88;
+  }
+  .h-label {
+    font-family: "Toxigenesis", sans-serif; font-size: 34px; color: #EAF0FF;
+  }
+</style>
+</head>
+<body>
+<div class="slide act-green">
+  <div class="shade"></div>
+  <div class="stars"></div>
+  <div class="kicker">Acte III — Les drones</div>
+  <div class="title">Un drone naît aveugle</div>
+
+  <div class="handicaps">
+    <div class="h-item">
+      <span class="h-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#8E9BC0" stroke-width="1.6">
+          <path d="M12 21c4-4.5 6.5-7.8 6.5-11A6.5 6.5 0 0 0 5.5 10c0 3.2 2.5 6.5 6.5 11z"/>
+          <circle cx="12" cy="10" r="2.4"/>
+        </svg>
+      </span>
+      <span class="h-label">position</span>
+    </div>
+    <div class="h-item">
+      <span class="h-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#8E9BC0" stroke-width="1.6">
+          <rect x="4" y="3" width="16" height="18" rx="2"/>
+          <line x1="8" y1="8" x2="16" y2="8"/>
+          <line x1="8" y1="12" x2="16" y2="12"/>
+          <line x1="8" y1="16" x2="13" y2="16"/>
+        </svg>
+      </span>
+      <span class="h-label">équipe</span>
+    </div>
+    <div class="h-item">
+      <span class="h-icon">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#8E9BC0" stroke-width="1.6">
+          <path d="M3 12l7-8h9a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-9z"/>
+          <circle cx="16" cy="12" r="1.6"/>
+        </svg>
+      </span>
+      <span class="h-label">émetteur</span>
+    </div>
+  </div>
+
+  <div class="native" style="left:110px; top:400px; width:820px; height:320px;
+       font-size:40px;">Il ne sait pas où il est — aucune commande ne donne sa position.
+Il ne sait pas combien ils sont — pas d’annuaire d’équipe.
+Il ne sait pas qui parle — un message entendu est anonyme.</div>
+  <div class="native" style="left:110px; top:790px; width:820px; height:90px;
+       font-size:36px; font-weight:bold;">Tout ce qui suit existe pour contourner ces trois handicaps.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>

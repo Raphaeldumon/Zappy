@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  .score {
+    position: absolute; right: 130px; top: 258px; width: 420px;
+    text-align: right; font-size: 110px;
+  }
+  .score-sub {
+    position: absolute; right: 134px; top: 396px; width: 420px;
+    text-align: right; font-size: 24px; color: #8E9BC0;
+  }
+  /* Frise des 5 étapes */
+  .steps {
+    position: absolute; left: 110px; bottom: 210px; width: 1280px;
+    display: flex; align-items: stretch; gap: 0;
+  }
+  .step {
+    flex: 1; padding: 22px 18px 20px;
+    display: flex; flex-direction: column; gap: 8px; align-items: center;
+    text-align: center;
+  }
+  .step .name { font-family: "Toxigenesis", sans-serif; font-size: 26px; color: #EAF0FF; }
+  .step .det { font-size: 20px; color: #8E9BC0; }
+  .chev {
+    align-self: center; margin: 0 12px;
+    font-size: 40px; color: #5CE8B5; font-family: "Liberation Sans", Arial, sans-serif;
+    text-shadow: 0 0 18px #5CE8B588;
+  }
+  .lvl8 {
+    position: absolute; right: 120px; bottom: 240px;
+    font-size: 64px;
+  }
+</style>
+</head>
+<body>
+<div class="slide act-green">
+  <div class="stars"></div>
+  <div class="kicker">Acte III — Les drones</div>
+  <div class="title">Le Blitz — gagner en 30 secondes</div>
+
+  <div class="score glow-number">4 / 4</div>
+  <div class="score-sub">parties gagnées</div>
+
+  <div class="steps">
+    <div class="step panel"><span class="name">COLLECTER</span><span class="det">38 pierres chacun</span></div>
+    <span class="chev">›</span>
+    <div class="step panel"><span class="name">BANQUER</span><span class="det">200 nourritures</span></div>
+    <span class="chev">›</span>
+    <div class="step panel"><span class="name">CONVERGER</span><span class="det">au son du chef</span></div>
+    <span class="chev">›</span>
+    <div class="step panel"><span class="name">TOUT LÂCHER</span><span class="det">sur une case</span></div>
+    <span class="chev">›</span>
+    <div class="step panel"><span class="name">INCANTER ×6</span><span class="det">d’affilée</span></div>
+  </div>
+  <div class="lvl8 glow-number">NIVEAU 8</div>
+
+  <div class="native" style="left:110px; top:400px; width:1100px; height:220px;
+       font-size:40px;">Une seule stratégie, réglée comme une horlogerie : chacun amasse tout le nécessaire, l’équipe fait le plein de nourriture, six convergent vers le chef…
+…qui dépose les 38 pierres et enchaîne les six rituels d’un coup.</div>
+  <div class="native" style="left:110px; top:950px; width:900px; height:70px;
+       font-size:36px; font-weight:bold; color:#5CE8B5;">Du niveau 2 au niveau 8 : environ 3 secondes. Partie gagnée en ~30.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>

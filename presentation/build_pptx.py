@@ -89,6 +89,53 @@ SLIDES = [
              "text": "Réveillé par un paquet réseau ou par l’échéance suivante — jamais pour rien."},
         ],
     },
+    {
+        "n": "07",
+        "zones": [
+            {"px": (110, 400, 820, 320), "pt": 20,
+             "text": "Il ne sait pas où il est — aucune commande ne donne sa position.\n"
+                     "Il ne sait pas combien ils sont — pas d’annuaire d’équipe.\n"
+                     "Il ne sait pas qui parle — un message entendu est anonyme."},
+            {"px": (110, 790, 820, 90), "pt": 18, "bold": True,
+             "text": "Tout ce qui suit existe pour contourner ces trois handicaps."},
+        ],
+    },
+    {
+        "n": "08",
+        "zones": [
+            {"px": (110, 400, 820, 320), "pt": 20,
+             "text": "Chaque son entendu arrive avec une direction — huit possibles.\n"
+                     "HELLO : chacun se présente en boucle, l’équipe se compte toute seule.\n"
+                     "Le plus petit identifiant devient le chef — élection sans dispute."},
+            {"px": (110, 790, 820, 90), "pt": 16, "color": "8E9BC0",
+             "text": "Pour rejoindre quelqu’un : marcher vers son son, encore et encore."},
+        ],
+    },
+    {
+        "n": "09",
+        "zones": [
+            {"px": (110, 400, 820, 320), "pt": 17,
+             "text": "Vu d’un chef, un « joueur » sur sa case n’a pas de niveau : "
+                     "impossible de savoir si c’est le bon coéquipier.\n"
+                     "Mais un son reçu « sur ma case » (direction 0), lui, ne ment pas.\n"
+                     "Chacun annonce ARRIVED en entendant le chef à direction 0 — "
+                     "le rituel ne part que sur les présences confirmées."},
+            {"px": (110, 820, 820, 80), "pt": 16, "color": "8E9BC0",
+             "text": "Une idée simple, trouvée après beaucoup de rituels ratés."},
+        ],
+    },
+    {
+        "n": "10",
+        "zones": [
+            {"px": (110, 400, 1100, 220), "pt": 20,
+             "text": "Une seule stratégie, réglée comme une horlogerie : chacun amasse "
+                     "tout le nécessaire, l’équipe fait le plein de nourriture, six "
+                     "convergent vers le chef…\n"
+                     "…qui dépose les 38 pierres et enchaîne les six rituels d’un coup."},
+            {"px": (110, 950, 900, 70), "pt": 18, "bold": True, "color": "5CE8B5",
+             "text": "Du niveau 2 au niveau 8 : environ 3 secondes. Partie gagnée en ~30."},
+        ],
+    },
 ]
 
 

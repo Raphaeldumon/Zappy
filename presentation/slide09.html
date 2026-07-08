@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  .rate {
+    position: absolute; left: 1060px; top: 220px; width: 740px;
+    display: flex; align-items: baseline; justify-content: center; gap: 26px;
+  }
+  .rate .from { font-size: 84px; opacity: .55; }
+  .rate .arrow { font-size: 64px; color: #8E9BC0; font-family: "Liberation Sans", Arial, sans-serif; }
+  .rate .to { font-size: 130px; }
+  .rate-sub {
+    position: absolute; left: 1060px; top: 400px; width: 740px;
+    text-align: center; font-size: 26px; color: #8E9BC0;
+  }
+  /* Mini-scène : deux drones sur une même case */
+  .scene { position: absolute; left: 1180px; top: 500px; width: 500px; height: 420px; }
+</style>
+</head>
+<body>
+<div class="slide act-green">
+  <div class="stars"></div>
+  <div class="kicker">Acte III — Les drones</div>
+  <div class="title">ARRIVED : la présence prouvée</div>
+
+  <div class="rate glow-number">
+    <span class="from">14 %</span><span class="arrow">→</span><span class="to">92 %</span>
+  </div>
+  <div class="rate-sub">de rituels réussis</div>
+
+  <div class="scene">
+    <svg width="500" height="420" viewBox="0 0 500 420">
+      <!-- case surlignée (losange iso) -->
+      <path d="M 250 150 L 420 240 L 250 330 L 80 240 Z"
+            fill="#5CE8B518" stroke="#5CE8B5" stroke-width="2.5"
+            style="filter: drop-shadow(0 0 18px #5CE8B555)"/>
+      <!-- onde 0 entre les deux drones -->
+      <circle cx="250" cy="240" r="36" fill="none" stroke="#5CE8B577" stroke-width="2"/>
+      <circle cx="250" cy="240" r="62" fill="none" stroke="#5CE8B544" stroke-width="1.6"/>
+      <text x="250" y="250" fill="#5CE8B5" font-size="30" font-family="Toxigenesis, sans-serif"
+            text-anchor="middle">0</text>
+      <!-- drone chef (gauche) -->
+      <circle cx="165" cy="238" r="24" fill="#0D1430" stroke="#5CE8B5" stroke-width="2.5"/>
+      <circle cx="165" cy="238" r="9" fill="#5CE8B5"/>
+      <text x="165" y="196" fill="#8E9BC0" font-size="22" font-family="Liberation Sans, Arial"
+            text-anchor="middle">chef</text>
+      <!-- drone coéquipier (droite) -->
+      <circle cx="335" cy="238" r="24" fill="#0D1430" stroke="#EAF0FF" stroke-width="2.5"/>
+      <circle cx="335" cy="238" r="9" fill="#EAF0FF"/>
+      <text x="335" y="196" fill="#8E9BC0" font-size="22" font-family="Liberation Sans, Arial"
+            text-anchor="middle">« ARRIVED »</text>
+    </svg>
+  </div>
+
+  <div class="native" style="left:110px; top:400px; width:820px; height:320px;
+       font-size:34px;">Vu d’un chef, un « joueur » sur sa case n’a pas de niveau : impossible de savoir si c’est le bon coéquipier.
+Mais un son reçu « sur ma case » (direction 0), lui, ne ment pas.
+Chacun annonce ARRIVED en entendant le chef à direction 0 — le rituel ne part que sur les présences confirmées.</div>
+  <div class="native" style="left:110px; top:820px; width:820px; height:80px;
+       font-size:32px; color:#8E9BC0;">Une idée simple, trouvée après beaucoup de rituels ratés.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>

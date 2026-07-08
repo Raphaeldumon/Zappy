@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<link rel="stylesheet" href="theme.css">
+<style>
+  .compass-wrap { position: absolute; left: 1120px; top: 190px; width: 480px; height: 480px; }
+  .compass-cap {
+    position: absolute; left: 1120px; top: 676px; width: 480px;
+    font-size: 22px; color: #8E9BC0; text-align: center;
+  }
+  .hello {
+    position: absolute; left: 1090px; top: 760px; width: 540px; height: 200px;
+    display: flex; align-items: center; justify-content: center; gap: 28px;
+  }
+  .hello .b {
+    padding: 10px 20px; border-radius: 18px;
+    border: 1px solid #5CE8B566; background: #5CE8B511;
+    font-family: "Toxigenesis", sans-serif; font-size: 22px; color: #5CE8B5;
+  }
+  .hello .arrow { color: #8E9BC0; font-size: 30px; }
+  .hello .count {
+    padding: 14px 24px; border-radius: 14px;
+    border: 1px solid #5CE8B599; background: #5CE8B51C;
+    font-family: "Toxigenesis", sans-serif; font-size: 30px; color: #EAF0FF;
+    box-shadow: 0 0 26px #5CE8B544; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div class="slide act-green">
+  <div class="stars"></div>
+  <div class="kicker">Acte III — Les drones</div>
+  <div class="title">S’organiser à l’oreille</div>
+
+  <div class="compass-wrap">
+    <svg width="480" height="480" viewBox="0 0 480 480">
+      <!-- secteur 1 surligné (haut) -->
+      <path d="M 240 240 L 165 55 A 200 200 0 0 1 315 55 Z" fill="#5CE8B522" stroke="none"/>
+      <circle cx="240" cy="240" r="200" fill="none" stroke="#5CE8B5" stroke-width="2.5"/>
+      <!-- 8 rayons (bordures de secteurs, tous les 45° décalés de 22.5°) -->
+      <g stroke="#5CE8B555" stroke-width="1.5">
+        <line x1="240" y1="240" x2="316.5" y2="55.2"/>
+        <line x1="240" y1="240" x2="424.8" y2="163.5"/>
+        <line x1="240" y1="240" x2="424.8" y2="316.5"/>
+        <line x1="240" y1="240" x2="316.5" y2="424.8"/>
+        <line x1="240" y1="240" x2="163.5" y2="424.8"/>
+        <line x1="240" y1="240" x2="55.2" y2="316.5"/>
+        <line x1="240" y1="240" x2="55.2" y2="163.5"/>
+        <line x1="240" y1="240" x2="163.5" y2="55.2"/>
+      </g>
+      <!-- numéros 1-8, sens horaire, 1 en haut -->
+      <g fill="#EAF0FF" font-size="30" font-family="Toxigenesis, sans-serif" text-anchor="middle">
+        <text x="240" y="42" fill="#5CE8B5" font-size="36">1</text>
+        <text x="382" y="105">2</text>
+        <text x="448" y="252">3</text>
+        <text x="382" y="412">4</text>
+        <text x="240" y="472">5</text>
+        <text x="98" y="412">6</text>
+        <text x="32" y="252">7</text>
+        <text x="98" y="105">8</text>
+      </g>
+      <!-- drone au centre, orienté vers 1 -->
+      <path d="M 240 214 L 256 258 L 240 248 L 224 258 Z" fill="#5CE8B5"
+            style="filter: drop-shadow(0 0 10px #5CE8B5AA)"/>
+    </svg>
+  </div>
+  <div class="compass-cap">0 = même case</div>
+
+  <div class="hello">
+    <span class="b">HELLO</span>
+    <span class="b" style="opacity:.75">HELLO</span>
+    <span class="b" style="opacity:.5">HELLO</span>
+    <span class="arrow">→</span>
+    <span class="count">équipe : 6</span>
+  </div>
+
+  <div class="native" style="left:110px; top:400px; width:820px; height:320px;
+       font-size:40px;">Chaque son entendu arrive avec une direction — huit possibles.
+HELLO : chacun se présente en boucle, l’équipe se compte toute seule.
+Le plus petit identifiant devient le chef — élection sans dispute.</div>
+  <div class="native" style="left:110px; top:790px; width:820px; height:90px;
+       font-size:32px; color:#8E9BC0;">Pour rejoindre quelqu’un : marcher vers son son, encore et encore.</div>
+</div>
+<script>
+  if (location.search.includes("final")) document.body.classList.add("final");
+</script>
+</body>
+</html>
