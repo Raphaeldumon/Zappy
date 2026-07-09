@@ -26,7 +26,7 @@ int main(int argc, char **argv)
     }
     catch (const std::exception &e)
     {
-        std::cerr << "zappy_server: " << e.what() << "\n\n" << zappy::runtime::usage(argv[0]);
+        std::cerr << "zappy_server : " << e.what() << "\n\n" << zappy::runtime::usage(argv[0]);
         return EXIT_ERR;
     }
 
@@ -52,7 +52,7 @@ int main(int argc, char **argv)
     }
     catch (const std::exception &e)
     {
-        std::cerr << "fatal: " << e.what() << '\n';
+        std::cerr << "erreur fatale : " << e.what() << '\n';
         return EXIT_ERR;
     }
     return EXIT_SUCCESS;

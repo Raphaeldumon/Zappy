@@ -38,6 +38,14 @@ Server::Server(const ServerArgs &args)
 
 void Server::run()
 {
+    std::string teams_joined;
+    for (std::size_t i = 0; i < args_.teams.size(); ++i)
+        teams_joined += (i ? ", " : "") + args_.teams[i];
+    std::cout << "Serveur Zappy · port " << args_.port << " · carte " << args_.width << "×" << args_.height
+              << " · équipes: " << teams_joined << " · " << args_.clients_per_team << " clients/équipe · fréquence "
+              << args_.frequency << '\n'
+              << std::flush;
+
     start_time_ = std::chrono::steady_clock::now();
     init_world();
     season_until_tick_ = now_ticks() + 2400;

@@ -1407,9 +1407,25 @@ gfx::Ray RaylibEngine::screenToWorldRay(const gfx::Camera &cam, gfx::Vec2 screen
 bool RaylibEngine::loadUiFont(const std::string &path, int baseSize)
 {
     unloadUiFont();
-    // Rasterize the default glyph set at a size above every UI size we draw
-    // (14-34px), so text only ever downscales; bilinear keeps that smooth.
-    Font f = LoadFontEx(path.c_str(), baseSize, nullptr, 0);
+    // Rasterize the default glyph set plus the French glyphs the UI needs
+    // (accents, œ, guillemets, middle dot) at a size above every UI size we
+    // draw (14-34px), so text only ever downscales; bilinear keeps that smooth.
+    // Without an explicit codepoint list LoadFontEx covers only ASCII 32-126
+    // and accents would render as "tofu".
+    std::vector<int> codepoints;
+    for (int c = 32; c <= 126; ++c) // ASCII printable
+        codepoints.push_back(c);
+    for (int c = 0xC0; c <= 0xFF; ++c) // Latin-1 accented letters À..ÿ
+        codepoints.push_back(c);
+    codepoints.push_back(0xAB); // « guillemet ouvrant
+    codepoints.push_back(0xBB); // » guillemet fermant
+    codepoints.push_back(0xB7); // · point médian
+    codepoints.push_back(0x152); // Œ
+    codepoints.push_back(0x153); // œ
+    codepoints.push_back(0x2013); // – tiret demi-cadratin
+    codepoints.push_back(0x2014); // — tiret cadratin
+    codepoints.push_back(0x2026); // … points de suspension
+    Font f = LoadFontEx(path.c_str(), baseSize, codepoints.data(), static_cast<int>(codepoints.size()));
     if (f.texture.id == 0 || f.glyphCount <= 0)
         return false;
     SetTextureFilter(f.texture, TEXTURE_FILTER_BILINEAR);

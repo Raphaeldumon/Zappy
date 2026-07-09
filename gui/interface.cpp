@@ -1433,27 +1433,27 @@ float playerOrientationAngle(Orientation orientation)
 const char *weatherLabel(const std::string &weather)
 {
     if (weather == "rain")
-        return "Rain";
+        return "Pluie";
     if (weather == "storm")
-        return "Storm";
+        return "Orage";
     if (weather == "fog")
-        return "Fog";
+        return "Brouillard";
     if (weather == "heat")
-        return "Heat";
+        return "Canicule";
     if (weather == "fertile")
         return "Fertile";
-    return "Clear";
+    return "Dégagé";
 }
 
 const char *seasonLabel(const std::string &season)
 {
     if (season == "summer")
-        return "Summer";
+        return "Été";
     if (season == "autumn")
-        return "Autumn";
+        return "Automne";
     if (season == "winter")
-        return "Winter";
-    return "Spring";
+        return "Hiver";
+    return "Printemps";
 }
 
 gfx::Color seasonColor(const std::string &season)
@@ -2112,6 +2112,20 @@ void Interface::drawSelectionHighlight()
     drawTileEdges(_selectedX, _selectedY, 0.35f, gfx::GOLD);
 }
 
+namespace
+{
+// Shared panel chrome: translucent black fill + soft white border, with an
+// optional gold title. Keeps the HUD and every overlay visually consistent.
+void drawPanel(RaylibEngine &engine, int x, int y, int w, int h, std::uint8_t alpha = 210,
+               const char *title = nullptr)
+{
+    engine.drawRect(x, y, w, h, gfx::Color{0, 0, 0, alpha});
+    engine.drawRectLines(x, y, w, h, gfx::Color{255, 255, 255, 90});
+    if (title != nullptr)
+        engine.drawText(title, x + 14, y + 12, 20, gfx::GOLD);
+}
+} // namespace
+
 void Interface::drawTileInfoPanel()
 {
     if (_selectedX < 0 || _selectedY < 0)
@@ -2121,7 +2135,7 @@ void Interface::drawTileInfoPanel()
 
     // Build the lines first so the panel can size itself.
     std::vector<std::pair<std::string, gfx::Color>> lines;
-    lines.push_back({gfx::fmt("Tile (%d, %d)", _selectedX, _selectedY), gfx::GOLD});
+    lines.push_back({gfx::fmt("Tuile (%d, %d)", _selectedX, _selectedY), gfx::GOLD});
 
     int totalRes = 0;
     for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
@@ -2132,13 +2146,13 @@ void Interface::drawTileInfoPanel()
             lines.push_back({gfx::fmt("%-9s %d", std::string(MAP_RESOURCE_NAMES[i]).c_str(), q), gfx::RAYWHITE});
     }
     if (totalRes == 0)
-        lines.push_back({"(no resources)", gfx::GRAY});
+        lines.push_back({"(aucune ressource)", gfx::GRAY});
 
     // Players standing on the tile, enriched with level/team from the registry.
-    lines.push_back({gfx::fmt("Players: %d", static_cast<int>(tile.players.size())), gfx::SKYBLUE});
+    lines.push_back({gfx::fmt("Joueurs : %d", static_cast<int>(tile.players.size())), gfx::SKYBLUE});
     for (const aiPlayer &player : tile.players)
     {
-        lines.push_back({gfx::fmt("  #%u  lvl %d  %s", player.getId(), player.getLevel(), player.getTeam().c_str()),
+        lines.push_back({gfx::fmt("  #%u  niv %d  %s", player.getId(), player.getLevel(), player.getTeam().c_str()),
                          gfx::LIGHTGRAY});
     }
 
@@ -2151,7 +2165,7 @@ void Interface::drawTileInfoPanel()
             ++eggs;
     }
     if (eggs > 0)
-        lines.push_back({gfx::fmt("Eggs: %d", eggs), gfx::BEIGE});
+        lines.push_back({gfx::fmt("Œufs : %d", eggs), gfx::BEIGE});
 
     // Panel geometry: top-right.
     const int pad = 10;
@@ -2161,8 +2175,7 @@ void Interface::drawTileInfoPanel()
     const int px = _engine.screenWidth() - width - 10;
     const int py = 120;
 
-    _engine.drawRect(px, py, width, height, gfx::Color{0, 0, 0, 180});
-    _engine.drawRectLines(px, py, width, height, gfx::GOLD);
+    drawPanel(_engine, px, py, width, height);
 
     int ty = py + pad;
     for (const auto &[text, color] : lines)
@@ -2229,32 +2242,32 @@ std::string prettyBroadcast(const std::string &raw)
     };
 
     if (type == "HELLO")
-        return "Hello !";
+        return "Salut !";
     if (type == "GATHER")
     {
         const std::string level = field("level");
         const std::string need = field("need");
-        std::string msg = "Rally to me";
+        std::string msg = "Ralliez-vous à moi";
         if (!level.empty())
-            msg += " for the level " + level + " ritual";
+            msg += " pour le rituel de niveau " + level;
         if (!need.empty())
-            msg += " - need " + need + " more";
-        return msg + "!";
+            msg += " — il en manque " + need;
+        return msg + " !";
     }
     if (type == "GATHER_ACK")
-        return "On my way!";
+        return "J'arrive !";
     if (type == "HOLD")
-        return "Hold the tile - ritual is forming!";
+        return "Tenez la tuile — le rituel se prépare !";
     if (type == "ARRIVED")
-        return "I'm here for the ritual!";
+        return "Je suis là pour le rituel !";
     if (type == "MCOME")
-        return "Everyone converge on me!";
+        return "Tout le monde me rejoint !";
     if (type == "MFOOD")
-        return "Stockpile food!";
+        return "Faites des réserves de nourriture !";
     if (type == "MRDY")
-        return "I'm ready!";
+        return "Je suis prêt !";
     if (type == "MRDY2")
-        return "Ready confirmed - GO!";
+        return "Prêt confirmé — GO !";
 
     return raw; // unknown scheme: show what was actually said
 }
@@ -2269,7 +2282,7 @@ void Interface::drainFeedEvents()
         switch (ev.kind)
         {
         case GameEventKind::Join:
-            text = gfx::fmt("#%u joined %s (lvl %d)", ev.id, ev.text.c_str(), ev.value);
+            text = gfx::fmt("#%u a rejoint %s (niv %d)", ev.id, ev.text.c_str(), ev.value);
             color = gfx::LIGHTGRAY;
             break;
         case GameEventKind::Broadcast: {
@@ -2280,39 +2293,39 @@ void Interface::drainFeedEvents()
             break;
         }
         case GameEventKind::Death:
-            text = gfx::fmt("#%u (%s) died", ev.id, ev.text.c_str());
+            text = gfx::fmt("#%u (%s) est mort", ev.id, ev.text.c_str());
             color = gfx::RED;
             break;
         case GameEventKind::LevelUp:
-            text = gfx::fmt("#%u (%s) reached level %d", ev.id, ev.text.c_str(), ev.value);
+            text = gfx::fmt("#%u (%s) atteint le niveau %d", ev.id, ev.text.c_str(), ev.value);
             color = gfx::GOLD;
             break;
         case GameEventKind::IncantStart:
-            text = gfx::fmt("Level %d ritual started at (%d,%d)", ev.value, ev.x, ev.y);
+            text = gfx::fmt("Rituel de niveau %d lancé en (%d,%d)", ev.value, ev.x, ev.y);
             color = gfx::Color{180, 105, 255, 255};
             break;
         case GameEventKind::IncantEnd:
             if (ev.value == 0)
             {
-                text = gfx::fmt("Ritual at (%d,%d) FAILED", ev.x, ev.y);
+                text = gfx::fmt("Rituel en (%d,%d) ÉCHOUÉ", ev.x, ev.y);
                 color = gfx::Color{255, 120, 120, 255};
             }
             else
             {
-                text = gfx::fmt("Ritual at (%d,%d) succeeded", ev.x, ev.y);
+                text = gfx::fmt("Rituel en (%d,%d) réussi", ev.x, ev.y);
                 color = gfx::GREEN;
             }
             break;
         case GameEventKind::Fork:
-            text = gfx::fmt("#%u (%s) laid an egg", ev.id, ev.text.c_str());
+            text = gfx::fmt("#%u (%s) a pondu un œuf", ev.id, ev.text.c_str());
             color = gfx::BEIGE;
             break;
         case GameEventKind::Eject:
-            text = gfx::fmt("#%u (%s) ejected the tile", ev.id, ev.text.c_str());
+            text = gfx::fmt("#%u (%s) a expulsé la tuile", ev.id, ev.text.c_str());
             color = gfx::Color{255, 145, 55, 255};
             break;
         case GameEventKind::Meteor:
-            text = gfx::fmt("Meteorite strike at (%d, %d)!", ev.x, ev.y);
+            text = gfx::fmt("Chute de météorite en (%d, %d) !", ev.x, ev.y);
             color = gfx::Color{255, 130, 50, 255};
             _meteorites.push_back({ev.x, ev.y, 0.0f});
             gfx::logInfo("meteorite event at (%d, %d)", ev.x, ev.y);
@@ -2327,7 +2340,7 @@ void Interface::drainFeedEvents()
             break;
         }
         case GameEventKind::Win:
-            text = gfx::fmt("*** %s WINS ***", ev.text.c_str());
+            text = gfx::fmt("*** %s REMPORTE LA PARTIE ***", ev.text.c_str());
             color = gfx::GOLD;
             break;
         }
@@ -2455,9 +2468,9 @@ void Interface::drawHoverTooltip()
     // (f/l/d/s/m/p/t follows MAP_RESOURCE_NAMES order); full names are one click away.
     std::string line1 = gfx::fmt("(%d,%d)", _hoverX, _hoverY);
     if (!tile.players.empty())
-        line1 += gfx::fmt("  %d player%s", static_cast<int>(tile.players.size()), tile.players.size() > 1 ? "s" : "");
+        line1 += gfx::fmt("  %d joueur%s", static_cast<int>(tile.players.size()), tile.players.size() > 1 ? "s" : "");
     if (eggs > 0)
-        line1 += gfx::fmt("  %d egg%s", eggs, eggs > 1 ? "s" : "");
+        line1 += gfx::fmt("  %d œuf%s", eggs, eggs > 1 ? "s" : "");
 
     std::string line2;
     for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
@@ -2466,7 +2479,7 @@ void Interface::drawHoverTooltip()
             line2 += gfx::fmt("%c:%d  ", MAP_RESOURCE_NAMES[i][0], tile.resources[i]);
     }
     if (line2.empty() && tile.players.empty() && eggs == 0)
-        line2 = "(empty)";
+        line2 = "(vide)";
 
     const int fontSize = 14;
     const int pad = 6;
@@ -2477,8 +2490,7 @@ void Interface::drawHoverTooltip()
     const int px = _engine.screenWidth() / 2 + 16;
     const int py = _engine.screenHeight() / 2 + 16;
 
-    _engine.drawRect(px, py, w, h, gfx::Color{0, 0, 0, 170});
-    _engine.drawRectLines(px, py, w, h, gfx::Color{255, 255, 255, 90});
+    drawPanel(_engine, px, py, w, h, 170);
     _engine.drawText(line1, px + pad, py + pad, fontSize, gfx::RAYWHITE);
     if (!line2.empty())
         _engine.drawText(line2, px + pad, py + pad + lineH, fontSize, gfx::LIGHTGRAY);
@@ -2489,29 +2501,51 @@ void Interface::drawHoverTooltip()
 // ---------------------------------------------------------------------------
 void Interface::drawHud()
 {
-    // Compact always-on status, top-left.
-    _engine.drawText(gfx::fmt("Map %dx%d   Teams %d   Players %d   Eggs %d", _map.getWidth(), _map.getHeight(),
-                              static_cast<int>(_state.teams.size()), static_cast<int>(_state.players.size()),
-                              static_cast<int>(_state.eggs.size())),
-                     10, 10, 18, gfx::RAYWHITE);
-
     const int mm = static_cast<int>(_elapsed) / 60;
     const int ss = static_cast<int>(_elapsed) % 60;
-    _engine.drawText(gfx::fmt("Speed (time unit): %d  [+/- to change]   Elapsed %02d:%02d", _state.frequency, mm, ss),
-                     10, 32, 16, gfx::SKYBLUE);
     const float hours = _env.snap().timeOfDay * 24.0f;
-    _engine.drawText(gfx::fmt("Season: %s%s   Weather: %s%s   %02dh%02d   FX: %s", seasonLabel(_state.season),
-                              _forceSeason >= 0 ? "*" : "", weatherLabel(_state.weather),
-                              _forceWeather >= 0 ? "*" : "", static_cast<int>(hours),
-                              static_cast<int>(std::fmod(hours, 1.0f) * 60.0f), _weatherVisible ? "on" : "off"),
-                     10, 52, 16, seasonColor(_state.season));
 
+    // Aligned label/value grid, top-left. One styled panel instead of loose lines.
+    const std::string l1 = gfx::fmt("CARTE %d×%d   ÉQUIPES %d", _map.getWidth(), _map.getHeight(),
+                                    static_cast<int>(_state.teams.size()));
+    const std::string l2 = gfx::fmt("JOUEURS %d   ŒUFS %d", static_cast<int>(_state.players.size()),
+                                    static_cast<int>(_state.eggs.size()));
+    const std::string l3 = gfx::fmt("VITESSE %d [+/-]   TEMPS %02d:%02d", _state.frequency, mm, ss);
+    const std::string l4 =
+        gfx::fmt("%s%s · %s%s · %02dh%02d   FX %s", seasonLabel(_state.season), _forceSeason >= 0 ? "*" : "",
+                 weatherLabel(_state.weather), _forceWeather >= 0 ? "*" : "", static_cast<int>(hours),
+                 static_cast<int>(std::fmod(hours, 1.0f) * 60.0f), _weatherVisible ? "on" : "off");
+    std::string followLine;
     if (_followedPlayer >= 0)
-        _engine.drawText(gfx::fmt("Following player #%lld  (F to release)", static_cast<long long>(_followedPlayer)),
-                         10, 72, 16, gfx::GOLD);
+        followLine = gfx::fmt("Suivi du joueur #%lld  (F pour libérer)", static_cast<long long>(_followedPlayer));
+
+    const int pad = 12;
+    const int lineH = 22;
+    const int fontSize = 17;
+    const int rows = 4 + (followLine.empty() ? 0 : 1);
+    int width = 0;
+    for (const std::string &s : {l1, l2, l3, l4, followLine})
+        width = std::max(width, _engine.measureText(s, fontSize));
+    width += pad * 2;
+    const int height = pad * 2 + rows * lineH;
+    const int px = 10, py = 10;
+
+    drawPanel(_engine, px, py, width, height);
+
+    int ty = py + pad;
+    _engine.drawText(l1, px + pad, ty, fontSize, gfx::RAYWHITE);
+    ty += lineH;
+    _engine.drawText(l2, px + pad, ty, fontSize, gfx::RAYWHITE);
+    ty += lineH;
+    _engine.drawText(l3, px + pad, ty, fontSize, gfx::SKYBLUE);
+    ty += lineH;
+    _engine.drawText(l4, px + pad, ty, fontSize, seasonColor(_state.season));
+    ty += lineH;
+    if (!followLine.empty())
+        _engine.drawText(followLine, px + pad, ty, fontSize, gfx::GOLD);
 
     if (_net && _net->closed())
-        _engine.drawText("DISCONNECTED", _engine.screenWidth() / 2 - 70, 10, 20, gfx::RED);
+        _engine.drawText("DÉCONNECTÉ", _engine.screenWidth() / 2 - 70, 10, 20, gfx::RED);
 
     // Crosshair: marks what a left click will select.
     const int cx = _engine.screenWidth() / 2, cy = _engine.screenHeight() / 2;
@@ -2542,8 +2576,8 @@ void Interface::drawStatsPanel()
 
     // Build the lines first so the panel can size itself.
     std::vector<std::pair<std::string, gfx::Color>> lines;
-    lines.push_back({"GLOBAL STATS  (Tab)", gfx::GOLD});
-    lines.push_back({"Resources on map:", gfx::SKYBLUE});
+    lines.push_back({"STATISTIQUES  (Tab)", gfx::GOLD});
+    lines.push_back({"Ressources sur la carte :", gfx::SKYBLUE});
     long grand = 0;
     for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
     {
@@ -2553,7 +2587,7 @@ void Interface::drawStatsPanel()
     }
     lines.push_back({gfx::fmt("  %-9s %ld", "TOTAL", grand), gfx::LIGHTGRAY});
 
-    lines.push_back({"Players per team:", gfx::SKYBLUE});
+    lines.push_back({"Joueurs par équipe :", gfx::SKYBLUE});
     for (const auto &team : _state.teams)
     {
         int alive = 0, top = 0;
@@ -2567,20 +2601,20 @@ void Interface::drawStatsPanel()
                     top = p.getLevel();
             }
         }
-        lines.push_back({gfx::fmt("  %-10s %d  (max lvl %d)", team.c_str(), alive, top), teamColor(team)});
+        lines.push_back({gfx::fmt("  %-10s %d  (niv max %d)", team.c_str(), alive, top), teamColor(team)});
     }
 
-    lines.push_back({"Players per level:", gfx::SKYBLUE});
+    lines.push_back({"Joueurs par niveau :", gfx::SKYBLUE});
     std::string lvlLine = "  ";
     for (int l = 0; l < 8; ++l)
         lvlLine += gfx::fmt("L%d:%d  ", l + 1, levelCounts[static_cast<size_t>(l)]);
     lines.push_back({lvlLine, gfx::RAYWHITE});
 
-    lines.push_back({gfx::fmt("Eggs: %d        Incantations: %d", static_cast<int>(_state.eggs.size()),
+    lines.push_back({gfx::fmt("Œufs : %d        Incantations : %d", static_cast<int>(_state.eggs.size()),
                               static_cast<int>(_state.incanting.size())),
                      gfx::BEIGE});
-    lines.push_back({gfx::fmt("Time unit: %d   Elapsed: %02d:%02d", _state.frequency, static_cast<int>(_elapsed) / 60,
-                              static_cast<int>(_elapsed) % 60),
+    lines.push_back({gfx::fmt("Unité de temps : %d   Temps : %02d:%02d", _state.frequency,
+                              static_cast<int>(_elapsed) / 60, static_cast<int>(_elapsed) % 60),
                      gfx::LIGHTGRAY});
 
     // Panel geometry: left side, under the HUD.
@@ -2591,8 +2625,7 @@ void Interface::drawStatsPanel()
     const int px = 10;
     const int py = 80;
 
-    _engine.drawRect(px, py, width, height, gfx::Color{0, 0, 0, 255});
-    _engine.drawRectLines(px, py, width, height, gfx::GOLD);
+    drawPanel(_engine, px, py, width, height, 255);
 
     int ty = py + pad;
     for (const auto &[text, color] : lines)
@@ -2676,16 +2709,16 @@ void Interface::drawBettingOverlay()
     const int titleW = _engine.measureText("CHOISIS TON PARI", 44);
     _engine.drawText("CHOISIS TON PARI", (sw - titleW) / 2, 42, 44, gfx::RAYWHITE);
 
-    const std::string subtitle = "La partie demarre quand tous les GUIs connectes ont valide une equipe.";
+    const std::string subtitle = "La partie démarre quand toutes les interfaces connectées ont validé une équipe.";
     _engine.drawText(subtitle, (sw - _engine.measureText(subtitle, 18)) / 2, 96, 18, gfx::LIGHTGRAY);
 
     const std::string status =
-        gfx::fmt("Paris valides: %d / %d", _state.bettingReady, std::max(1, _state.bettingTotal));
+        gfx::fmt("Paris validés : %d / %d", _state.bettingReady, std::max(1, _state.bettingTotal));
     _engine.drawText(status, (sw - _engine.measureText(status, 20)) / 2, 124, 20, gfx::GOLD);
 
     if (_state.teams.empty())
     {
-        const std::string waiting = "En attente des equipes...";
+        const std::string waiting = "En attente des équipes…";
         _engine.drawText(waiting, (sw - _engine.measureText(waiting, 24)) / 2, sh / 2, 24, gfx::LIGHTGRAY);
         return;
     }
@@ -2725,7 +2758,7 @@ void Interface::drawBettingOverlay()
 
         const int nameW = _engine.measureText(team, 24);
         _engine.drawText(team, cx - nameW / 2, r.y + r.h - 48, 24, gfx::RAYWHITE);
-        const std::string hint = picked ? "PARI VALIDE" : "cliquer pour parier";
+        const std::string hint = picked ? "PARI VALIDÉ" : "cliquer pour parier";
         _engine.drawText(hint, cx - _engine.measureText(hint, 15) / 2, r.y + r.h - 22, 15,
                          picked ? gfx::GOLD : gfx::LIGHTGRAY);
     }
@@ -2774,29 +2807,29 @@ void Interface::drawEndScreen()
     _engine.drawRect(px, py, width, height, gfx::Color{0, 0, 0, 126});
     _engine.drawRectLines(px, py, width, height, winnerColor);
 
-    _engine.drawText("ENTER to dismiss", px + width - 190, py + 24, 16, gfx::LIGHTGRAY);
-    _engine.drawText("VICTORY", px + pad, py + 18, 34, winnerColor);
-    _engine.drawText(gfx::fmt("%s wins", _state.winner.c_str()), px + pad, py + 58, 22, gfx::RAYWHITE);
+    _engine.drawText("ENTRÉE pour fermer", px + width - 190, py + 24, 16, gfx::LIGHTGRAY);
+    _engine.drawText("VICTOIRE", px + pad, py + 18, 34, winnerColor);
+    _engine.drawText(gfx::fmt("%s remporte la partie", _state.winner.c_str()), px + pad, py + 58, 22, gfx::RAYWHITE);
     if (!_state.bettingPick.empty())
     {
         const bool wonBet = _state.bettingPick == _state.winner;
         const std::string betLine =
-            gfx::fmt("Your bet: %s  -  %s", _state.bettingPick.c_str(), wonBet ? "WIN" : "LOST");
+            gfx::fmt("Ton pari : %s  —  %s", _state.bettingPick.c_str(), wonBet ? "GAGNÉ" : "PERDU");
         _engine.drawText(betLine, px + pad, py + 88, 18, wonBet ? gfx::GOLD : gfx::LIGHTGRAY);
     }
-    _engine.drawText(gfx::fmt("Alive players: %d   Eggs left: %d   Time unit: %d",
+    _engine.drawText(gfx::fmt("Joueurs vivants : %d   Œufs restants : %d   Unité de temps : %d",
                               static_cast<int>(alivePlayers.size()), static_cast<int>(_state.eggs.size()),
                               _state.frequency),
                      px + pad, py + (_state.bettingPick.empty() ? 88 : 110), 18, gfx::LIGHTGRAY);
 
     const int statsY = py + 124;
     const int teamNameW = 170;
-    _engine.drawText("GLOBAL CLAN STATS", px + pad, statsY, 20, gfx::SKYBLUE);
-    _engine.drawText("Team", px + pad, statsY + 34, 16, gfx::LIGHTGRAY);
-    _engine.drawText("Alive", px + pad + teamNameW, statsY + 34, 16, gfx::LIGHTGRAY);
+    _engine.drawText("STATISTIQUES DES CLANS", px + pad, statsY, 20, gfx::SKYBLUE);
+    _engine.drawText("Équipe", px + pad, statsY + 34, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Vivants", px + pad + teamNameW, statsY + 34, 16, gfx::LIGHTGRAY);
     _engine.drawText("Max", px + pad + teamNameW + 80, statsY + 34, 16, gfx::LIGHTGRAY);
-    _engine.drawText("Avg", px + pad + teamNameW + 145, statsY + 34, 16, gfx::LIGHTGRAY);
-    _engine.drawText("Lvl 8", px + pad + teamNameW + 215, statsY + 34, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Moy", px + pad + teamNameW + 145, statsY + 34, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Niv 8", px + pad + teamNameW + 215, statsY + 34, 16, gfx::LIGHTGRAY);
 
     int ty = statsY + 60;
     for (const auto &[team, stats] : teamStats)
@@ -2823,13 +2856,13 @@ void Interface::drawEndScreen()
     if (_endScroll > static_cast<float>(maxScroll))
         _endScroll = static_cast<float>(maxScroll);
 
-    _engine.drawText("ALIVE PLAYERS", listX, listY, 20, gfx::SKYBLUE);
+    _engine.drawText("JOUEURS VIVANTS", listX, listY, 20, gfx::SKYBLUE);
     _engine.drawText("ID", listX, listY + 30, 16, gfx::LIGHTGRAY);
-    _engine.drawText("Team", listX + 80, listY + 30, 16, gfx::LIGHTGRAY);
-    _engine.drawText("Lvl", listX + 290, listY + 30, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Équipe", listX + 80, listY + 30, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Niv", listX + 290, listY + 30, 16, gfx::LIGHTGRAY);
     _engine.drawText("Pos", listX + 360, listY + 30, 16, gfx::LIGHTGRAY);
     _engine.drawText("Dir", listX + 470, listY + 30, 16, gfx::LIGHTGRAY);
-    _engine.drawText("Life", listX + 540, listY + 30, 16, gfx::LIGHTGRAY);
+    _engine.drawText("Vie", listX + 540, listY + 30, 16, gfx::LIGHTGRAY);
 
     const int rowsY = listY + 54;
     const int rowsH = std::max(0, listH - 54);
@@ -2866,51 +2899,50 @@ void Interface::drawEndScreen()
 void Interface::drawHelpOverlay()
 {
     static const std::array<const char *, 34> kHelp = {
-        "CONTROLS  -  FREE CAMERA",
-        "Mouse           look around freely",
-        "Esc             release mouse (click game to capture)",
-        "ZQSD / Arrows   fly (Shift = faster)",
-        "Space / Ctrl    move up / down",
-        "Mouse wheel     fly speed",
-        "Left click      select the aimed tile (crosshair)",
-        "Double click    focus camera on that tile",
-        "R               reset to the overview",
-        "F               toggle fullscreen",
-        "G               follow / unfollow selected player",
-        "+ / -           simulation speed (sst)",
-        "P               pause / resume",
-        "PageDown / Up   step back / forward in time (1s)",
-        "End             jump back to live",
-        "Tab             toggle global stats",
-        "T               grid <-> torus world view",
-        "V               toggle seasonal FX (particles, fog, grading)",
-        "F5 / F6         force season / weather (debug)",
-        "F7              time-lapse day/night x40",
-        "M               toggle music",
-        "Enter           dismiss / show end screen (after a win)",
-        "H / F1          this help",
-        "F3              perf counters overlay",
+        "COMMANDES  —  CAMÉRA LIBRE",
+        "Souris          regarder librement",
+        "Échap           libérer la souris (cliquer pour capturer)",
+        "ZQSD / Flèches  voler (Maj = plus vite)",
+        "Espace / Ctrl   monter / descendre",
+        "Molette         vitesse de vol",
+        "Clic gauche     sélectionner la tuile visée (réticule)",
+        "Double clic     centrer la caméra sur la tuile",
+        "R               revenir à la vue d'ensemble",
+        "F               plein écran",
+        "G               suivre / lâcher le joueur sélectionné",
+        "+ / -           vitesse de simulation (sst)",
+        "P               pause / reprise",
+        "Pg.Préc / Suiv  reculer / avancer dans le temps (1s)",
+        "Fin             revenir au direct",
+        "Tab             afficher les statistiques",
+        "T               vue grille <-> tore",
+        "V               effets saisonniers (particules, brume)",
+        "F5 / F6         forcer saison / météo (debug)",
+        "F7              accéléré jour/nuit x40",
+        "M               couper / activer la musique",
+        "Entrée          fermer / écran de fin (après victoire)",
+        "H / F1          cette aide",
+        "F3              compteurs de performance",
         "",
-        "GAMEPAD (Xbox layout)",
-        "Sticks          left: fly   right: look (L3 = faster)",
-        "Triggers        RT: up   LT: down",
-        "LB / RB         fly speed down / up",
-        "A / X / Y / B   select / reset / follow / end screen",
-        "D-pad U/D       simulation speed",
-        "D-pad L/R       step back / forward in time",
-        "Start / Select  pause / stats",
-        "R3              this help",
+        "MANETTE (disposition Xbox)",
+        "Sticks          gauche : voler   droite : regarder (L3 = vite)",
+        "Gâchettes       RT : monter   LT : descendre",
+        "LB / RB         vitesse de vol - / +",
+        "A / X / Y / B   sélect. / reset / suivre / écran de fin",
+        "Croix H / B     vitesse de simulation",
+        "Croix G / D     reculer / avancer dans le temps",
+        "Start / Select  pause / statistiques",
+        "R3              cette aide",
     };
 
     const int pad = 16;
     const int lineH = 22;
-    const int width = 460;
+    const int width = 540;
     const int height = pad * 2 + static_cast<int>(kHelp.size()) * lineH;
     const int px = _engine.screenWidth() / 2 - width / 2;
     const int py = _engine.screenHeight() / 2 - height / 2;
 
-    _engine.drawRect(px, py, width, height, gfx::Color{0, 0, 0, 255});
-    _engine.drawRectLines(px, py, width, height, gfx::GOLD);
+    drawPanel(_engine, px, py, width, height, 255);
 
     int ty = py + pad;
     for (size_t i = 0; i < kHelp.size(); ++i)
@@ -2964,12 +2996,12 @@ void Interface::drawTimeline()
     // Mode label above the bar.
     if (_live)
     {
-        _engine.drawText("LIVE", x0, y0 - 20, 16, gfx::GREEN);
+        _engine.drawText("DIRECT", x0, y0 - 20, 16, gfx::GREEN);
     }
     else
     {
-        _engine.drawText(gfx::fmt("PAUSED  %.1fs / %.1fs  (PageUp/Down scrub, End: live)", _playT, last), x0, y0 - 20,
-                         16, gfx::GOLD);
+        _engine.drawText(gfx::fmt("PAUSE  %.1fs / %.1fs  (Pg.Préc/Suiv : défiler, Fin : direct)", _playT, last), x0,
+                         y0 - 20, 16, gfx::GOLD);
     }
 
     // Track + filled portion + cursor knob.
