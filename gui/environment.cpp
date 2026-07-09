@@ -205,16 +205,17 @@ float elevation01(float t, float centre, float fraction)
     return std::cos(std::clamp(arg, -kPi, kPi));
 }
 
-// Direction VERS l'astre : lever à l'est (+x), coucher à l'ouest (-x), arc
-// incliné vers -z pour que la trajectoire ne passe pas pile au zénith.
-gfx::Vec3 bodyDir(float t, float centre, float fraction, float maxElev, float elev01)
+// Direction VERS l'astre : lever à l'est (+x), coucher à l'ouest (-x). Arc de
+// cercle dans un plan incliné vers -z : culmine exactement à maxElev, jamais
+// au zénith, et le vecteur est unitaire par construction (pas de
+// renormalisation qui déformerait la trajectoire).
+gfx::Vec3 bodyDir(float t, float centre, float fraction, float maxElev)
 {
     float d = t - centre;
     d -= std::round(d);
     const float sp = std::clamp(d / std::max(fraction, 0.05f) + 0.5f, -0.2f, 1.2f);
-    const float az = sp * kPi;
-    const float el = elev01 * maxElev;
-    return gfx::normalize({std::cos(az) * std::cos(el), std::sin(el), -0.45f * std::cos(el)});
+    const float th = sp * kPi; // 0 = lever, pi/2 = culmination, pi = coucher
+    return {std::cos(th), std::sin(th) * std::sin(maxElev), -std::sin(th) * std::cos(maxElev)};
 }
 
 // Courbe de couleur du soleil selon son élévation : golden hour -> blanc.
@@ -273,8 +274,8 @@ void EnvironmentState::update(float dt)
     const float nightFraction = 1.0f - _cur.dayFraction;
     const float se = elevation01(_timeOfDay, 0.5f, _cur.dayFraction);
     const float me = elevation01(_timeOfDay, 0.0f, nightFraction);
-    const gfx::Vec3 toSun = bodyDir(_timeOfDay, 0.5f, _cur.dayFraction, kMaxSunElevation * _cur.sunArcHeight, se);
-    const gfx::Vec3 toMoon = bodyDir(_timeOfDay, 0.0f, nightFraction, 0.9f, me);
+    const gfx::Vec3 toSun = bodyDir(_timeOfDay, 0.5f, _cur.dayFraction, kMaxSunElevation * _cur.sunArcHeight);
+    const gfx::Vec3 toMoon = bodyDir(_timeOfDay, 0.0f, nightFraction, 0.9f);
 
     Snapshot &s = _snap;
     s.timeOfDay = _timeOfDay;

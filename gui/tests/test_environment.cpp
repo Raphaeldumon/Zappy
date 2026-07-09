@@ -80,6 +80,42 @@ int main()
     CHECK(d.snap().sunColor.z > d.snap().sunColor.x); // clair de lune bleuté
     CHECK(d.snap().particles.fireflies > 0.3f);       // lucioles la nuit (spring)
 
+    // --- trajectoire des astres: arc circulaire fidèle à la config ---
+    // Élévation réelle (rad) d'une direction VERS l'astre.
+    const auto elevOf = [](gfx::Vec3 lightDir) {
+        const gfx::Vec3 to = gfx::scale(lightDir, -1.0f);
+        return std::asin(to.y / gfx::length(to));
+    };
+    // Culmination à midi = kMaxSunElevation * sunArcHeight (spring: 1.13 rad).
+    env::EnvironmentState arc;
+    arc.setSeason("spring", "clear");
+    arc.setTimeScale(40.0f);
+    for (int i = 0; i < 600; ++i)
+        arc.update(0.016f);
+    advanceTo(arc, 0.498f, 0.502f);
+    CHECK(near(elevOf(arc.snap().sunDir), 1.13f, 0.05f));
+    // Lever plein est : à l'horizon, la direction est horizontale et sur +x.
+    advanceTo(arc, 0.998f, 1.0f);
+    arc.update(0.016f); // wrap
+    advanceTo(arc, 0.222f, 0.228f); // sunrise spring (0.5 - 0.55/2)
+    CHECK(std::fabs(elevOf(arc.snap().sunDir)) < 0.10f);
+    CHECK(-arc.snap().sunDir.x > 0.9f);
+    // Lune : culmine à minuit à 0.9 rad, pas plus haut.
+    advanceTo(arc, 0.499f, 0.503f);
+    advanceTo(arc, 0.998f, 1.0f);
+    arc.update(0.016f);
+    advanceTo(arc, 0.0f, 0.004f);
+    CHECK(near(elevOf(arc.snap().moonDir), 0.9f, 0.05f));
+
+    // Hiver : soleil rasant (arc bas), nettement plus bas qu'au printemps.
+    env::EnvironmentState low;
+    low.setSeason("winter", "clear");
+    low.setTimeScale(40.0f);
+    for (int i = 0; i < 600; ++i)
+        low.update(0.016f);
+    advanceTo(low, 0.498f, 0.502f);
+    CHECK(near(elevOf(low.snap().sunDir), 1.13f * 0.45f, 0.06f));
+
     // --- aurores: hiver de nuit seulement ---
     env::EnvironmentState n;
     n.setSeason("winter", "clear");
