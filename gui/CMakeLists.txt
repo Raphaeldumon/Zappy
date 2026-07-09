@@ -17,6 +17,17 @@ target_include_directories(zappy_gui_environment_tests PRIVATE "${CMAKE_CURRENT_
 target_compile_options(zappy_gui_environment_tests PRIVATE -Wall -Wextra)
 add_test(NAME gui_environment COMMAND zappy_gui_environment_tests)
 
+# Read-only Zappy TV HTTP dashboard (pure sockets, no raylib dependency).
+add_executable(zappy_gui_tv_tests
+    tests/test_tv_server.cpp
+    tvServer.cpp)
+set_target_properties(zappy_gui_tv_tests PROPERTIES
+    CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(zappy_gui_tv_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+target_compile_options(zappy_gui_tv_tests PRIVATE -Wall -Wextra)
+target_link_libraries(zappy_gui_tv_tests PRIVATE pthread dl)
+add_test(NAME gui_tv_dashboard COMMAND zappy_gui_tv_tests)
+
 find_library(RAYLIB_LIBRARY NAMES raylib)
 
 if(NOT RAYLIB_LIBRARY)
@@ -34,7 +45,8 @@ add_executable(zappy_gui
     protocolParser.cpp
     environment.cpp
     particles.cpp
-    groundCover.cpp)
+    groundCover.cpp
+    tvServer.cpp)
 
 set_target_properties(zappy_gui PROPERTIES
     CXX_STANDARD 17

@@ -26,7 +26,7 @@ MAP_H        ?= 25
 TEAMS        ?= rouge bleu vert jaune
 CLIENTS      ?= 50
 FREQ         ?= 1000
-BOTS         ?= 1
+BOTS         ?= 6
 HOST         ?= 127.0.0.1
 
 # Mandatory Epitech rules: all, clean, fclean, re — plus the subject-mandated

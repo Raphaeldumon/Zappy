@@ -46,6 +46,10 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     loadMeteoriteModel();
     loadIncantationModel();
     loadBackgroundMusic();
+    if (_tvServer.start())
+        gfx::logInfo("Zappy TV dashboard ready at %s", _tvServer.url().c_str());
+    else
+        gfx::logWarn("Zappy TV dashboard could not bind a local HTTP port");
     _engine.disableCursor(); // capture the mouse for free-look; Esc releases it
 }
 
@@ -1049,6 +1053,10 @@ void Interface::handleInput()
         initCamera();
     }
 
+    // ---- Physical Q key (A on AZERTY): expose Zappy TV to local phones.
+    if (_engine.keyPressed(gfx::Key::Q))
+        _showTvQr = !_showTvQr;
+
     // ---- T: swap the world between the flat grid and its true torus shape.
     if (_engine.keyPressed(gfx::Key::T))
         toggleTorusView();
@@ -1323,6 +1331,15 @@ void Interface::update()
 
     // Drive per-player animation state (walk/idle/dance + one-shots + death ghosts).
     updatePlayerAnimations();
+
+    // The web UI polls once per second, so publishing at 4 Hz is responsive
+    // without rebuilding JSON or taking a mutex on every rendered frame.
+    _tvPublishCooldown -= _engine.frameTime();
+    if (_tvPublishCooldown <= 0.0f)
+    {
+        publishTvState();
+        _tvPublishCooldown = 0.25f;
+    }
 }
 
 void Interface::updateRandomEvents(float dt)
@@ -1906,6 +1923,8 @@ void Interface::render()
         drawStatsPanel();
     if (_showHelp)
         drawHelpOverlay();
+    if (_showTvQr)
+        drawTvQrOverlay();
     if (_state.hasWinner && !_endHidden)
         drawEndScreen();
     if (_state.bettingOpen && !_state.bettingStarted)
@@ -2623,7 +2642,7 @@ void Interface::drawStatsPanel()
     const int width = 530;
     const int height = pad * 2 + static_cast<int>(lines.size()) * lineH;
     const int px = 10;
-    const int py = 80;
+    const int py = 120;
 
     drawPanel(_engine, px, py, width, height, 255);
 
@@ -2896,9 +2915,93 @@ void Interface::drawEndScreen()
     }
 }
 
+void Interface::publishTvState()
+{
+    if (!_tvServer.running())
+        return;
+
+    TvSnapshot snapshot;
+    snapshot.totalPlayers = static_cast<int>(_state.players.size());
+    snapshot.eggs = static_cast<int>(_state.eggs.size());
+    snapshot.frequency = _state.frequency;
+    snapshot.season = _state.season;
+    snapshot.weather = _state.weather;
+    snapshot.winner = _state.hasWinner ? _state.winner : "";
+    snapshot.teams.reserve(_state.teams.size());
+
+    for (const std::string &name : _state.teams)
+    {
+        TvTeamSnapshot team;
+        team.name = name;
+        for (const auto &[id, player] : _state.players)
+        {
+            (void)id;
+            if (player.getTeam() != name)
+                continue;
+            ++team.players;
+            team.maxLevel = std::max(team.maxLevel, player.getLevel());
+            team.levelSum += player.getLevel();
+        }
+        snapshot.teams.push_back(std::move(team));
+    }
+    _tvServer.publish(std::move(snapshot));
+}
+
+void Interface::drawTvQrOverlay()
+{
+    const int sw = _engine.screenWidth();
+    const int sh = _engine.screenHeight();
+    _engine.drawRect(0, 0, sw, sh, gfx::Color{5, 6, 18, 225});
+
+    const int panelW = std::min(660, sw - 40);
+    const int panelH = std::min(710, sh - 40);
+    const int px = (sw - panelW) / 2;
+    const int py = (sh - panelH) / 2;
+    drawPanel(_engine, px, py, panelW, panelH, 250);
+
+    const std::string title = "ZAPPY TV";
+    _engine.drawText(title, px + (panelW - _engine.measureText(title, 46)) / 2, py + 24, 46, gfx::GOLD);
+    const std::string subtitle = "SCANNEZ POUR SUIVRE LA PARTIE EN DIRECT";
+    _engine.drawText(subtitle, px + (panelW - _engine.measureText(subtitle, 18)) / 2, py + 82, 18,
+                     gfx::Color{190, 200, 230, 255});
+
+    const auto &modules = _tvServer.qrModules();
+    const int width = _tvServer.qrWidth();
+    if (!modules.empty() && width > 0)
+    {
+        constexpr int quiet = 4;
+        const int scale = std::max(1, std::min(12, 360 / (width + quiet * 2)));
+        const int qrPixels = (width + quiet * 2) * scale;
+        const int qx = px + (panelW - qrPixels) / 2;
+        const int qy = py + 120;
+        _engine.drawRect(qx, qy, qrPixels, qrPixels, gfx::WHITE);
+        for (int y = 0; y < width; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                if (modules[static_cast<std::size_t>(y * width + x)] != 0)
+                    _engine.drawRect(qx + (x + quiet) * scale, qy + (y + quiet) * scale, scale, scale, gfx::BLACK);
+            }
+        }
+    }
+    else
+    {
+        const std::string unavailable = "QR indisponible — ouvrez l'adresse ci-dessous";
+        _engine.drawText(unavailable, px + (panelW - _engine.measureText(unavailable, 18)) / 2, py + 290, 18,
+                         gfx::Color{255, 180, 100, 255});
+    }
+
+    const std::string address = _tvServer.running() ? _tvServer.url() : "Serveur web indisponible";
+    _engine.drawText(address, px + (panelW - _engine.measureText(address, 23)) / 2, py + panelH - 104, 23,
+                     gfx::Color{105, 225, 255, 255});
+    const std::string hint = "Même Wi-Fi requis  •  A POUR FERMER";
+    _engine.drawText(hint, px + (panelW - _engine.measureText(hint, 16)) / 2, py + panelH - 58, 16,
+                     gfx::Color{145, 155, 185, 255});
+}
+
 void Interface::drawHelpOverlay()
 {
-    static const std::array<const char *, 34> kHelp = {
+    static const std::array<const char *, 35> kHelp = {
         "COMMANDES  —  CAMÉRA LIBRE",
         "Souris          regarder librement",
         "Échap           libérer la souris (cliquer pour capturer)",
@@ -2908,6 +3011,7 @@ void Interface::drawHelpOverlay()
         "Clic gauche     sélectionner la tuile visée (réticule)",
         "Double clic     centrer la caméra sur la tuile",
         "R               revenir à la vue d'ensemble",
+        "A               QR code Zappy TV (dashboard web)",
         "F               plein écran",
         "G               suivre / lâcher le joueur sélectionné",
         "+ / -           vitesse de simulation (sst)",
@@ -2947,7 +3051,7 @@ void Interface::drawHelpOverlay()
     int ty = py + pad;
     for (size_t i = 0; i < kHelp.size(); ++i)
     {
-        const bool header = (i == 0 || i == 25); // section titles
+        const bool header = (i == 0 || i == 26); // section titles
         _engine.drawText(kHelp[i], px + pad, ty, header ? 20 : 16, header ? gfx::GOLD : gfx::RAYWHITE);
         ty += lineH;
     }

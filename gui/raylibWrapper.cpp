@@ -84,6 +84,8 @@ int toRlKey(gfx::Key k)
         return KEY_LEFT_CONTROL;
     case gfx::Key::C:
         return KEY_C;
+    case gfx::Key::Q:
+        return KEY_Q;
     case gfx::Key::R:
         return KEY_R;
     case gfx::Key::F:

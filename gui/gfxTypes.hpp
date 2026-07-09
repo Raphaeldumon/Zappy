@@ -94,6 +94,7 @@ enum class Key
     RightShift,
     LeftControl,
     C,
+    Q,
     R,
     F,
     G,

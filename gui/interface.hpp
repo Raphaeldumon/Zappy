@@ -8,6 +8,7 @@
 #include "netClient.hpp"
 #include "protocolParser.hpp"
 #include "raylibWrapper.hpp"
+#include "tvServer.hpp"
 #include <array>
 #include <cstdint>
 #include <deque>
@@ -160,6 +161,13 @@ class Interface
     std::unique_ptr<NetClient> _net; // live server connection (post-handshake)
     ProtocolParser _parser;          // applies wire lines to _map + _state
     GuiState _state;                 // players, eggs, teams, winner
+
+    // --- Zappy TV web dashboard (physical Q, displayed as A for AZERTY) ---
+    // A read-only local HTTP page mirrors the live teams and match state. The
+    // overlay exposes its LAN URL as a QR code for phones on the same Wi-Fi.
+    TvServer _tvServer;
+    bool _showTvQr{false};
+    float _tvPublishCooldown{0.0f};
 
     // --- Selection ---
     // Tile picked by left-click; (-1,-1) = nothing selected. Drives the 3D
@@ -345,6 +353,8 @@ class Interface
     void drawStatsPanel();                               // global environment stats (Tab)
     void drawHelpOverlay();                              // full controls list (H / F1)
     void drawEndScreen();                                // centered winner summary after seg
+    void publishTvState();                               // current GuiState -> web snapshot
+    void drawTvQrOverlay();                              // A: local dashboard QR + URL
     void handleBettingInput();                           // pre-game betting cards
     void drawBettingOverlay();                           // pre-game betting lobby
     gfx::Color teamColor(const std::string &team) const; // palette by team slot (max 8)
