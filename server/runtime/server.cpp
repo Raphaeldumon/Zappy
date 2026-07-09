@@ -246,7 +246,7 @@ void Server::on_client_disconnect(int fd)
 {
     gui_fds_.erase(fd);
     gui_bets_.erase(fd);
-    start_game_if_bets_complete();
+    start_game_if_ready();
 
     auto it = fd_to_player_.find(fd);
     if (it == fd_to_player_.end())
@@ -345,6 +345,10 @@ void Server::complete_ai_handshake(int fd, core::TeamId team_id, std::string_vie
 
     if (game_started_)
         schedule_food_consumption(p.id);
+    else
+        // Headless play (no GUI) must not stall behind the betting lobby: the
+        // arrival of an AI is enough to kick off a game nobody is betting on.
+        start_game_if_ready();
 }
 
 void Server::complete_gui_handshake(int fd)
@@ -446,14 +450,28 @@ bool Server::handle_bet_request(int fd, std::string_view line)
     gui_bets_[fd] = team;
     net_.send_to(fd, protocol::GuiEmitter::smg("bet_pick " + team));
     broadcast_betting_status();
-    start_game_if_bets_complete();
+    start_game_if_ready();
     return true;
 }
 
-void Server::start_game_if_bets_complete()
+void Server::start_game_if_ready()
 {
-    if (game_started_ || gui_fds_.empty() || gui_bets_.size() != gui_fds_.size())
+    if (game_started_)
         return;
+    if (!gui_fds_.empty())
+    {
+        // A GUI is watching: hold the game in the betting lobby until every
+        // connected GUI has locked in a team.
+        if (gui_bets_.size() != gui_fds_.size())
+            return;
+    }
+    else if (fd_to_player_.empty())
+    {
+        // No GUI and no AI yet: nothing to run. Don't start the world clock on
+        // an empty server — wait for the first client.
+        return;
+    }
+    // Headless (no GUI) with AIs connected, or all GUIs have bet: run the game.
     start_game();
 }
 

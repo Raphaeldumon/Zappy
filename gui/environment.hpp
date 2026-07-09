@@ -83,9 +83,20 @@ class EnvironmentState
     }
 
   private:
+    // Paramètres de trajectoire d'un astre, gelés pendant son vol : rafraîchis
+    // seulement sous l'horizon (saut invisible) pour que le déplacement reste
+    // continu et linéaire du lever au coucher. fraction <= 0 = pas encore init.
+    struct Flight
+    {
+        float fraction{0};
+        float maxElev{0};
+    };
+
     std::string _season{"spring"}, _weather{"clear"};
     Profile _cur{profileFor("spring", "clear")};
     Profile _tgt{_cur};
+    Flight _sunFlight{};
+    Flight _moonFlight{};
     Snapshot _snap{};
     float _timeOfDay{0.35f}; // démarre en matinée
     float _timeScale{1.0f};

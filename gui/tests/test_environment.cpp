@@ -1,5 +1,6 @@
 // Tests unitaires du module environnement (aucune dépendance raylib).
 #include "environment.hpp"
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -106,6 +107,44 @@ int main()
     arc.update(0.016f);
     advanceTo(arc, 0.0f, 0.004f);
     CHECK(near(elevOf(arc.snap().moonDir), 0.9f, 0.05f));
+
+    // --- déplacement continu et linéaire du lever au coucher ---
+    // Un changement de saison en plein vol ne doit PAS déformer la trajectoire
+    // visible : la vitesse angulaire reste constante, les nouveaux paramètres
+    // (durée du jour, hauteur d'arc) s'appliquent au lever suivant.
+    {
+        const auto angleBetween = [](gfx::Vec3 a, gfx::Vec3 b) {
+            const float d = std::clamp(a.x * b.x + a.y * b.y + a.z * b.z, -1.0f, 1.0f);
+            return std::acos(d);
+        };
+        env::EnvironmentState lin;
+        lin.setSeason("winter", "clear");
+        lin.setTimeScale(1.0f);
+        for (int i = 0; i < 2000; ++i)
+            lin.update(0.016f); // profil hiver convergé
+        advanceTo(lin, 0.40f, 0.405f); // soleil en vol (milieu de matinée)
+        // Vitesse de référence en régime stable.
+        gfx::Vec3 prev = lin.snap().sunDir;
+        lin.update(0.016f);
+        const float baseStep = angleBetween(prev, lin.snap().sunDir);
+        // Changement de saison en plein vol : la position ne doit pas déraper.
+        lin.setSeason("summer", "clear");
+        float maxStep = 0.0f;
+        for (int i = 0; i < 400; ++i) // ~6.4 s, couvre tout le fondu de profil
+        {
+            prev = lin.snap().sunDir;
+            lin.update(0.016f);
+            if (lin.snap().sunVisibility > 0.5f)
+                maxStep = std::max(maxStep, angleBetween(prev, lin.snap().sunDir));
+        }
+        CHECK(maxStep < baseStep * 1.5f);
+        // Les paramètres d'été s'appliquent bien au cycle suivant : culmination
+        // haute (1.13 * 1.15) une fois le soleil recouché puis relevé.
+        lin.setTimeScale(40.0f);
+        advanceTo(lin, 0.05f, 0.10f); // nuit profonde : rafraîchissement
+        advanceTo(lin, 0.498f, 0.502f);
+        CHECK(near(elevOf(lin.snap().sunDir), 1.13f * 1.15f, 0.06f));
+    }
 
     // Hiver : soleil rasant (arc bas), nettement plus bas qu'au printemps.
     env::EnvironmentState low;

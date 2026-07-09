@@ -48,7 +48,7 @@ class Server
     void send_gui_snapshot(int fd);
     void broadcast_betting_status();
     bool handle_bet_request(int fd, std::string_view line);
-    void start_game_if_bets_complete();
+    void start_game_if_ready();
     void start_game();
 
     // AI command pipeline

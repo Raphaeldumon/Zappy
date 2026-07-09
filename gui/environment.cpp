@@ -271,11 +271,21 @@ void EnvironmentState::update(float dt)
     _flash = std::max(0.0f, _flash - dt * 5.0f);
 
     // --- Astres : soleil centré sur t=0.5, lune en opposition (t=0). ---
-    const float nightFraction = 1.0f - _cur.dayFraction;
-    const float se = elevation01(_timeOfDay, 0.5f, _cur.dayFraction);
-    const float me = elevation01(_timeOfDay, 0.0f, nightFraction);
-    const gfx::Vec3 toSun = bodyDir(_timeOfDay, 0.5f, _cur.dayFraction, kMaxSunElevation * _cur.sunArcHeight);
-    const gfx::Vec3 toMoon = bodyDir(_timeOfDay, 0.0f, nightFraction, 0.9f);
+    // Trajectoire gelée pendant le vol : si la saison change (le profil lerpe
+    // dayFraction / sunArcHeight), l'astre en vol garderait sinon une position
+    // qui dérape à plusieurs fois sa vitesse. Les paramètres ne se rafraîchissent
+    // que sous l'horizon — ancien ET nouveau — où le saut est invisible.
+    const auto refresh = [this](Flight &f, float centre, float fraction, float maxElev) {
+        if (f.fraction <= 0.0f || (elevation01(_timeOfDay, centre, f.fraction) < -0.1f &&
+                                   elevation01(_timeOfDay, centre, fraction) < -0.1f))
+            f = {fraction, maxElev};
+    };
+    refresh(_sunFlight, 0.5f, _cur.dayFraction, kMaxSunElevation * _cur.sunArcHeight);
+    refresh(_moonFlight, 0.0f, 1.0f - _cur.dayFraction, 0.9f);
+    const float se = elevation01(_timeOfDay, 0.5f, _sunFlight.fraction);
+    const float me = elevation01(_timeOfDay, 0.0f, _moonFlight.fraction);
+    const gfx::Vec3 toSun = bodyDir(_timeOfDay, 0.5f, _sunFlight.fraction, _sunFlight.maxElev);
+    const gfx::Vec3 toMoon = bodyDir(_timeOfDay, 0.0f, _moonFlight.fraction, _moonFlight.maxElev);
 
     Snapshot &s = _snap;
     s.timeOfDay = _timeOfDay;
