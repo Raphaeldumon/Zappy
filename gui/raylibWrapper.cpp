@@ -88,6 +88,8 @@ int toRlKey(gfx::Key k)
         return KEY_R;
     case gfx::Key::F:
         return KEY_F;
+    case gfx::Key::G:
+        return KEY_G;
     case gfx::Key::P:
         return KEY_P;
     case gfx::Key::M:
@@ -290,6 +292,8 @@ struct RaylibEngine::Impl
     bool floorLoaded{false};
     int floorViewPosLoc{-1};
     int floorOverlayLoc{-1}, floorMixLoc{-1};
+    // Carte d'accumulation au sol (neige/feuilles/eau/traces) : sampler + infos.
+    int floorCoverLoc{-1}, floorCoverOnLoc{-1}, floorWorldSizeLoc{-1}, floorTileSizeLoc{-1}, floorTimeLoc{-1};
 
     // Shadow map (FBO depth-only) + locations par shader.
     RenderTexture2D shadowRT{};
@@ -413,6 +417,13 @@ int RaylibEngine::screenWidth() const
 int RaylibEngine::screenHeight() const
 {
     return GetScreenHeight();
+}
+void RaylibEngine::toggleFullscreen()
+{
+    // Borderless rather than exclusive fullscreen: no video-mode switch, so
+    // alt-tab stays instant and the post-FX render targets just follow the
+    // next GetScreenWidth/Height reading.
+    ToggleBorderlessWindowed();
 }
 void RaylibEngine::drawFps(int x, int y)
 {
@@ -564,6 +575,25 @@ void RaylibEngine::unloadTexture(gfx::TextureHandle h)
     }
 }
 
+gfx::TextureHandle RaylibEngine::createDataTexture(int w, int h)
+{
+    Image img = GenImageColor(w, h, BLANK);
+    Texture2D t = LoadTextureFromImage(img);
+    UnloadImage(img);
+    if (t.id == 0)
+        return gfx::NoHandle;
+    SetTextureFilter(t, TEXTURE_FILTER_BILINEAR);
+    SetTextureWrap(t, TEXTURE_WRAP_REPEAT); // la carte boucle (tore)
+    _impl->textures.push_back(t);
+    return static_cast<gfx::TextureHandle>(_impl->textures.size() - 1);
+}
+
+void RaylibEngine::updateTexture(gfx::TextureHandle h, const std::uint8_t *rgba)
+{
+    if (_impl->valid(h, _impl->textures.size()) && _impl->textures[h].id != 0)
+        UpdateTexture(_impl->textures[h], rgba);
+}
+
 // ---------------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------------
@@ -690,6 +720,11 @@ bool RaylibEngine::loadFloorShader(const std::string &vs, const std::string &fs)
     _impl->floorScene = cacheSceneLocs(s);
     _impl->floorOverlayLoc = GetShaderLocation(s, "groundOverlay");
     _impl->floorMixLoc = GetShaderLocation(s, "groundMix");
+    _impl->floorCoverLoc = GetShaderLocation(s, "coverMap");
+    _impl->floorCoverOnLoc = GetShaderLocation(s, "coverOn");
+    _impl->floorWorldSizeLoc = GetShaderLocation(s, "worldSize");
+    _impl->floorTileSizeLoc = GetShaderLocation(s, "tileSize");
+    _impl->floorTimeLoc = GetShaderLocation(s, "time");
     applySceneUniforms(s, _impl->floorScene, Vector3{-0.30f, -0.86f, -0.39f}, Vector3{1.00f, 0.96f, 0.88f},
                        Vector3{0.42f, 0.44f, 0.52f}, Vector3{0, 0, 0}, 0.0f);
     setGroundSeason({1, 1, 1}, 0.0f);
@@ -718,6 +753,35 @@ void RaylibEngine::setGroundSeason(gfx::Vec3 overlay, float mix)
         SetShaderValue(_impl->floorShader, _impl->floorOverlayLoc, &o, SHADER_UNIFORM_VEC3);
     if (_impl->floorMixLoc >= 0)
         SetShaderValue(_impl->floorShader, _impl->floorMixLoc, &mix, SHADER_UNIFORM_FLOAT);
+}
+
+void RaylibEngine::setGroundCover(gfx::TextureHandle tex, float worldW, float worldH, float tileSize, float time,
+                                  bool on)
+{
+    if (!_impl->floorLoaded)
+        return;
+    Shader s = _impl->floorShader;
+    const int enabled = (on && _impl->valid(tex, _impl->textures.size()) && _impl->textures[tex].id != 0) ? 1 : 0;
+    if (_impl->floorCoverOnLoc >= 0)
+        SetShaderValue(s, _impl->floorCoverOnLoc, &enabled, SHADER_UNIFORM_INT);
+    const Vector2 ws{worldW, worldH};
+    if (_impl->floorWorldSizeLoc >= 0)
+        SetShaderValue(s, _impl->floorWorldSizeLoc, &ws, SHADER_UNIFORM_VEC2);
+    if (_impl->floorTileSizeLoc >= 0)
+        SetShaderValue(s, _impl->floorTileSizeLoc, &tileSize, SHADER_UNIFORM_FLOAT);
+    if (_impl->floorTimeLoc >= 0)
+        SetShaderValue(s, _impl->floorTimeLoc, &time, SHADER_UNIFORM_FLOAT);
+    if (enabled && _impl->floorCoverLoc >= 0)
+    {
+        // Même mécanisme que la shadow map : slot fixe hors de portée des
+        // material maps raylib (0..9) ; 10 = shadow map, 11 = cover map.
+        const int slot = 11;
+        rlEnableShader(s.id);
+        rlActiveTextureSlot(slot);
+        rlEnableTexture(_impl->textures[tex].id);
+        rlSetUniform(_impl->floorCoverLoc, &slot, SHADER_UNIFORM_INT, 1);
+        rlActiveTextureSlot(0);
+    }
 }
 
 void RaylibEngine::beginFloorShading()

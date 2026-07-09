@@ -2,6 +2,7 @@
 
 #include "gameMap.hpp"
 #include "environment.hpp"
+#include "groundCover.hpp"
 #include "guiState.hpp"
 #include "particles.hpp"
 #include "netClient.hpp"
@@ -93,6 +94,7 @@ class Interface
         gfx::ModelHandle handle{gfx::NoHandle};
         gfx::Vec3 scale{1.0f, 1.0f, 1.0f}; // per-axis scale baked at load so every model
                                            // ends up the same display size (see loadResourceModels)
+        float height{0.0f}; // display height after scaling — layer step when stacking piles
         bool loaded{false};
     };
     std::vector<ResourceModel> _resourceModels{};
@@ -284,6 +286,10 @@ class Interface
     int _forceWeather{-1};        // F6: index dans kDebugWeathers, -1 = serveur
     ParticleSystem _particles;
     gfx::TextureHandle _particleDot{gfx::NoHandle}; // disque doux généré
+    // Accumulation au sol (neige/feuilles/eau) + traces de robots, uploadée
+    // en texture pour le floor shader et échantillonnée CPU pour le tore.
+    GroundCover _cover;
+    gfx::TextureHandle _coverTexture{gfx::NoHandle};
     bool _endHidden{false};           // Enter: dismiss the end screen to keep using the GUI
     bool _mouseCaptured{true};        // Esc releases; click inside captures for free-look
     float _endScroll{0.0f};           // mouse-wheel offset for the end-screen player list

@@ -62,8 +62,10 @@ Profile seasonBase(const std::string &s)
         p.fogColor = {0.50f, 0.42f, 0.35f};
         p.fogDensity = 0.00018f;
         p.gradeGain = {1.08f, 0.96f, 0.86f};
+        // Teinte légère seulement : la vraie litière de feuilles s'accumule
+        // dans GroundCover (le sol roussit, il n'est pas repeint).
         p.groundOverlay = {0.72f, 0.45f, 0.18f};
-        p.groundMix = 0.45f;
+        p.groundMix = 0.22f;
         p.dayFraction = 0.45f;
         p.sunArcHeight = 0.70f;
         p.auroraMax = 0.45f;
@@ -83,8 +85,10 @@ Profile seasonBase(const std::string &s)
         p.fogDensity = 0.00030f;
         p.gradeLift = {0.02f, 0.03f, 0.05f};
         p.gradeGain = {0.94f, 0.98f, 1.06f};
+        // Givre léger seulement : la neige épaisse vient de l'accumulation
+        // GroundCover, pas d'une repeinture instantanée du sol.
         p.groundOverlay = {0.92f, 0.95f, 1.00f};
-        p.groundMix = 0.78f;
+        p.groundMix = 0.32f;
         p.dayFraction = 0.35f;
         p.sunArcHeight = 0.45f;
         p.auroraMax = 1.0f;

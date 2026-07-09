@@ -33,7 +33,8 @@ add_executable(zappy_gui
     netClient.cpp
     protocolParser.cpp
     environment.cpp
-    particles.cpp)
+    particles.cpp
+    groundCover.cpp)
 
 set_target_properties(zappy_gui PROPERTIES
     CXX_STANDARD 17

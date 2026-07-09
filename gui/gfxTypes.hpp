@@ -96,6 +96,7 @@ enum class Key
     C,
     R,
     F,
+    G,
     P,
     M,
     T,

@@ -1,6 +1,7 @@
 #pragma once
 #include "gfxTypes.hpp"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -46,6 +47,7 @@ class RaylibEngine
     void enableCursor();
     int screenWidth() const;
     int screenHeight() const;
+    void toggleFullscreen(); // borderless fullscreen on the current monitor
     void drawFps(int x, int y);
 
     // --- Input ---
@@ -80,6 +82,10 @@ class RaylibEngine
     gfx::TextureHandle loadTexture(const std::string &path); // NoHandle on fail
     void setTextureBilinear(gfx::TextureHandle h);
     void unloadTexture(gfx::TextureHandle h);
+    // Texture RGBA8 dynamique (init noire) + réécriture CPU -> GPU intégrale.
+    // Filtrage bilinéaire, wrap repeat (la carte boucle en mode tore).
+    gfx::TextureHandle createDataTexture(int w, int h);
+    void updateTexture(gfx::TextureHandle h, const std::uint8_t *rgba);
 
     // --- Models ---
     // loadModel returns NoHandle if the file is missing or has no mesh.
@@ -164,6 +170,10 @@ class RaylibEngine
                           float fogDensity);
     // Teinte saisonnière du sol (floor shader uniquement).
     void setGroundSeason(gfx::Vec3 overlay, float mix);
+    // Carte d'accumulation (neige/feuilles/eau/traces) échantillonnée par le
+    // floor shader en coordonnées monde. À pousser chaque frame (time anime
+    // les ondulations de flaques) ; on=false neutralise la couverture.
+    void setGroundCover(gfx::TextureHandle tex, float worldW, float worldH, float tileSize, float time, bool on);
     // Shader dédié au sol batché (drawCheckerFloor l'active tout seul ; le sol
     // torique immédiat se bracket via begin/endFloorShading).
     bool loadFloorShader(const std::string &vs, const std::string &fs);

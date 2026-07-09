@@ -11,7 +11,8 @@ namespace fs = std::filesystem;
 // Constructor
 // ---------------------------------------------------------------------------
 Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight, int windowWidth, int windowHeight)
-    : _engine(windowWidth, windowHeight, std::string(WINDOW_TITLE)), _map(mapWidth, mapHeight), _net(std::move(net))
+    : _engine(windowWidth, windowHeight, std::string(WINDOW_TITLE)), _map(mapWidth, mapHeight),
+      _net(std::move(net)), _cover(mapWidth, mapHeight, TILE_SIZE)
 {
     initCamera();
     // Ciel procédural (jour/nuit, nébuleuses, aurores) ; si le shader échoue,
@@ -33,6 +34,7 @@ Interface::Interface(std::unique_ptr<NetClient> net, int mapWidth, int mapHeight
     _engine.loadInstancingShader("assets/shaders/lighting_instancing.vs", "assets/shaders/lighting.fs");
     _engine.enablePostFx("assets/shaders/bloom_extract.fs", "assets/shaders/post_composite.fs");
     _engine.loadFloorShader("assets/shaders/floor.vs", "assets/shaders/floor.fs");
+    _coverTexture = _engine.createDataTexture(_cover.width(), _cover.height());
     _engine.enableShadows(4096);
     // Global UI font: every drawText/measureText call goes through it once
     // loaded; on failure the engine silently keeps raylib's built-in font.
@@ -230,6 +232,7 @@ void Interface::loadResourceModels()
                     // Upright object → force into a uniform box so every can is
                     // the same size whatever its native proportions.
                     rm.scale = {kItemWidth / sx, kItemHeight / sy, kItemWidth / sz};
+                    rm.height = kItemHeight;
                 }
                 else
                 {
@@ -237,6 +240,7 @@ void Interface::loadResourceModels()
                     // footprint so it fills the tile instead of looking tiny.
                     const float s = kFlatWidth / foot;
                     rm.scale = {s, s, s};
+                    rm.height = sy * s;
                 }
 
                 gfx::logInfo("RESMODEL %zu '%s' bbox dx=%.2f dy=%.2f dz=%.2f scale=(%.1f,%.1f,%.1f)", i, path, dx, dy,
@@ -786,19 +790,31 @@ void Interface::drawTorusFloor()
                     const float v0 = (y + static_cast<float>(j) / subV) * TILE_SIZE;
                     const float v1 = (y + static_cast<float>(j + 1) / subV) * TILE_SIZE;
 
-                    const Surface mid = surfaceAt((u0 + u1) * 0.5f, (v0 + v1) * 0.5f, 0.0f);
+                    const float midU = (u0 + u1) * 0.5f, midV = (v0 + v1) * 0.5f;
+                    const Surface mid = surfaceAt(midU, midV, 0.0f);
                     const float lum =
                         std::min(1.0f, ambLum + lightLum * std::max(0.0f, gfx::dot(mid.up, lightDir)));
 
-                    // Teinte saison : texture -> overlay (neige, or, roux...).
-                    auto shade = [&](float channelBase, float overlayC) {
-                        const float c = channelBase * (1.0f - mixAmt) + overlayC * 255.0f * mixAmt;
-                        return static_cast<std::uint8_t>(std::min(255.0f, c * lum));
+                    // Teinte saison (texture -> overlay) puis accumulation
+                    // (feuilles -> roux, eau -> sombre, neige -> blanc, la
+                    // trace des robots assombrit la neige) — l'équivalent CPU
+                    // du floor shader, par sous-quad.
+                    const GroundCover::Sample cs = _cover.sample(midU, midV);
+                    const float snowK = std::min(cs.snow * 1.3f, 1.0f);
+                    const float leafK = std::min(cs.leaf * 1.2f, 1.0f) * 0.9f;
+                    auto shade = [&](float channelBase, float overlayC, float leafC, float snowC) {
+                        float c = (channelBase / 255.0f) * (1.0f - mixAmt) + overlayC * mixAmt;
+                        c += (leafC - c) * leafK;
+                        c *= 1.0f - 0.35f * cs.wet;
+                        c += (snowC * (1.0f - 0.30f * cs.trail) - c) * snowK;
+                        return static_cast<std::uint8_t>(std::clamp(c * lum * 255.0f, 0.0f, 255.0f));
                     };
-                    const gfx::Color texTint{shade(255.0f, overlay.x), shade(255.0f, overlay.y),
-                                             shade(255.0f, overlay.z), 255};
-                    const gfx::Color flatTint{shade(base.r, overlay.x), shade(base.g, overlay.y),
-                                              shade(base.b, overlay.z), 255};
+                    const gfx::Color texTint{shade(255.0f, overlay.x, 0.62f, 0.88f),
+                                             shade(255.0f, overlay.y, 0.30f, 0.92f),
+                                             shade(255.0f, overlay.z, 0.10f, 1.00f), 255};
+                    const gfx::Color flatTint{shade(base.r, overlay.x, 0.62f, 0.88f),
+                                              shade(base.g, overlay.y, 0.30f, 0.92f),
+                                              shade(base.b, overlay.z, 0.10f, 1.00f), 255};
 
                     const gfx::Vec3 a = surfaceAt(u0, v0, 0.0f).pos;
                     const gfx::Vec3 b = surfaceAt(u1, v0, 0.0f).pos;
@@ -1033,9 +1049,13 @@ void Interface::handleInput()
     if (_engine.keyPressed(gfx::Key::F7))
         _env.setTimeScale(_env.timeScale() > 1.0f ? 1.0f : 40.0f);
 
-    // ---- F: toggle riding along with the selected player (grid view only:
+    // ---- F: borderless fullscreen on/off.
+    if (_engine.keyPressed(gfx::Key::F))
+        _engine.toggleFullscreen();
+
+    // ---- G: toggle riding along with the selected player (grid view only:
     // the follow anchor is a flat-world position).
-    if (!_torusView && (_engine.keyPressed(gfx::Key::F) || _engine.padPressed(gfx::PadBtn::FaceUp)))
+    if (!_torusView && (_engine.keyPressed(gfx::Key::G) || _engine.padPressed(gfx::PadBtn::FaceUp)))
     {
         if (_followedPlayer >= 0)
         {
@@ -1223,6 +1243,19 @@ void Interface::update()
     if (_weatherVisible)
         _particles.update(_engine.frameTime(), _env.snap().particles, _camera.position, kTileTopY, !_torusView,
                           _elapsed);
+
+    // Accumulation au sol : suit le profil météo courant (profil neutre quand
+    // l'habillage est masqué -> tout fond/sèche), puis traces des robots à
+    // leur position affichée (dispX/dispY glissent entre les tuiles).
+    _cover.update(_engine.frameTime(), _weatherVisible ? _env.snap().particles : env::ParticleProfile{},
+                  _env.snap().heatDistort);
+    for (const auto &[id, st] : _playerAnimState)
+    {
+        (void)id;
+        if (st.posInit)
+            _cover.stampTrail(st.dispX * TILE_SIZE + TILE_SIZE / 2.0f, st.dispY * TILE_SIZE + TILE_SIZE / 2.0f,
+                              TILE_SIZE * 0.15f);
+    }
     updateRandomEvents(_engine.frameTime());
 
     // Record whatever the server pushed since last frame; in live mode it is
@@ -1295,7 +1328,23 @@ namespace
 constexpr float kPlayerBaseSize = TILE_SIZE * 0.4f;
 constexpr float kPlayerY = 4.0f;
 constexpr float kPlayerHeight = 6.0f;
-constexpr float kItemSpacing = TILE_SIZE * 0.22f; // grid pitch between stacked items
+// Empilement des ressources : les objets d'un même type forment un tas propre
+// (pyramide pour les canettes, monceau pour les poulets) au lieu d'une grille
+// plate mélangée — voir le bloc de placement dans drawWorld3D.
+constexpr float kCanPitch = TILE_SIZE * 0.16f * 1.15f; // entraxe des canettes d'une pyramide
+constexpr float kChickenRing = TILE_SIZE * 0.40f * 0.42f; // rayon de l'anneau d'un monceau
+
+// Hash déterministe 0..1 par (tuile, type, index) : jitter stable d'une frame
+// à l'autre, aucun état.
+float hash01i(int a, int b, int c, int d)
+{
+    std::uint32_t h = static_cast<std::uint32_t>(a) * 0x8da6b343u ^ static_cast<std::uint32_t>(b) * 0xd8163841u ^
+                      static_cast<std::uint32_t>(c) * 0x61c88647u ^ static_cast<std::uint32_t>(d) * 0x9e3779b9u;
+    h ^= h >> 13;
+    h *= 0x9e3779b1u;
+    h ^= h >> 16;
+    return static_cast<float>(h & 0xFFFF) / 65535.0f;
+}
 
 // Beyond this distance resource meshes are sub-pixel: draw a small tinted
 // cube (rlgl-batched) instead of a full model instance.
@@ -1474,6 +1523,10 @@ void Interface::drawWorld3D(bool depthPass)
             }
             if (!depthPass)
                 ++_stats.tilesDrawn;
+            // En mode grille la grille AA vit dans floor.fs ; les lignes noires
+            // immédiates ne servent plus qu'au tore (pas de floor shader là-bas).
+            if (!depthPass && _torusView)
+                drawTileEdges(x, y, 0.02f, gfx::BLACK);
             const bool lodTile = gfx::length(gfx::sub(surf.pos, _camera.position)) > kItemLodDist;
 
             const MapTile &tile = _map.getTile(x, y);
@@ -1482,8 +1535,6 @@ void Interface::drawWorld3D(bool depthPass)
             if (!_torusView && !floorTextured)
                 _engine.drawPlane({worldX, kTileTopY, worldZ}, {TILE_SIZE - kTileMargin, TILE_SIZE - kTileMargin},
                                   gfx::WHITE);
-            if (!depthPass)
-                drawTileEdges(x, y, 0.02f, gfx::BLACK);
 
             // Players: draw up to four robots side by side, then show a count label.
             const int playerCount = static_cast<int>(tile.players.size());
@@ -1548,30 +1599,86 @@ void Interface::drawWorld3D(bool depthPass)
 
             if (playerCount == 0 && totalItems > 0)
             {
-                const int cols = static_cast<int>(std::ceil(std::sqrt(static_cast<float>(totalItems))));
-                const int rows = (totalItems + cols - 1) / cols;
-                // Shrink the pitch if the natural grid would spill past the tile,
-                // so items stay on their own tile no matter the count.
-                const float maxSpan = TILE_SIZE - kTileMargin;
-                const float pitch = std::min(kItemSpacing, maxSpan / static_cast<float>(std::max(cols, rows)));
-                const float originX = worldX - pitch * (cols - 1) * 0.5f;
-                const float originZ = worldZ - pitch * (rows - 1) * 0.5f;
+                // Un tas par type présent, ancré autour du centre de la tuile
+                // (angle doré + hash de tuile pour varier d'une case à l'autre).
+                int typesPresent = 0;
+                for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
+                    typesPresent += tile.resources[i] > 0 ? 1 : 0;
 
-                int slot = 0;
+                const float maxSpan = TILE_SIZE - kTileMargin;
+                const float tileH = hash01i(x, y, 0, 0);
+                const float ringR = typesPresent > 1 ? maxSpan * 0.26f : 0.0f;
+                const float safe = maxSpan * 0.5f - kItemWidth * 0.7f; // les tas restent sur leur tuile
+
+                int typeSlot = 0;
                 for (int i = 0; i < MAP_RESOURCE_COUNT; ++i)
                 {
                     const int count = tile.resources[i];
+                    if (count <= 0)
+                        continue;
                     const bool hasModel = static_cast<size_t>(i) < _resourceModels.size() && _resourceModels[i].loaded;
+                    const float itemH = hasModel && _resourceModels[static_cast<std::size_t>(i)].height > 0.01f
+                                            ? _resourceModels[static_cast<std::size_t>(i)].height
+                                            : kItemWidth;
 
-                    for (int n = 0; n < count; ++n, ++slot)
+                    const float anchorAng = (tileH + typeSlot * 0.61803f) * 6.2831853f;
+                    const float ax = std::cos(anchorAng) * ringR;
+                    const float az = std::sin(anchorAng) * ringR;
+                    const float baseYaw = tileH * 360.0f + i * 47.0f;
+                    ++typeSlot;
+
+                    // Pyramide de canettes : côté de base minimal contenant tout.
+                    int side = 1;
+                    while (side * (side + 1) * (2 * side + 1) / 6 < count && side < 6)
+                        ++side;
+                    const float pitch = std::min(kCanPitch, maxSpan * 0.5f / static_cast<float>(side));
+
+                    for (int n = 0; n < count; ++n)
                     {
-                        const int col = slot % cols;
-                        const int row = slot / cols;
-                        const float cx = originX + pitch * static_cast<float>(col);
-                        const float cz = originZ + pitch * static_cast<float>(row);
-                        const float angle = static_cast<float>((x * 53 + y * 97 + i * 17 + slot * 31) % 360);
+                        float ox, oz, oy, yaw;
+                        if (i == 0)
+                        {
+                            // Poulets rôtis : monceau — un au centre, cinq en
+                            // couronne, puis on empile les couches en quinconce.
+                            const int layer = n / 6;
+                            const int m = n % 6;
+                            const float ja = hash01i(x, y, i, n);
+                            if (m == 0)
+                            {
+                                ox = (ja - 0.5f) * 2.0f;
+                                oz = (hash01i(x, y, i, n + 101) - 0.5f) * 2.0f;
+                            }
+                            else
+                            {
+                                const float a = (m - 1) * 1.2566f + layer * 0.44f + tileH * 6.2831853f;
+                                const float r = kChickenRing * (0.9f + 0.2f * ja);
+                                ox = std::cos(a) * r;
+                                oz = std::sin(a) * r;
+                            }
+                            oy = layer * itemH * 0.55f; // les couches s'enfoncent dans le tas
+                            yaw = ja * 360.0f;
+                        }
+                        else
+                        {
+                            // Canettes : pyramide à étages, rangées alignées avec
+                            // un léger jitter d'angle — un dépôt "rangé à la main".
+                            int rem = n, layer = 0, s = side;
+                            while (rem >= s * s && s > 1)
+                            {
+                                rem -= s * s;
+                                --s;
+                                ++layer;
+                            }
+                            rem %= s * s;
+                            ox = (rem % s - (s - 1) * 0.5f) * pitch;
+                            oz = (rem / s - (s - 1) * 0.5f) * pitch;
+                            oy = layer * itemH * 0.99f;
+                            yaw = baseYaw + (hash01i(x, y, i, n) - 0.5f) * 16.0f;
+                        }
 
-                        const Surface is = surfaceAt(cx, cz, 0.0f);
+                        const float cx = worldX + std::clamp(ax + ox, -safe, safe);
+                        const float cz = worldZ + std::clamp(az + oz, -safe, safe);
+                        const Surface is = surfaceAt(cx, cz, oy);
                         if (hasModel && lodTile)
                         {
                             // Too far for the mesh to read: small tinted cube.
@@ -1583,14 +1690,15 @@ void Interface::drawWorld3D(bool depthPass)
                         else if (hasModel)
                         {
                             itemXf[static_cast<std::size_t>(i)].push_back(
-                                {is.pos, is.right, is.up, is.back, angle, _resourceModels[static_cast<std::size_t>(i)].scale});
+                                {is.pos, is.right, is.up, is.back, yaw,
+                                 _resourceModels[static_cast<std::size_t>(i)].scale});
                             if (!depthPass)
                                 ++_stats.itemsModel;
                         }
                         else
                         {
-                            const float s = kItemWidth;
-                            _engine.drawCube(gfx::add(is.pos, gfx::scale(is.up, s / 2.0f)), s, s, s, gfx::RED);
+                            const float s2 = kItemWidth;
+                            _engine.drawCube(gfx::add(is.pos, gfx::scale(is.up, s2 / 2.0f)), s2, s2, s2, gfx::RED);
                         }
                     }
                 }
@@ -1694,6 +1802,12 @@ void Interface::render()
                              gfx::add(es.ambient, gfx::scale(flashAdd, 0.3f)), es.fogColor,
                              _weatherVisible ? es.fogDensity : 0.0f);
     _engine.setGroundSeason(es.groundOverlay, _weatherVisible ? es.groundMix : 0.0f);
+
+    // Carte d'accumulation -> GPU (upload seulement quand la sim a bougé).
+    if (_coverTexture != gfx::NoHandle && _cover.consumeDirty())
+        _engine.updateTexture(_coverTexture, _cover.pixels());
+    _engine.setGroundCover(_coverTexture, _map.getWidth() * TILE_SIZE, _map.getHeight() * TILE_SIZE, TILE_SIZE,
+                           _elapsed, !_torusView);
 
     // God rays depuis la position écran du soleil (0 si dos au soleil).
     const gfx::Vec3 toSunW = gfx::scale(es.sunDir, -1.0f);
@@ -2607,7 +2721,7 @@ void Interface::drawEndScreen()
 
 void Interface::drawHelpOverlay()
 {
-    static const std::array<const char *, 33> kHelp = {
+    static const std::array<const char *, 34> kHelp = {
         "CONTROLS  -  FREE CAMERA",
         "Mouse           look around freely",
         "Esc             release mouse (click game to capture)",
@@ -2617,7 +2731,8 @@ void Interface::drawHelpOverlay()
         "Left click      select the aimed tile (crosshair)",
         "Double click    focus camera on that tile",
         "R               reset to the overview",
-        "F               follow / unfollow selected player",
+        "F               toggle fullscreen",
+        "G               follow / unfollow selected player",
         "+ / -           simulation speed (sst)",
         "P               pause / resume",
         "PageDown / Up   step back / forward in time (1s)",
@@ -2656,7 +2771,7 @@ void Interface::drawHelpOverlay()
     int ty = py + pad;
     for (size_t i = 0; i < kHelp.size(); ++i)
     {
-        const bool header = (i == 0 || i == 24); // section titles
+        const bool header = (i == 0 || i == 25); // section titles
         _engine.drawText(kHelp[i], px + pad, ty, header ? 20 : 16, header ? gfx::GOLD : gfx::RAYWHITE);
         ty += lineH;
     }
