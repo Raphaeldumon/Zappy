@@ -40,11 +40,8 @@ void Server::run()
 {
     start_time_ = std::chrono::steady_clock::now();
     init_world();
-    schedule_resource_respawn();
     season_until_tick_ = now_ticks() + 2400;
     set_season_weather("spring", "clear", 600);
-    schedule_weather_change();
-    schedule_meteor_strike();
 
     while (running_.load(std::memory_order_relaxed))
     {
@@ -240,6 +237,8 @@ void Server::on_client_line(int fd, std::string line)
 void Server::on_client_disconnect(int fd)
 {
     gui_fds_.erase(fd);
+    gui_bets_.erase(fd);
+    start_game_if_bets_complete();
 
     auto it = fd_to_player_.find(fd);
     if (it == fd_to_player_.end())
@@ -336,7 +335,8 @@ void Server::complete_ai_handshake(int fd, core::TeamId team_id, std::string_vie
         net_.broadcast_gui(protocol::GuiEmitter::ebo(used_egg));
     net_.broadcast_gui(protocol::GuiEmitter::pnw(p.id, p.x, p.y, p.orientation, p.level, team_name));
 
-    schedule_food_consumption(p.id);
+    if (game_started_)
+        schedule_food_consumption(p.id);
 }
 
 void Server::complete_gui_handshake(int fd)
@@ -353,6 +353,15 @@ void Server::complete_gui_handshake(int fd)
         client->state = net::ClientState::GUI;
     gui_fds_.insert(fd);
     send_gui_snapshot(fd);
+    if (!game_started_)
+    {
+        net_.send_to(fd, protocol::GuiEmitter::smg("bet_open"));
+        broadcast_betting_status();
+    }
+    else
+    {
+        net_.send_to(fd, protocol::GuiEmitter::smg("bet_start"));
+    }
 }
 
 void Server::send_gui_snapshot(int fd)
@@ -383,6 +392,85 @@ void Server::send_gui_snapshot(int fd)
     {
         if (!egg.hatched)
             net_.send_to(fd, protocol::GuiEmitter::enw(egg.id, egg.layer, egg.x, egg.y));
+    }
+}
+
+void Server::broadcast_betting_status()
+{
+    net_.broadcast_gui(protocol::GuiEmitter::smg("bet_wait " + std::to_string(gui_bets_.size()) + " " +
+                                                std::to_string(gui_fds_.size())));
+}
+
+bool Server::handle_bet_request(int fd, std::string_view line)
+{
+    static constexpr std::string_view kPrefix = "bet ";
+    if (line.rfind(kPrefix, 0) != 0)
+        return false;
+
+    if (game_started_)
+    {
+        net_.send_to(fd, protocol::GuiEmitter::smg("bet_closed"));
+        return true;
+    }
+
+    std::string team(line.substr(kPrefix.size()));
+    if (team.empty())
+    {
+        net_.send_to(fd, protocol::GuiEmitter::sbp());
+        return true;
+    }
+
+    bool valid = false;
+    for (const auto &t : world_.teams())
+    {
+        if (t.name == team)
+        {
+            valid = true;
+            break;
+        }
+    }
+    if (!valid)
+    {
+        net_.send_to(fd, protocol::GuiEmitter::sbp());
+        return true;
+    }
+
+    gui_bets_[fd] = team;
+    net_.send_to(fd, protocol::GuiEmitter::smg("bet_pick " + team));
+    broadcast_betting_status();
+    start_game_if_bets_complete();
+    return true;
+}
+
+void Server::start_game_if_bets_complete()
+{
+    if (game_started_ || gui_fds_.empty() || gui_bets_.size() != gui_fds_.size())
+        return;
+    start_game();
+}
+
+void Server::start_game()
+{
+    if (game_started_)
+        return;
+
+    game_started_ = true;
+    net_.broadcast_gui(protocol::GuiEmitter::smg("bet_start"));
+
+    schedule_resource_respawn();
+    schedule_weather_change();
+    schedule_meteor_strike();
+
+    for (const auto &[pid, player] : world_.players())
+    {
+        if (player.alive)
+            schedule_food_consumption(pid);
+    }
+    for (const auto &[fd, pid] : fd_to_player_)
+    {
+        (void)pid;
+        if (auto *client = net_.find_client(fd); client && !client->has_pending_action)
+            execute_next_command(fd);
     }
 }
 

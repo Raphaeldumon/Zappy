@@ -312,6 +312,9 @@ struct RaylibEngine::Impl
     RenderTexture2D sceneRT{};
     RenderTexture2D bloomRT{}; // half of sceneRT
     bool sceneRTActive{false};
+    RenderTexture2D previewRT{};
+    int previewW{0};
+    int previewH{0};
 
     // Locations du composite + valeurs par frame (appliquées dans endMode3D).
     struct PostLocs
@@ -371,6 +374,8 @@ RaylibEngine::~RaylibEngine()
         UnloadRenderTexture(_impl->sceneRT);
         UnloadRenderTexture(_impl->bloomRT);
     }
+    if (_impl->previewRT.id != 0)
+        UnloadRenderTexture(_impl->previewRT);
     for (auto &s : _impl->animSets)
         if (s.anims)
             UnloadModelAnimations(s.anims, s.count);
@@ -450,6 +455,10 @@ int RaylibEngine::charPressed() const
 bool RaylibEngine::mousePressed(gfx::MouseBtn) const
 {
     return IsMouseButtonPressed(MOUSE_BUTTON_LEFT);
+}
+gfx::Vec2 RaylibEngine::mousePosition() const
+{
+    return fromRl(GetMousePosition());
 }
 gfx::Vec2 RaylibEngine::mouseDelta() const
 {
@@ -1183,6 +1192,39 @@ void RaylibEngine::drawModelEx(gfx::ModelHandle h, gfx::Vec3 pos, gfx::Vec3 axis
 {
     if (_impl->valid(h, _impl->models.size()) && _impl->models[h].meshCount > 0)
         DrawModelEx(_impl->models[h], toRl(pos), toRl(axis), angleDeg, toRl(scale), toRl(tint));
+}
+
+void RaylibEngine::drawModelPreview(gfx::ModelHandle h, int x, int y, int w, int hgt, gfx::Vec3 scale, gfx::Color tint,
+                                    float yawDeg)
+{
+    if (w <= 0 || hgt <= 0 || !_impl->valid(h, _impl->models.size()) || _impl->models[h].meshCount == 0)
+        return;
+
+    if (_impl->previewRT.id == 0 || _impl->previewW != w || _impl->previewH != hgt)
+    {
+        if (_impl->previewRT.id != 0)
+            UnloadRenderTexture(_impl->previewRT);
+        _impl->previewRT = LoadRenderTexture(w, hgt);
+        _impl->previewW = w;
+        _impl->previewH = hgt;
+    }
+
+    BeginTextureMode(_impl->previewRT);
+    ClearBackground(Color{0, 0, 0, 0});
+    Camera3D cam{};
+    cam.position = Vector3{0.0f, 24.0f, 128.0f};
+    cam.target = Vector3{0.0f, 22.0f, 0.0f};
+    cam.up = Vector3{0.0f, 1.0f, 0.0f};
+    cam.fovy = 30.0f;
+    cam.projection = CAMERA_PERSPECTIVE;
+    BeginMode3D(cam);
+    DrawModelEx(_impl->models[h], Vector3{0.0f, 0.0f, 0.0f}, Vector3{0.0f, 1.0f, 0.0f}, yawDeg, toRl(scale),
+                toRl(tint));
+    EndMode3D();
+    EndTextureMode();
+
+    DrawTextureRec(_impl->previewRT.texture, Rectangle{0.0f, 0.0f, static_cast<float>(w), -static_cast<float>(hgt)},
+                   Vector2{static_cast<float>(x), static_cast<float>(y)}, WHITE);
 }
 
 namespace

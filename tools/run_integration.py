@@ -150,6 +150,8 @@ class GuiCapture:
         self.host, self.port = host, port
         self.tag_counts: dict[str, int] = {}
         self.unknown: list[str] = []
+        self.teams: list[str] = []
+        self.bet_sent = False
         self.connected = False
         self.error = ""
         self._sock: socket.socket | None = None
@@ -185,6 +187,13 @@ class GuiCapture:
                 continue
             tag = ln.split(" ", 1)[0]
             self.tag_counts[tag] = self.tag_counts.get(tag, 0) + 1
+            if tag == "tna":
+                parts = ln.split(" ", 1)
+                if len(parts) == 2:
+                    self.teams.append(parts[1])
+            elif tag == "smg" and " bet_open" in f" {ln}" and self.teams and not self.bet_sent:
+                self._sock.sendall(f"bet {self.teams[0]}\n".encode())
+                self.bet_sent = True
             if tag not in GUI_KNOWN_TAGS:
                 self.unknown.append(ln)
 
